@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::approval::Approvals;
-use super::host::*;
+use super::host::{self, *};
 use crate::agent_guard::AgentActionLog;
 use crate::agent_run::guard::{AgentGuard, GuardOptions, Sleeper};
 use crate::agent_run::seam::{AgentEvent, CatalogEntry, GuardDeps, NetWatch, RunEvents};
@@ -40,6 +40,10 @@ struct FakeChat {
     script: Mutex<Script>,
     bodies: Mutex<Vec<Value>>,
     models: Mutex<Vec<(String, String, Duration)>>,
+    /// True for each call that had a cancel flag.
+    cancels: Mutex<Vec<bool>>,
+    /// The panic text of a failed assertion in the script, so the test fails at once.
+    failure: Mutex<Option<String>>,
 }
 
 impl FakeChat {
@@ -48,10 +52,17 @@ impl FakeChat {
             script: Mutex::new(script),
             bodies: Mutex::default(),
             models: Mutex::default(),
+            cancels: Mutex::default(),
+            failure: Mutex::default(),
         })
     }
     fn calls(&self) -> usize {
         self.bodies.lock().unwrap().len()
+    }
+    fn assert_clean(&self) {
+        if let Some(f) = self.failure.lock().unwrap().as_ref() {
+            panic!("the script failed: {f}");
+        }
     }
     fn body(&self, i: usize) -> Value {
         self.bodies.lock().unwrap()[i].clone()
@@ -70,7 +81,21 @@ impl ChatClient for FakeChat {
             req.model.to_owned(),
             req.deadline,
         ));
-        (self.script.lock().unwrap())(&req.body, n)
+        self.cancels.lock().unwrap().push(req.cancel.is_some());
+        let mut script = self.script.lock().unwrap();
+        let body = req.body.clone();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (script)(&body, n)))
+            .unwrap_or_else(|p| {
+                let msg = p
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                    .unwrap_or_default();
+                *self.failure.lock().unwrap() = Some(msg);
+                Err(CoreError::IpcRefused {
+                    code: "script_failed",
+                })
+            })
     }
 }
 
@@ -303,14 +328,24 @@ type NetCallback = Box<dyn Fn(bool) + Send + Sync>;
 #[derive(Default)]
 struct FakeNet {
     cb: Mutex<Option<NetCallback>>,
+    offline: AtomicBool,
 }
 
 impl NetWatch for FakeNet {
     fn online(&self) -> bool {
-        true
+        !self.offline.load(Ordering::SeqCst)
     }
     fn subscribe(&self, f: Box<dyn Fn(bool) + Send + Sync>) {
         *self.cb.lock().unwrap() = Some(f);
+    }
+}
+
+impl FakeNet {
+    fn set(&self, online: bool) {
+        self.offline.store(!online, Ordering::SeqCst);
+        if let Some(f) = self.cb.lock().unwrap().as_ref() {
+            f(online);
+        }
     }
 }
 
@@ -368,6 +403,7 @@ struct Rig {
     clock: SimClock,
     ws: Arc<Ws>,
     env: Arc<Env>,
+    net: Arc<FakeNet>,
 }
 
 fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
@@ -392,6 +428,7 @@ fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
             asks: None,
         },
     );
+    let net = Arc::new(FakeNet::default());
     let clock = SimClock::default();
     let ws = Arc::new(Ws(Mutex::new(snapshot(d1, budget))));
     let env = Arc::new(Env(Mutex::new(OrchStatus::Ready)));
@@ -399,7 +436,7 @@ fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
         OrchDeps {
             guard: guard.clone(),
             chat: chat.clone(),
-            net: Arc::new(FakeNet::default()),
+            net: net.clone(),
             events: events.clone(),
             clock: Arc::new(clock.clone()),
             wall: Arc::new(SimWallClock::at(1_000)),
@@ -411,7 +448,6 @@ fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
             tick: Duration::from_secs(3600),
         },
     );
-    guard.set_refusal_hook(host.refusal_hook());
     Rig {
         host,
         chat,
@@ -421,6 +457,7 @@ fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
         clock,
         ws,
         env,
+        net,
     }
 }
 
@@ -438,7 +475,11 @@ impl Rig {
     }
 
     fn wait_outcome(&self, turn_id: &str) -> AgentTurnOutcome {
-        eventually("the turn ends", || self.events.outcome(turn_id).is_some());
+        eventually("the turn ends", || {
+            self.chat.assert_clean();
+            self.events.outcome(turn_id).is_some()
+        });
+        self.chat.assert_clean();
         self.events.outcome(turn_id).unwrap()
     }
 
@@ -484,16 +525,25 @@ fn ask_then_cite(workspaces: &'static [&'static str]) -> Script {
 
 /// A script that never answers until `release` is set.
 fn blocked(release: &Arc<(Mutex<bool>, Condvar)>) -> Script {
+    blocked_then(release, Arc::new(AtomicBool::new(false)))
+}
+
+/// Like `blocked`, and `done` is set just before the model call returns.
+fn blocked_then(release: &Arc<(Mutex<bool>, Condvar)>, done: Arc<AtomicBool>) -> Script {
     let r = Arc::clone(release);
     Box::new(move |_, _| {
-        let (m, cv) = &*r;
-        let mut open = m.lock().unwrap();
-        while !*open {
-            open = cv.wait(open).unwrap();
-        }
-        drop(open);
+        wait_open(&r);
+        done.store(true, Ordering::SeqCst);
         no_source_final()
     })
+}
+
+fn wait_open(r: &Arc<(Mutex<bool>, Condvar)>) {
+    let (m, cv) = &**r;
+    let mut open = m.lock().unwrap();
+    while !*open {
+        open = cv.wait(open).unwrap();
+    }
 }
 
 fn release(r: &Arc<(Mutex<bool>, Condvar)>) {
@@ -548,6 +598,8 @@ fn one_workspace_answers_with_a_note_and_one_source() {
     assert_eq!(res.sources.len(), 1);
     assert_eq!(res.sources[0].workspace_id, "sales");
     assert_eq!(res.usage.unwrap().input_tokens, 200);
+    assert!(r.chat.cancels.lock().unwrap().iter().all(|c| *c));
+    assert_eq!(r.chat.body(0)["store"], false);
     // The model saw the text block of the agent workspace, escaped.
     let seen = outputs_in(&r.chat.body(1)).join("\n");
     assert!(seen.contains("<genie_answer"), "{seen}");
@@ -682,7 +734,8 @@ fn a_tool_other_than_ask_genie_is_never_run_and_three_of_them_stop_the_turn() {
     assert_eq!(r.events.refusals().len(), 3);
     assert_eq!(r.r8.calls.lock().unwrap().len(), 0);
     assert!(r.host.turn_result(&tid).is_none());
-    assert_eq!(r.chat.calls(), 3);
+    // The stop reaches the worker as `run_stopped` at the next step: at most one more call.
+    assert!((3..=4).contains(&r.chat.calls()));
 }
 
 #[test]
@@ -879,7 +932,13 @@ fn stop_in_the_middle_of_a_genie_call_cancels_the_poll() {
 #[test]
 fn the_slow_note_comes_at_four_minutes_and_the_hard_stop_at_ten() {
     let g = gate();
-    let r = rig(false, 10, FakeR8::answering(by_profile), blocked(&g));
+    let returned = Arc::new(AtomicBool::new(false));
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        blocked_then(&g, returned.clone()),
+    );
     let a = r.submit("q").unwrap();
     eventually("the model call starts", || r.chat.calls() == 1);
     r.clock.advance(Duration::from_secs(240));
@@ -898,7 +957,10 @@ fn the_slow_note_comes_at_four_minutes_and_the_hard_stop_at_ten() {
     );
     // The late result of the model is dropped: no answer, no second end.
     release(&g);
-    std::thread::sleep(Duration::from_millis(50));
+    eventually("the late reply returns", || returned.load(Ordering::SeqCst));
+    // The actor handles messages in order: these round trips come after the late result.
+    r.host.tick();
+    r.host.tick();
     assert!(r.host.turn_result(&a.turn_id).is_none());
     let ends = r
         .events
@@ -1177,4 +1239,385 @@ fn a_malformed_submit_answer_is_a_refusal_and_the_loop_goes_on() {
     let (_, o) = r.run("q");
     assert_eq!(o, AgentTurnOutcome::Answered);
     assert_eq!(r.events.refusals(), [AgentRefusal::InvalidArgs]);
+}
+
+// ---------- the security review ----------
+
+fn new_guard(r8: Arc<FakeR8>) -> Arc<AgentGuard> {
+    let clock = SimClock::default();
+    AgentGuard::with_options(
+        GuardDeps {
+            transport: r8,
+            gate: Arc::new(Gate),
+            events: Arc::new(Events::default()),
+            action_log: Arc::new(Log),
+            clock: Arc::new(clock.clone()),
+        },
+        GuardOptions {
+            sleeper: Arc::new(SimSleeper {
+                clock,
+                hold: AtomicBool::new(false),
+            }),
+            random: Arc::new(|| 0.5),
+            asks: None,
+        },
+    )
+}
+
+/// A script that asks `ws` while the last input item is no tool result, then cites the results.
+fn ask_once_then_cite(ws: &'static str) -> Script {
+    Box::new(move |body, _| {
+        let last = body["input"].as_array().unwrap().last().unwrap().clone();
+        if last["type"] == "function_call_output" {
+            let sources: Vec<Value> = results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+            reply_of(vec![final_item(
+                json!({"answer": "a [1]", "sources": sources}),
+            )])
+        } else {
+            reply_of(vec![ask_item(
+                &format!("fc-{}", body["input"].as_array().unwrap().len()),
+                ws,
+            )])
+        }
+    })
+}
+
+#[test]
+fn a_call_of_a_stopped_turn_cannot_spend_the_budget_of_the_next_turn() {
+    use crate::agent_run::seam::{SessionGuard, SessionSpec, StopWhy, TurnSpec};
+    let g = new_guard(FakeR8::answering(by_profile));
+    g.open_session(SessionSpec {
+        session_id: "s1".into(),
+        catalog: catalog(),
+        cross_workspace: false,
+    })
+    .unwrap();
+    let turn = |id: &str| TurnSpec {
+        turn_id: id.into(),
+        budget: 5,
+    };
+    g.begin_turn("s1", turn("t1")).unwrap();
+    g.stop_turn("t1", StopWhy::User);
+    g.end_turn("t1");
+    g.begin_turn("s1", turn("t2")).unwrap();
+    let a = json!({"workspace": "sales", "question": "hello"});
+    let late = g.ask_genie_for("s1", Some("t1"), &a);
+    assert!(late.is_error && late.text == "run_stopped", "{late:?}");
+    // The whole budget of t2 is still there.
+    for _ in 0..5 {
+        assert!(!g.ask_genie_for("s1", Some("t2"), &a).is_error);
+    }
+    assert_eq!(g.ask_genie_for("s1", Some("t2"), &a).text, "budget_reached");
+}
+
+#[test]
+fn the_late_workers_of_a_stopped_turn_do_not_touch_the_queued_turn() {
+    let r = rig(
+        false,
+        5,
+        FakeR8::answering(by_profile),
+        Box::new(|body, _| {
+            if body["input"][0].to_string().contains("turn-a") {
+                let mut items = vec![
+                    call_item("b0", "run_shell", "{}"),
+                    call_item("b1", "run_shell", "{}"),
+                    call_item("b2", "run_shell", "{}"),
+                ];
+                items.extend((0..5).map(|i| ask_item(&format!("a{i}"), "sales")));
+                reply_of(items)
+            } else {
+                no_source_final()
+            }
+        }),
+    );
+    let a = r.submit("turn-a").unwrap();
+    let b = r.submit("turn-b").unwrap();
+    assert_eq!(r.wait_outcome(&a.turn_id), AgentTurnOutcome::Refusals);
+    assert_eq!(r.wait_outcome(&b.turn_id), AgentTurnOutcome::Answered);
+    std::thread::sleep(Duration::from_millis(50));
+    let b_calls = r
+        .events
+        .turns()
+        .into_iter()
+        .filter(|e| matches!(e, AgentTurnEvent::Call { turn_id, .. } if *turn_id == b.turn_id));
+    assert_eq!(b_calls.count(), 0);
+}
+
+#[test]
+fn parallel_calls_past_the_budget_get_no_thread_and_stop_the_turn() {
+    let r = rig(
+        false,
+        5,
+        FakeR8::answering(by_profile),
+        Box::new(|_, n| {
+            if n > 0 {
+                // The worker may ask once more before the stop reaches it.
+                return no_source_final();
+            }
+            reply_of(
+                (0..8)
+                    .map(|i| ask_item(&format!("fc{i}"), "sales"))
+                    .collect(),
+            )
+        }),
+    );
+    let (_, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Refusals);
+    assert!(r.r8.count("genie_ask") <= 5);
+    assert_eq!(r.events.refusals().len(), 3);
+}
+
+#[test]
+fn a_missing_or_repeated_call_id_refuses_the_reply() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| reply_of(vec![ask_item("same", "sales"), ask_item("same", "sales")])),
+    );
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Failed);
+    assert_eq!(r.r8.calls.lock().unwrap().len(), 0);
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| {
+            reply_of(vec![
+                json!({"type": "function_call", "name": "ask_genie", "arguments": "{}"}),
+            ])
+        }),
+    );
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Failed);
+    assert_eq!(r.r8.calls.lock().unwrap().len(), 0);
+}
+
+#[test]
+fn a_call_id_that_repeats_across_steps_refuses_the_reply() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| reply_of(vec![ask_item("same", "sales")])),
+    );
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Failed);
+    assert_eq!(r.chat.calls(), 2);
+}
+
+#[test]
+fn only_known_item_types_go_back_to_the_model() {
+    let resp = json!({"output": [
+        {"type": "web_search_call", "id": "x"},
+        {"type": "message", "role": "user", "content": []},
+        {"type": "message", "role": "assistant", "content": []},
+        {"type": "function_call", "name": "ask_genie", "arguments": "{}"},
+        {"type": "function_call", "call_id": "c", "name": "ask_genie", "arguments": "{}"},
+        {"type": "reasoning", "id": "rs"}]});
+    let kept = host::echo_items(&resp);
+    let kinds: Vec<&str> = kept.iter().map(|i| i["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["message", "function_call", "reasoning"]);
+    // And in a run, the next request holds none of the dropped items.
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![
+                json!({"type": "web_search_call", "id": "x"}),
+                json!({"type": "message", "role": "user", "content": []}),
+                ask_item("fc0", "sales"),
+            ]),
+            _ => {
+                let items = body["input"].as_array().unwrap();
+                assert!(items.iter().all(|i| i["type"] != "web_search_call"));
+                assert!(items
+                    .iter()
+                    .all(|i| !(i["type"] == "message" && i["role"] == "user")));
+                assert!(items.iter().any(|i| i["type"] == "function_call"));
+                no_source_final()
+            }
+        }),
+    );
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Answered);
+}
+
+#[test]
+fn malformed_arguments_of_every_shape_are_refused_and_never_run() {
+    let raw = |id: &str, args: Value| json!({"type": "function_call", "call_id": id, "name": "ask_genie", "arguments": args});
+    let shapes: Vec<[Value; 2]> = vec![
+        [
+            raw("a", json!({"workspace": "sales", "question": "q"})),
+            call_item(
+                "b",
+                "ask_genie",
+                r#"{"workspace":"sales","question":"q","extra":1}"#,
+            ),
+        ],
+        [
+            call_item(
+                "a",
+                "ask_genie",
+                r#"{"workspace":{"x":"y"},"question":"q"}"#,
+            ),
+            call_item(
+                "b",
+                "ask_genie",
+                r#"{"workspace":"sales","question":["q"]}"#,
+            ),
+        ],
+    ];
+    for pair in shapes {
+        let items = pair.to_vec();
+        let r = rig(
+            false,
+            10,
+            FakeR8::answering(by_profile),
+            Box::new(move |body, n| match n {
+                0 => reply_of(items.clone()),
+                _ => {
+                    assert_eq!(outputs_in(body), ["invalid_args"; 2]);
+                    no_source_final()
+                }
+            }),
+        );
+        assert_eq!(r.run("q").1, AgentTurnOutcome::Answered);
+        assert_eq!(r.r8.calls.lock().unwrap().len(), 0);
+    }
+}
+
+#[test]
+fn the_deadline_of_a_step_shrinks_as_the_clock_moves() {
+    let g = gate();
+    let g2 = g.clone();
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(move |_, n| {
+            if n == 0 {
+                wait_open(&g2);
+                reply_of(vec![ask_item("fc0", "sales")])
+            } else {
+                no_source_final()
+            }
+        }),
+    );
+    let a = r.submit("q").unwrap();
+    eventually("the first call starts", || r.chat.calls() == 1);
+    r.clock.advance(Duration::from_secs(100));
+    release(&g);
+    r.wait_outcome(&a.turn_id);
+    let d = |i: usize| r.chat.models.lock().unwrap()[i].2;
+    assert_eq!(d(0), Duration::from_secs(600));
+    assert_eq!(d(1), Duration::from_secs(500));
+}
+
+#[test]
+fn a_d1_change_drops_the_history() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        ask_once_then_cite("sales"),
+    );
+    r.run("first question");
+    r.ws.0.lock().unwrap().cross_workspace = true;
+    r.clock.advance(Duration::from_secs(2));
+    r.host.tick();
+    assert_eq!(r.host.session_state().state, AgentSessionPhase::None);
+    let before = r.chat.calls();
+    *r.chat.script.lock().unwrap() = Box::new(|_, _| no_source_final());
+    let (_, o) = r.run("second");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.chat.body(before)["input"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn with_d1_off_a_tainted_thread_keeps_to_the_agent_workspace_and_a_new_question_starts_over() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        ask_once_then_cite("sales"),
+    );
+    let (t1, o) = r.run("first");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert!(r.host.turn_result(&t1).is_some());
+    // The follow-up may not ask a foreign workspace after the taint.
+    *r.chat.script.lock().unwrap() = ask_once_then_cite("finance");
+    let a = r
+        .host
+        .submit(&args("and finance?", Some("follow_up")))
+        .unwrap();
+    assert!(!a.new_session);
+    r.wait_outcome(&a.turn_id);
+    assert!(r
+        .events
+        .refusals()
+        .contains(&AgentRefusal::CrossWorkspaceOff));
+    assert_eq!(r.r8.count("genie_ask"), 1);
+    // A new question does not run on the tainted thread.
+    *r.chat.script.lock().unwrap() = Box::new(|_, _| no_source_final());
+    let b = r.submit("fresh").unwrap();
+    assert!(b.new_session);
+    r.wait_outcome(&b.turn_id);
+    assert!(r.events.sessions().iter().any(|s| matches!(
+        s,
+        AgentSessionEvent::Ended {
+            reason: AgentSessionEndReason::Tainted,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn a_withheld_answer_leaves_no_history_for_the_follow_up() {
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(|_| EVIL),
+        ask_once_then_cite("finance"),
+    );
+    let (t1, _) = r.run("first");
+    assert_eq!(
+        r.host.turn_result(&t1).unwrap().answer_kind,
+        AgentAnswerKind::Hidden
+    );
+    let before = r.chat.calls();
+    *r.chat.script.lock().unwrap() = Box::new(|_, _| no_source_final());
+    let a = r.host.submit(&args("more", Some("follow_up"))).unwrap();
+    r.wait_outcome(&a.turn_id);
+    let input = r.chat.body(before)["input"].as_array().unwrap().clone();
+    assert_eq!(input.len(), 1, "only the new question");
+}
+
+#[test]
+fn going_offline_in_the_middle_of_a_turn_ends_it_as_offline() {
+    let g = gate();
+    let r = rig(false, 10, FakeR8::answering(by_profile), blocked(&g));
+    let a = r.submit("q").unwrap();
+    eventually("the model call starts", || r.chat.calls() == 1);
+    r.net.set(false);
+    assert_eq!(r.wait_outcome(&a.turn_id), AgentTurnOutcome::Offline);
+    release(&g);
+}
+
+#[test]
+fn stop_during_a_blocking_model_call_lets_the_queued_turn_run() {
+    let g = gate();
+    let r = rig(false, 10, FakeR8::answering(by_profile), blocked(&g));
+    let a = r.submit("q-a").unwrap();
+    let b = r.submit("q-b").unwrap();
+    assert_eq!(b.position, 1);
+    eventually("the first model call starts", || r.chat.calls() == 1);
+    r.host.stop(&a.turn_id).unwrap();
+    assert_eq!(
+        r.events.outcome(&a.turn_id),
+        Some(AgentTurnOutcome::Stopped)
+    );
+    // Turn B starts while the stopped call of turn A is still blocked.
+    eventually("turn b calls the model", || r.chat.calls() == 2);
+    assert!(r.chat.cancels.lock().unwrap().iter().all(|c| *c));
+    release(&g);
+    assert_eq!(r.wait_outcome(&b.turn_id), AgentTurnOutcome::Answered);
+    assert!(r.host.turn_result(&a.turn_id).is_none());
 }

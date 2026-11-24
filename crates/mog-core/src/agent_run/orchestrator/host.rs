@@ -47,6 +47,10 @@ pub const FINAL_MAX_BYTES: usize = 32 * 1024;
 pub const MAX_STEPS: usize = 12;
 /// The most earlier turns of a thread that go back to the model.
 pub const HISTORY_TURNS: usize = 8;
+/// The most bytes of history that go back to the model. The oldest turns go first.
+pub const HISTORY_BYTES: usize = 256 * 1024;
+/// The most `ask_genie` calls that run in one step.
+const MAX_CALLS_PER_STEP: usize = 20;
 /// The most answers that stay in memory.
 const RESULTS_MAX: usize = 64;
 /// How long a caller waits for the actor.
@@ -103,13 +107,19 @@ pub trait OrchEnv: Send + Sync {
 
 /// The guard as the host sees it: the seam of the session, plus the in-process `ask_genie`.
 pub trait OrchGuard: SessionGuard {
-    /// Run one `ask_genie` call with the same checks as the shim path. Blocks until it ends.
-    fn ask_genie(&self, session_id: &str, args: &Value) -> ToolOut;
+    /// Run one `ask_genie` call of `turn_id` with the same checks as the shim path. The call is
+    /// refused (`run_stopped`) unless that turn is the live one. Blocks until it ends.
+    fn ask_genie(&self, session_id: &str, turn_id: &str, args: &Value) -> ToolOut;
+    /// Set the function that runs when the third refusal of a turn stops it.
+    fn set_refusal_hook(&self, hook: Arc<dyn Fn(&str) + Send + Sync>);
 }
 
 impl OrchGuard for AgentGuard {
-    fn ask_genie(&self, session_id: &str, args: &Value) -> ToolOut {
-        AgentGuard::ask_genie(self, session_id, args)
+    fn ask_genie(&self, session_id: &str, turn_id: &str, args: &Value) -> ToolOut {
+        AgentGuard::ask_genie_for(self, session_id, Some(turn_id), args)
+    }
+    fn set_refusal_hook(&self, hook: Arc<dyn Fn(&str) + Send + Sync>) {
+        AgentGuard::set_refusal_hook(self, hook);
     }
 }
 
@@ -614,6 +624,9 @@ impl Engine {
             net: Arc::clone(&self.d.net),
             clock: Arc::clone(&self.d.clock),
             session_id: sid,
+            turn_id: turn_id.clone(),
+            budget,
+            asked: 0,
             profile,
             model: snap.model,
             started_at: now,
@@ -625,7 +638,13 @@ impl Engine {
         let tx = self.tx.clone();
         let tid = turn_id.clone();
         thread::spawn(move || {
-            let out = run_loop(ctx);
+            // A panic of the loop must still end the turn.
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_loop(ctx)))
+                .unwrap_or_else(|_| LoopOut {
+                    stop: LoopStop::Failed(AgentTurnOutcome::Failed),
+                    usage: Usage::default(),
+                    new_messages: Vec::new(),
+                });
             let _ = tx.send(Msg::Loop(tid, out));
         });
         self.emit_turn(AgentTurnEvent::Started {
@@ -705,11 +724,23 @@ impl Engine {
                 d1,
                 self.d.guard.as_ref(),
             );
+            let hidden = r.answer_kind == AgentAnswerKind::Hidden;
             self.store_result(turn_id.clone(), r);
-            if let Some(s) = self.session.as_mut() {
-                s.history.push_back(std::mem::take(&mut live.new_messages));
-                while s.history.len() > HISTORY_TURNS {
-                    s.history.pop_front();
+            // A hidden answer (a bad source, a withheld call) leaves no history.
+            if !hidden {
+                if let Some(s) = self.session.as_mut() {
+                    s.history.push_back(std::mem::take(&mut live.new_messages));
+                    let bytes = |h: &VecDeque<Vec<Value>>| -> usize {
+                        h.iter().flatten().map(|v| v.to_string().len()).sum()
+                    };
+                    while s.history.len() > HISTORY_TURNS
+                        || (s.history.len() > 1 && bytes(&s.history) > HISTORY_BYTES)
+                    {
+                        s.history.pop_front();
+                    }
+                    if bytes(&s.history) > HISTORY_BYTES {
+                        s.history.clear();
+                    }
                 }
             }
         }
@@ -907,6 +938,11 @@ struct LoopCtx {
     net: Arc<dyn NetWatch>,
     clock: Arc<dyn MonotonicClock>,
     session_id: String,
+    turn_id: String,
+    /// The D2 budget of this turn.
+    budget: u8,
+    /// The `ask_genie` calls that went to the guard so far.
+    asked: usize,
     profile: String,
     model: String,
     started_at: Duration,
@@ -968,14 +1004,14 @@ pub(super) struct FnCall {
 /// What one Responses reply holds.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Reply1 {
-    /// The `function_call` items, in order. An item with no `call_id` gets a made-up one.
+    /// The `function_call` items, in order.
     pub(super) calls: Vec<FnCall>,
     /// The text of the `message` items, joined.
     pub(super) text: Option<String>,
 }
 
 /// Read a Responses reply. `None` when the reply is not a finished answer: a failed or
-/// incomplete reply, or one with no `output` array.
+/// incomplete reply, one with no `output` array, or one with a call that has no `call_id`.
 pub(super) fn parse_reply(resp: &Value) -> Option<Reply1> {
     if resp["error"].is_object() || matches!(resp["status"].as_str(), Some("failed" | "incomplete"))
     {
@@ -988,9 +1024,11 @@ pub(super) fn parse_reply(resp: &Value) -> Option<Reply1> {
     for it in items {
         match it["type"].as_str() {
             Some("function_call") => calls.push(FnCall {
+                // No id is made up: a call with no id refuses the whole reply.
                 call_id: it["call_id"]
                     .as_str()
-                    .map_or_else(|| format!("call_{}", calls.len()), str::to_owned),
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_owned)?,
                 name: it["name"].as_str().unwrap_or("").to_owned(),
                 arguments: it["arguments"].as_str().unwrap_or("").to_owned(),
             }),
@@ -1013,10 +1051,34 @@ pub(super) fn parse_reply(resp: &Value) -> Option<Reply1> {
     })
 }
 
+/// The items of a reply that may go back into `input` and the history: `function_call` items
+/// with a string `call_id`, assistant `message` items and `reasoning` items. Nothing else.
+pub(super) fn echo_items(resp: &Value) -> Vec<Value> {
+    resp["output"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|it| match it["type"].as_str() {
+            Some("function_call") => it["call_id"].is_string(),
+            Some("message") => it["role"].as_str() == Some("assistant"),
+            Some("reasoning") => true,
+            _ => false,
+        })
+        .cloned()
+        .collect()
+}
+
+fn output_item(call_id: &str, text: &str) -> Value {
+    json!({ "type": "function_call_output", "call_id": call_id, "output": text })
+}
+
 /// The `function_call_output` item for a call. A call that is not `ask_genie` with a JSON object
 /// as arguments is never run: `Value::Null` goes to the guard, which refuses it as `invalid_args`
-/// and counts the refusal (the third one stops the turn).
+/// and counts the refusal (the third one stops the turn). A stopped turn runs nothing.
 fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> Value {
+    if ctx.cancel.load(Ordering::SeqCst) {
+        return output_item(&call.call_id, guard::RUN_STOPPED);
+    }
     let args = serde_json::from_str::<Value>(&call.arguments)
         .ok()
         .filter(Value::is_object);
@@ -1024,13 +1086,51 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> Value {
         (true, Some(a)) => a,
         _ => Value::Null,
     };
-    let out = ctx.guard.ask_genie(&ctx.session_id, &run);
-    json!({ "type": "function_call_output", "call_id": call.call_id, "output": out.text })
+    let out = ctx.guard.ask_genie(&ctx.session_id, &ctx.turn_id, &run);
+    output_item(&call.call_id, &out.text)
+}
+
+/// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
+/// others run one at a time on this thread, so the guard still checks them all.
+fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
+    let cap = usize::from(ctx.budget)
+        .saturating_sub(ctx.asked)
+        .min(MAX_CALLS_PER_STEP);
+    let mut go = Vec::new();
+    for (i, c) in calls.iter().enumerate() {
+        if c.name == guard::TOOL_NAME && go.len() < cap {
+            go.push(i);
+        }
+    }
+    ctx.asked += go.len();
+    let ctx: &LoopCtx = ctx;
+    thread::scope(|sc| {
+        let hs: Vec<(usize, _)> = go
+            .iter()
+            .map(|&i| (i, sc.spawn(move || run_tool_call(ctx, &calls[i]))))
+            .collect();
+        let mut out: Vec<Option<Value>> = vec![None; calls.len()];
+        for (i, c) in calls.iter().enumerate() {
+            if !go.contains(&i) {
+                // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
+                // one at a time. The guard refuses it (and counts it) or runs it.
+                out[i] = Some(run_tool_call(ctx, c));
+            }
+        }
+        for (i, h) in hs {
+            out[i] = Some(
+                h.join()
+                    .unwrap_or_else(|_| output_item(&calls[i].call_id, guard::RUN_STOPPED)),
+            );
+        }
+        out.into_iter().flatten().collect()
+    })
 }
 
 fn run_loop(mut ctx: LoopCtx) -> LoopOut {
     let mut usage = Usage::default();
     let tools = tools();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let end = |ctx: &LoopCtx, stop: LoopStop, usage: Usage| LoopOut {
         stop,
         usage,
@@ -1054,13 +1154,16 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
                 "tools": tools,
                 "tool_choice": "auto",
                 "max_output_tokens": MAX_OUTPUT_TOKENS,
+                "store": false,
             }),
             deadline: left,
+            cancel: Some(ctx.cancel.as_ref()),
         });
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
                 let o = match e.code() {
+                    "cancelled" => return end(&ctx, LoopStop::Cancelled, usage),
                     "login_required" | "auth_expired" | "token_unusable" => {
                         AgentTurnOutcome::SignedOut
                     }
@@ -1077,16 +1180,27 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
         let Some(reply) = parse_reply(&resp) else {
             return end(&ctx, LoopStop::Failed(AgentTurnOutcome::Failed), usage);
         };
-        // The items of the reply go back as they came, so the next step sees its own calls.
-        if let Some(items) = resp["output"].as_array() {
-            ctx.input.extend(items.iter().cloned());
+        // A call id that repeats (in this reply or an earlier one) refuses the reply.
+        if !reply.calls.iter().all(|c| seen.insert(c.call_id.clone())) {
+            return end(&ctx, LoopStop::Failed(AgentTurnOutcome::Failed), usage);
         }
+        // Only known item types go back, so the next step sees its own calls.
+        ctx.input.extend(echo_items(&resp));
         // `submit_answer` ends the turn. Nothing else of the step runs. A submit with arguments
         // that are no JSON object is a refusal, like any unknown call (below).
         if let Some(c) = reply.calls.iter().find(|c| {
             c.name == SUBMIT_TOOL
                 && serde_json::from_str::<Value>(&c.arguments).is_ok_and(|v| v.is_object())
         }) {
+            // Every call gets an output, so the history stays valid for the next turn.
+            for k in &reply.calls {
+                let o = if k.call_id == c.call_id {
+                    "ok"
+                } else {
+                    guard::RUN_STOPPED
+                };
+                ctx.input.push(output_item(&k.call_id, o));
+            }
             return end(&ctx, LoopStop::Final(c.arguments.clone()), usage);
         }
         if reply.calls.is_empty() {
@@ -1103,26 +1217,16 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
         if step + 1 == MAX_STEPS {
             return end(&ctx, LoopStop::Failed(AgentTurnOutcome::Failed), usage);
         }
-        let results: Vec<Value> = thread::scope(|sc| {
-            let hs: Vec<_> = reply
-                .calls
-                .iter()
-                .map(|c| sc.spawn(|| run_tool_call(&ctx, c)))
-                .collect();
-            hs.into_iter()
-                .zip(&reply.calls)
-                .map(|(h, c)| {
-                    h.join().unwrap_or_else(|_| {
-                        json!({
-                            "type": "function_call_output",
-                            "call_id": c.call_id,
-                            "output": "run_stopped",
-                        })
-                    })
-                })
-                .collect()
-        });
+        let results = run_step(&mut ctx, &reply.calls);
+        // The guard says `run_stopped` once it stopped the turn (the third refusal, a stop):
+        // the actor ends the turn, so the worker stops here and asks the model nothing more.
+        let stopped = results
+            .iter()
+            .any(|r| r["output"].as_str() == Some(guard::RUN_STOPPED));
         ctx.input.extend(results);
+        if stopped {
+            return end(&ctx, LoopStop::Cancelled, usage);
+        }
     }
     end(&ctx, LoopStop::Failed(AgentTurnOutcome::Failed), usage)
 }
@@ -1260,6 +1364,7 @@ impl OrchestratorHost {
             last_settings_check: now,
         };
         thread::spawn(move || engine.run(rx));
+        host.guard.set_refusal_hook(host.refusal_hook());
         host
     }
 
