@@ -31,8 +31,20 @@ export interface ConnectAction {
 type ConnectStep =
   /** W-07a: ask for the workspace URL. `firstRun` (W-07f): no usable profile exists. */
   | { step: 'url'; firstRun: boolean; error?: string }
-  /** W-07g, W-07i: the host, an editable proposed name, and the PAT/SP notice. */
-  | { step: 'name'; host: string; proposedName: string; otherAuthNotice: boolean; error?: string }
+  /**
+   * W-07g, W-07i: the host, an editable proposed name, and the PAT/SP notice. `taken`: the
+   * other profile names the brain already knows of, so the view can refuse a duplicate at once
+   * (an inline message), without waiting for the `connect_start` round trip. Optional: a sender
+   * that omits it is read as "none known yet".
+   */
+  | {
+      step: 'name';
+      host: string;
+      proposedName: string;
+      otherAuthNotice: boolean;
+      taken?: readonly string[];
+      error?: string;
+    }
   /** W-07h: `databricks auth login` runs; finish in the browser. */
   | { step: 'waiting'; host: string; profile: string }
   | { step: 'connected'; host: string; profile: string }
@@ -55,6 +67,20 @@ export type ConnectModel =
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const str = (v: unknown): v is string => typeof v === 'string';
 const optStr = (v: unknown) => v === undefined || str(v);
+const optStrArray = (v: unknown) => v === undefined || (Array.isArray(v) && v.every(str));
+
+/**
+ * The CLI flag-value rule `profile_login.rs::plain_value` mirrors, so the view can tell the user
+ * a typed name is bad before the `connect_start` round trip: `[A-Za-z0-9._-]`, not starting with
+ * `-`, 1 to 64 characters. The host (`profile_login`) checks the same rule again; this is only
+ * the earlier, friendlier message.
+ */
+const PLAIN_VALUE = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,63}$/;
+
+/** True for a name the CLI would accept as a plain flag value (W-07g). */
+export function isValidProfileName(name: string): boolean {
+  return PLAIN_VALUE.test(name);
+}
 
 /** The model, or `undefined` for a payload that is not one. */
 export function asConnectModel(v: unknown): ConnectModel | undefined {
@@ -69,6 +95,7 @@ export function asConnectModel(v: unknown): ConnectModel | undefined {
       return str(v['host']) &&
         str(v['proposedName']) &&
         typeof v['otherAuthNotice'] === 'boolean' &&
+        optStrArray(v['taken']) &&
         optStr(v['error'])
         ? (v as ConnectModel)
         : undefined;

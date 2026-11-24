@@ -241,7 +241,11 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
 
   async function toHub(
     l: WorkspaceList,
-    extra: { busyProfile?: string; notice?: HubWorkspaceList['notice'] } = {},
+    extra: {
+      busyProfile?: string;
+      notice?: HubWorkspaceList['notice'];
+      refreshing?: boolean;
+    } = {},
   ): Promise<HubWorkspaceList> {
     const rows = await rowsOf(l);
     namedRows = rows;
@@ -272,12 +276,13 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     }
     if (extra.busyProfile !== undefined) out.busyProfile = extra.busyProfile;
     if (extra.notice) out.notice = extra.notice;
+    if (extra.refreshing) out.refreshing = true;
     return out;
   }
 
   const publish = async (
     l: WorkspaceList | undefined,
-    extra?: { busyProfile?: string; notice?: HubWorkspaceList['notice'] },
+    extra?: { busyProfile?: string; notice?: HubWorkspaceList['notice']; refreshing?: boolean },
   ): Promise<void> => {
     if (!l) return;
     try {
@@ -369,6 +374,12 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       case 'workspaces.ready':
         // The hub opens: read again, and let the store probe the sign-in states.
         return publish(await fetchList(true));
+      case 'workspace.refresh': {
+        // "Refresh workspaces": the same re-read as a hub open, with a spinner on the button
+        // instead of the loading line (the hub already has a list to show while it waits).
+        await publish(last, { refreshing: true });
+        return publish(await fetchList(true));
+      }
       case 'workspace.set_available': {
         const row = rowOf(a.profile);
         if (!row)
