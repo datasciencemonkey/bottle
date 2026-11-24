@@ -210,6 +210,43 @@ function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void 
   );
 }
 
+/** The CLI sign-in for a profile, with a quote only when the name needs one. */
+const signInCommand = (profile: string): string =>
+  `databricks auth login --profile ${/^[\w.-]+$/.test(profile) ? profile : `'${profile.replace(/'/g, `'\\''`)}'`}`;
+
+/** The CLI command of an expired row, with a Copy button: the way out when the browser sign-in fails. */
+function SignInCommand({ profile }: { profile: string }) {
+  const [copied, setCopied] = useState<'yes' | 'no' | undefined>(undefined);
+  const command = signInCommand(profile);
+  return (
+    <span
+      data-sign-in-command
+      className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+    >
+      <span>Or run in Terminal:</span>
+      <code className="select-all truncate">{command}</code>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-copy-command
+        aria-label={`Copy the sign-in command for ${profile}`}
+        onClick={() => {
+          navigator.clipboard
+            .writeText(command)
+            .then(() => setCopied('yes'))
+            .catch(() => setCopied('no'));
+        }}
+      >
+        Copy
+      </Button>
+      <span role="status" data-copy-status>
+        {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Could not copy. Select the command.' : ''}
+      </span>
+    </span>
+  );
+}
+
 type Panel = 'rename' | 'colour' | 'confirm' | undefined;
 
 function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
@@ -300,6 +337,7 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
               {STATUS_TEXT[row.signIn]}
             </span>
           </span>
+          {row.signIn === 'expired' && <SignInCommand profile={row.profile} />}
           {reason !== undefined && (
             <span data-workspace-reason className="text-[var(--mog-text-xs)] text-muted-foreground">
               {reason}

@@ -53,6 +53,7 @@ export const WORKSPACE_TEXT = {
   storage_failed: 'Bottle could not read your workspaces. Try again.',
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
+  waiting: 'Waiting for you to sign in in your browser…',
   login_cancelled: 'The sign-in was cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
@@ -374,15 +375,20 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       case 'workspace.sign_in': {
         if (!rowOf(a.profile))
           return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
-        await publish(last, { busyProfile: a.profile });
+        // `profile_reauth` blocks until the CLI ends (as `profile_login` does): say what it waits for.
+        await publish(last, {
+          busyProfile: a.profile,
+          notice: { kind: 'info', text: WORKSPACE_TEXT.waiting },
+        });
         try {
           await deps.reauth(a.profile);
         } catch (e) {
           const code = codeOf(e);
           if (code === 'not_implemented') {
-            // Slice 1 defers `profile_reauth`: a CLI re-login may drop other keys of the profile.
-            // The user signs in with the CLI; the next `workspaces.ready` reads the new state.
-            return publish(last, { notice: { kind: 'info', text: signInByHand(a.profile) } });
+            // The host has no re-sign-in (yet): show the CLI command as a visible error, not a
+            // quiet note. The hub row also has a Copy button. The next `workspaces.ready`
+            // reads the new state.
+            return publish(last, { notice: { kind: 'error', text: signInByHand(a.profile) } });
           }
           const text = SIGN_IN_CODES.has(code)
             ? WORKSPACE_TEXT[code as keyof typeof WORKSPACE_TEXT]
