@@ -75,7 +75,14 @@ describe('the router fallback (RTR-15c)', () => {
   it('[RTR-15c] [RTR-01b] [RTR-01c] with no home profile a dictation is inserted and no model is called', async () => {
     const { d, calls, inserted } = deps('ok');
     const r = await routeUtterance(
-      { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: true, input: input(NO_HOME) },
+      {
+        mogId: MOG,
+        text: SENTENCE,
+        leaseId: 'lease-1',
+        forceAsk: false,
+        insertionOn: true,
+        input: input(NO_HOME),
+      },
       d,
     );
     expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
@@ -86,7 +93,14 @@ describe('the router fallback (RTR-15c)', () => {
   it('[RTR-15c] [RTR-01b] with no home profile and insertion off a dictation goes to Copy', async () => {
     const { d } = deps('ok');
     const r = await routeUtterance(
-      { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: false, input: input(NO_HOME) },
+      {
+        mogId: MOG,
+        text: SENTENCE,
+        leaseId: 'lease-1',
+        forceAsk: false,
+        insertionOn: false,
+        input: input(NO_HOME),
+      },
       d,
     );
     expect(r).toMatchObject({ route: 'chip', dictated: { route: 'copy', text: SENTENCE } });
@@ -98,6 +112,7 @@ describe('the router fallback (RTR-15c)', () => {
       {
         mogId: MOG,
         text: 'What was revenue?',
+        leaseId: 'lease-1',
         forceAsk: false,
         insertionOn: true,
         input: input(NO_HOME),
@@ -110,7 +125,14 @@ describe('the router fallback (RTR-15c)', () => {
   it('[RTR-15c] [RTR-01b] a failed router model call falls back to the heuristic', async () => {
     const { d, calls, inserted } = deps('fails');
     const r = await routeUtterance(
-      { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: true, input: input('home-a') },
+      {
+        mogId: MOG,
+        text: SENTENCE,
+        leaseId: 'lease-1',
+        forceAsk: false,
+        insertionOn: true,
+        input: input('home-a'),
+      },
       d,
     );
     expect(calls).toEqual(['model']);
@@ -121,7 +143,14 @@ describe('the router fallback (RTR-15c)', () => {
   it('[RTR-15c] with a home profile the router model decides', async () => {
     const { d, calls, inserted } = deps('ok');
     await routeUtterance(
-      { mogId: MOG, text: SENTENCE, forceAsk: false, insertionOn: true, input: input('home-a') },
+      {
+        mogId: MOG,
+        text: SENTENCE,
+        leaseId: 'lease-1',
+        forceAsk: false,
+        insertionOn: true,
+        input: input('home-a'),
+      },
       d,
     );
     expect(calls).toEqual(['model']);

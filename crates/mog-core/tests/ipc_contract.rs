@@ -78,6 +78,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_list", &[B, H]),
         ("recording_detail", &[B, H]),
         ("recording_retry", &[B, H]),
+        ("recording_delete", &[B, H]),
         ("recording_open", &[B, H]),
         ("recording_open_system_audio_settings", &[B, H]),
         // Not in 4.5 (#413, #45, #529, ADR 0104): the hub's Local speech step, hub-only like
@@ -93,6 +94,14 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("workspace_set_available", &[B]),
         ("workspace_make_home", &[B]),
         ("workspace_settings_write", &[B]),
+        ("orchestrator_models", &[B]),
+        ("orchestrator_status", &[B]),
+        ("agent_turn_submit", &[B]),
+        ("agent_turn_stop", &[B]),
+        ("agent_turn_call", &[B]),
+        ("agent_turn_result", &[B]),
+        ("agent_session_state", &[B]),
+        ("agent_session_end", &[B]),
     ]
 };
 
@@ -244,6 +253,25 @@ fn arc_4_dbx_http_takes_route_ids_only() {
     ));
 }
 
+/// ADR 0122: the Responses route belongs to the Rust model client only. The brain cannot send a
+/// model call through `dbx_http`, so it cannot call the model with tools.
+#[test]
+fn adr_0122_dbx_http_refuses_the_mlflow_responses_route() {
+    let args = |route: &str| {
+        json!({"profile": "p", "routeId": route, "params": {},
+               "tags": {"app": "bottle", "mog": "a1", "op": "genie"}})
+    };
+    for route in ["mlflow.responses", "mlflow.chat_completions"] {
+        assert!(
+            matches!(
+                ipc::handle("brain", "dbx_http", args(route)).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{route}"
+        );
+    }
+}
+
 #[test]
 fn arc_5_capture_subscribe_takes_two_channels() {
     let schemas = ipc::schemas();
@@ -292,6 +320,9 @@ fn arc_5_event_names_are_valid_tauri_names() {
         "hotkey.record_toggle",
         "recording.state",
         "recording.job",
+        // The ask loop: the one agent session and its turns (core to brain only).
+        "agent.session",
+        "agent.turn",
     ];
     let names: Vec<&str> = events::ALL.iter().map(|e| e.name).collect();
     let specs: Vec<&str> = events::ALL.iter().map(|e| e.spec_name).collect();
@@ -948,7 +979,9 @@ fn recording_sample(name: &str) -> serde_json::Value {
         "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"profile": "p", "instructions": "Write short notes."}),
         "recording_list" => json!({"profile": "p"}),
-        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_detail" | "recording_retry" | "recording_delete" => {
+            json!({"profile": "p", "id": "rec-1"})
+        }
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         _ => json!({}),
     }
@@ -965,6 +998,7 @@ const RECORDING_COMMANDS: &[&str] = &[
     "recording_list",
     "recording_detail",
     "recording_retry",
+    "recording_delete",
     "recording_open",
     "recording_open_system_audio_settings",
 ];
@@ -1067,6 +1101,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ("recording_detail", json!({"profile": "p"})),
         ("recording_detail", json!({"profile": "p", "id": "../etc"})),
         ("recording_retry", json!({"profile": "p", "id": ""})),
+        ("recording_delete", json!({"profile": "p", "id": "../etc"})),
         ("recording_open", json!({"profile": "p", "id": "rec-1"})),
         (
             "recording_open",
@@ -1084,6 +1119,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_delete", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
         (
             "recording_open",
@@ -1102,7 +1138,7 @@ fn sec_02b_recording_arguments_are_checked() {
         json!({"lengthMin": 120}),
         json!({"storage": {"kind": "my_files", "root": "/Volumes/databricks/home/123/me@example.com/my_files/"}}),
         json!({"storage": {"kind": "volume", "root": "/Volumes/main/calls/bottle_audio"}}),
-        json!({"transcribeEndpoint": "databricks-gemini-3-8-flash", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({"transcribeEndpoint": "system.ai.gemini-3-8-flash", "notesEndpoint": "system.ai.claude-sonnet-5-5"}),
         json!({}),
     ] {
         let err =

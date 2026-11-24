@@ -63,6 +63,10 @@ const PATTERNS: Record<InjectionCategory, readonly RegExp[]> = {
     /<\/?\s*(?:system|assistant|developer|user|instructions?|utterance|router_input|prompt)\s*>/,
     /\[\/?\s*(?:inst|sys|system)\s*\]/,
     /<<\/?sys>>/,
+    // The guard's own answer block. The open bracket may also be a named entity (the `;` is
+    // optional). Numeric entities are decoded in `normalize`. The end is `(?![a-z0-9_])`, not
+    // `\b`, so a non-ASCII letter after the name does not hide the tag.
+    /(?:<|&#0*60;?|&#x0*3c;?|&lt;?|&lsaquo;?|&lang;?)\s*\/?\s*genie_answer(?![a-z0-9_])/,
     /#{2,}\s*(?:system|instruction|instructions)\b/,
   ],
 };
@@ -80,9 +84,47 @@ const ZERO_WIDTH = new RegExp(
   'g',
 );
 
-/** NFKC folds full-width forms; zero-width characters go; case and spaces fold. */
-function normalize(text: string): string {
-  return text.normalize('NFKC').replace(ZERO_WIDTH, '').toLowerCase().replace(/\s+/g, ' ');
+/**
+ * Angle-bracket look-alikes that NFKC keeps apart from `<`: U+2039, U+3008, U+276E, U+276C,
+ * U+2770, U+27E8, U+29FC, U+300A, U+02C2 and U+1438. U+00AB (the guillemet) is NOT in the list:
+ * it is ordinary quotation in many languages, so folding it would flag clean text. The Rust twin
+ * is `is_open_angle_lookalike` in `local_store/quarantine.rs`.
+ */
+export const ANGLE_LOOKALIKES = /[‹〈❮❬❰⟨⧼《˂ᐸ]/g;
+
+/** A numeric character reference, with or without the closing `;`. */
+const NUMERIC_ENTITY = /&#(?:x([0-9a-f]+)|([0-9]+));?/gi;
+
+/**
+ * Decodes each numeric entity once. The whole digit run matches. Leading zeros do not count; a
+ * run that is then empty (zero) or too long (more than 6 hex or 7 decimal digits), or that is no
+ * scalar value, stays as it is.
+ */
+function decodeNumericEntities(text: string): string {
+  return text.replace(NUMERIC_ENTITY, (whole, hex: string | undefined, dec: string | undefined) => {
+    const digits = (hex ?? dec ?? '').replace(/^0+/, '');
+    if (digits === '' || digits.length > (hex !== undefined ? 6 : 7)) return whole;
+    const cp = parseInt(digits, hex !== undefined ? 16 : 10);
+    const scalar = cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
+    return scalar ? String.fromCodePoint(cp) : whole;
+  });
+}
+
+/**
+ * Numeric entities decode once; NFKC folds full-width forms; angle-bracket look-alikes become
+ * `<`; zero-width characters go; case and spaces fold. The Rust twin is `normalize` in
+ * `local_store/quarantine.rs`.
+ */
+export function normalize(text: string): string {
+  return (
+    decodeNumericEntities(text)
+      .normalize('NFKC')
+      .replace(ANGLE_LOOKALIKES, '<')
+      .replace(ZERO_WIDTH, '')
+      .toLowerCase()
+      // U+0085 is white space in Rust (`char::is_whitespace`) but not in JS `\s`: collapse it here.
+      .replace(/[\s\u0085]+/g, ' ')
+  );
 }
 
 /** The RTR-INJ categories that `text` matches, in table order. */

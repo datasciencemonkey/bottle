@@ -243,13 +243,13 @@ fn cap_12c_install_capture_feeds_the_mic_to_the_same_ptt_buffer_that_the_core_dr
     );
     // #46: `with_stt` is `with_audio` with R4 in the event chain (ADR 0082).
     let host = body
-        .split("CaptureHost::with_stt(")
+        .split("CaptureHost::with_stt_gated(")
         .nth(1)
         .expect("the host is built with with_stt");
     let args = &host[..host.find(")?;").expect("the end of the with_stt call")];
     assert!(
-        args.contains(",ptt,stt.engine().clone()"),
-        "the same `ptt` goes to with_stt: {args}"
+        args.contains(",ptt,stt.engine().clone(),tap.clone()"),
+        "the same `ptt` goes to with_stt_gated, with the tap of the mic sink (ADR 0118): {args}"
     );
     assert!(!body.contains("CaptureHost::with_levels("));
 }

@@ -253,6 +253,46 @@ describe('Recordings area (hub)', () => {
       expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 's0' });
     });
 
+    it('[REC-P4] Delete shows only on a row that never uploaded, asks first, and then sends the action', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf(
+          { status: 'failed', onDeviceOnly: true, error: RECORDING_ERRORS.upload_failed },
+          { status: 'failed', partsUploaded: 0, error: RECORDING_ERRORS.volume_permission },
+          { status: 'failed', partsUploaded: 2, error: RECORDING_ERRORS.volume_permission },
+          { status: 'done', canOpen: true },
+          { status: 'uploading', partsUploaded: 0, partsTotal: 2 },
+          { status: 'recording' },
+        ),
+      });
+      const has = async (id: string) => {
+        await click(el.querySelector(`[data-recording-row="${id}"]`));
+        return el.querySelector('[data-recording-delete]') !== null;
+      };
+      expect(await has('s0')).toBe(true);
+      expect(await has('s1')).toBe(true);
+      expect(await has('s2')).toBe(false);
+      expect(await has('s3')).toBe(false);
+      expect(await has('s4')).toBe(false);
+      expect(await has('s5')).toBe(false);
+      // The question comes first; Cancel sends nothing.
+      await click(el.querySelector('[data-recording-row="s1"]'));
+      const before = emits().length;
+      await click(el.querySelector('[data-recording-delete]'));
+      expect(el.querySelector('[data-recording-confirm]')?.textContent).toContain(
+        'Delete this recording? It is only on this Mac and cannot be recovered.',
+      );
+      expect(emits().length).toBe(before);
+      await click(el.querySelector('[data-recording-delete-no]'));
+      expect(el.querySelector('[data-recording-confirm]')).toBeNull();
+      expect(emits().length).toBe(before);
+      // Delete, then confirm: one action with the id.
+      await click(el.querySelector('[data-recording-delete]'));
+      await click(el.querySelector('[data-recording-delete-yes]'));
+      expect(emits().at(-1)).toEqual({ action: 'recordings.delete', id: 's1' });
+      expect(el.querySelector('[data-recording-confirm]')).toBeNull();
+    });
+
     it('[REC-P3] Retry shows for a failed recording and sends the retry once', async () => {
       const { el } = await render(<Recordings active now={() => NOW} />);
       await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {

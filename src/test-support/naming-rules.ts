@@ -11,7 +11,7 @@
 //     string each, so text in neighbouring elements never runs together.
 
 export const PRODUCT_NAME = 'Bottle';
-export const LABS_LABEL = 'Databricks Labs / experimental';
+export const EXPERIMENTAL_LABEL = 'experimental';
 
 // A separator is a space, `_`, `-` or an HTML space entity such as `&nbsp;` or `&#160;`.
 const SEP = '(?:[\\s_-]|&nbsp;|&#160;|&#x0*a0;|&#32;)*';

@@ -1,0 +1,22 @@
+{
+  "home": "DEFAULT",
+  "lampMogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "workspaces": [
+    {
+      "profile": "DEFAULT",
+      "host": "https://example.cloud.databricks.com",
+      "mogIds": ["6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d"],
+      "available": true,
+      "isHome": true,
+      "signIn": "signed_in"
+    }
+  ],
+  "agent": {
+    "crossWorkspaceData": false,
+    "crossWorkspaceLocked": false,
+    "genieCallBudget": 10,
+    "endpoint": "system.ai.claude-haiku-5-5",
+    "cleanDictation": true,
+    "cloudDictation": false
+  }
+}

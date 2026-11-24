@@ -1,0 +1,9 @@
+{
+  "kind": "call",
+  "turnId": "0123456789abcdef0123456789abcdef",
+  "callId": "c-0123abcd",
+  "workspaceId": "1234567890123456",
+  "state": "asking",
+  "used": 1,
+  "budget": 10
+}

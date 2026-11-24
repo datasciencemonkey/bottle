@@ -26,10 +26,10 @@ export const DEFAULT_LENGTH_MIN = 60;
 export const LENGTH_MIN = 5;
 export const LENGTH_MAX = 120;
 
-/** The serving endpoint that transcribes the audio (ADR 0103 update 4). */
-export const DEFAULT_TRANSCRIBE_ENDPOINT = 'databricks-gemini-3-8-flash';
-/** The serving endpoint that writes the notes from the transcript. */
-export const DEFAULT_NOTES_ENDPOINT = 'databricks-claude-sonnet-5-5';
+/** The model that transcribes the audio (ADR 0103 update 4, ADR 0123). */
+export const DEFAULT_TRANSCRIBE_ENDPOINT = 'system.ai.gemini-3-8-flash';
+/** The model that writes the notes from the transcript. */
+export const DEFAULT_NOTES_ENDPOINT = 'system.ai.claude-sonnet-5-5';
 /** The longest instructions text Bottle keeps. */
 export const INSTRUCTIONS_MAX = 8000;
 
@@ -57,7 +57,7 @@ export const RECORDING_TEXT = {
     "My Files isn't available on this workspace. Pick a volume, or a catalog and schema.",
   badVolume: 'Use a volume path like /Volumes/catalog/schema/volume.',
   badSchema: 'Use a catalog and schema like main.default.',
-  badEndpoint: 'Use the name of a serving endpoint: letters, digits, dashes and underscores.',
+  badEndpoint: 'Use a model id: letters, digits, dots, dashes and underscores.',
   badLength: `Use a length from ${LENGTH_MIN} to ${LENGTH_MAX} minutes.`,
   volumeCreateFailed:
     "Bottle couldn't create the volume. Check that you can create volumes in this schema.",
@@ -311,6 +311,7 @@ export type RecordingAction =
   | { action: 'recordings.ready' }
   | { action: 'recordings.detail'; id: string }
   | { action: 'recordings.retry'; id: string }
+  | { action: 'recordings.delete'; id: string }
   | { action: 'recordings.open'; id: string; target?: RecordingOpenWhat }
   | { action: 'recordings.upload_all' };
 
@@ -353,6 +354,7 @@ export function asRecordingAction(p: unknown): RecordingAction | undefined {
       return isStr(p['instructions']) ? { action: a, instructions: p['instructions'] } : undefined;
     case 'recordings.detail':
     case 'recordings.retry':
+    case 'recordings.delete':
       return isId(p['id']) ? { action: a, id: p['id'] } : undefined;
     case 'recordings.open': {
       if (!isId(p['id'])) return undefined;
@@ -372,8 +374,8 @@ export const VOLUME_PATH =
   /^\/Volumes\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/?$/;
 /** A `catalog.schema` pair. */
 export const CATALOG_SCHEMA = /^([A-Za-z0-9_-]{1,255})\.([A-Za-z0-9_-]{1,255})$/;
-/** A serving endpoint name (`/serving-endpoints/<name>/invocations`). */
-export const ENDPOINT_NAME = /^[A-Za-z0-9_-]{1,63}$/;
+/** A model id for the AI Gateway chat route, such as `system.ai.gemini-3-8-flash` (ADR 0123). */
+export const ENDPOINT_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
 function isNotice(v: unknown): v is RecordingNotice {
   if (!isObj(v) || !isStr(v['text'])) return false;
@@ -559,4 +561,15 @@ export function rowActionOf(row: {
 }): 'upload' | 'retry' | undefined {
   if (row.onDeviceOnly) return 'upload';
   return row.status === 'failed' ? 'retry' : undefined;
+}
+
+/**
+ * May the row be deleted from this Mac? Only a recording that never reached the volume: on this
+ * device only, or failed with no part uploaded. Rust checks again and refuses the rest.
+ */
+export function rowCanDeleteOf(
+  row: Pick<RecordingRow, 'status' | 'partsUploaded' | 'onDeviceOnly' | 'waitingNetwork'>,
+): boolean {
+  if (row.onDeviceOnly) return true;
+  return row.status === 'failed' && !row.waitingNetwork && (row.partsUploaded ?? 0) === 0;
 }

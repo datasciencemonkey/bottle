@@ -398,6 +398,54 @@ describe('V2 MOG view', () => {
     expect(shown(el)).toEqual([]);
   });
 
+  it('[ADR-0118] [AC-6.15] "Call only" replaces the REC overlay and is not in the badge row', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const rec = { ...overlays, recording: true };
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays: rec });
+    expect(el.querySelector('[data-overlay="recording"]')?.textContent).toBe('REC');
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'listening',
+      overlays: rec,
+      badges: [{ kind: 'call_only', text: 'Call only', label: 'Call only. x', hoverOnly: false }],
+    });
+    const o = el.querySelector('[data-overlay="recording"]') as HTMLElement;
+    expect(o.textContent).toBe('Call only');
+    expect(o.hasAttribute('data-call-only')).toBe(true);
+    expect(o.getAttribute('aria-label')).toBe(
+      'Call only. The call recording gets silence from your mic while you hold the talk key',
+    );
+    expect(el.querySelector('[data-badge="call_only"]')).toBeNull();
+  });
+
+  it('[ADR-0118] [AC-6.16] the held note is read by an always-mounted live region', async () => {
+    const { m } = fakeMascot();
+    const { el } = await render(<MogView mogId={ID} createMascot={() => m} />);
+    const region = el.querySelector('[role="status"][aria-live="polite"]') as HTMLElement;
+    expect(region).not.toBeNull();
+    expect(region.textContent).toBe('');
+    await tauri.emit('mog:view_state', {
+      mogId: ID,
+      mood: 'listening',
+      overlays,
+      badges: [
+        {
+          kind: 'call_note',
+          text: 'Your call can still hear you.',
+          label: 'Your call can still hear you.',
+          hoverOnly: false,
+        },
+      ],
+    });
+    expect(el.querySelector('[role="status"][aria-live="polite"]')).toBe(region);
+    expect(region.textContent).toBe('Your call can still hear you.');
+    const pill = el.querySelector('[data-badge="call_note"]') as HTMLElement;
+    expect(pill.getAttribute('aria-hidden')).toBe('true');
+    await tauri.emit('mog:view_state', { mogId: ID, mood: 'idle', overlays, badges: [] });
+    expect(region.textContent).toBe('');
+  });
+
   it('[UX-39b] [AT-12] badges never change the mood the view renders', async () => {
     const { m, calls } = fakeMascot();
     await render(<MogView mogId={ID} createMascot={() => m} />);

@@ -165,7 +165,8 @@ fn migration_never_changes_an_old_config_and_writes_a_private_file() {
     assert_eq!(data["schemaVersion"], 1);
     assert_eq!(data["agent"]["crossWorkspaceData"], false);
     assert_eq!(data["agent"]["genieCallBudget"], 10);
-    assert_eq!(data["agent"]["endpoint"], "databricks-claude-sonnet-5-5");
+    assert_eq!(data["agent"]["endpoint"], "system.ai.claude-haiku-5-5");
+    assert_eq!(data["agent"]["cleanDictation"], true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -397,6 +398,38 @@ fn a_slow_probe_times_out_and_leaves_the_row_unknown() {
 
 // ---------- switches and home ----------
 
+/// Write the file behind the store, as an old build or a test does, and drop the cache.
+fn write_file(w: &WorkspaceStore, s: &Scratch, data: &Value) {
+    fs::write(s.file(), serde_json::to_vec(data).unwrap()).unwrap();
+    *w.cache.lock().unwrap() = None;
+}
+
+/// L5: the home and the model read the cache. Only a write of the store empties it.
+#[test]
+fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert_eq!(w.home().as_deref(), Some("home"));
+    let model = w.orchestrator_model().unwrap();
+    // A read that hit the disk would fail on this file; the cache answers instead.
+    fs::write(s.file(), b"{ not json").unwrap();
+    assert_eq!(w.home().as_deref(), Some("home"));
+    assert_eq!(w.orchestrator_model().as_deref(), Some(model.as_str()));
+    // A write goes on the cached copy and saves it, so the new value shows at once.
+    w.settings_write(&WorkspaceSettingsWriteArgs {
+        cross_workspace_data: None,
+        genie_call_budget: None,
+        agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
+        clean_dictation: None,
+        cloud_dictation: None,
+    })
+    .unwrap();
+    assert_eq!(
+        w.orchestrator_model().as_deref(),
+        Some("system.ai.gpt-oss-20b")
+    );
+}
+
 fn ready(s: &Scratch) -> WorkspaceStore {
     // One old MOG on `home`: home is set. `other` is a new connection.
     put_config(&s.configs(), "a", "A", "home");
@@ -410,8 +443,8 @@ fn ready(s: &Scratch) -> WorkspaceStore {
     )
 }
 
-fn ep(s: &str) -> EndpointName {
-    EndpointName::try_from(s.to_owned()).unwrap()
+fn ep(s: &str) -> OrchestratorModel {
+    OrchestratorModel::try_from(s.to_owned()).unwrap()
 }
 
 fn budget(n: u8) -> GenieCallBudget {
@@ -521,33 +554,44 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: false,
             cross_workspace_locked: false,
             genie_call_budget: GenieCallBudget::DEFAULT,
-            endpoint: ep("databricks-claude-sonnet-5-5"),
+            endpoint: ep("system.ai.claude-haiku-5-5"),
+            clean_dictation: true,
+            cloud_dictation: false,
         }
     );
-    // A bad budget or endpoint cannot be built, and the command refuses it on the wire.
+    // A bad budget or model cannot be built, and the command refuses it on the wire.
     assert!(GenieCallBudget::try_from(7).is_err());
-    assert!(EndpointName::try_from("a b/c".to_owned()).is_err());
+    assert!(OrchestratorModel::try_from("a b/c".to_owned()).is_err());
     let bad = w.call("workspace_settings_write", json!({"genieCallBudget": 7}));
     assert_eq!(code(bad.unwrap_err()), "invalid_args");
-    let bad = w.call(
-        "workspace_settings_write",
-        json!({"agentEndpoint": "a b/c"}),
-    );
-    assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    for v in [
+        json!("a b/c"),
+        json!("databricks-claude-sonnet-5-5"),
+        json!("system.ai."),
+        json!("system.ai.a.b"),
+        json!("other.ai.model"),
+        json!(5),
+    ] {
+        let bad = w.call("workspace_settings_write", json!({"agentEndpoint": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
             cross_workspace_data: Some(true),
             genie_call_budget: Some(budget(20)),
-            agent_endpoint: Some(ep("my-endpoint")),
+            agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
+            clean_dictation: Some(false),
+            cloud_dictation: None,
         })
         .unwrap();
     assert_eq!(
         (
             l.agent.cross_workspace_data,
             l.agent.genie_call_budget.get(),
-            l.agent.endpoint.as_str()
+            l.agent.endpoint.as_str(),
+            l.agent.clean_dictation
         ),
-        (true, 20, "my-endpoint")
+        (true, 20, "system.ai.gpt-oss-20b", false)
     );
     // A later partial write keeps the rest.
     let l = w
@@ -555,10 +599,260 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: None,
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
+            clean_dictation: None,
+            cloud_dictation: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
-    assert_eq!(l.agent.endpoint.as_str(), "my-endpoint");
+    assert_eq!(l.agent.endpoint.as_str(), "system.ai.gpt-oss-20b");
+    assert!(!l.agent.clean_dictation);
+}
+
+/// ADR 0122: `cleanDictation` is a bool. Any other JSON type is refused.
+#[test]
+fn settings_write_refuses_a_non_bool_clean_dictation() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"cleanDictation": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert_eq!(l["agent"]["cleanDictation"], false);
+}
+
+/// ADR 0123: `cloudDictation` is a bool, off by default, and the read-only reader follows it.
+/// A file from before it has no field and reads as off.
+#[test]
+fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert!(!w.cloud_dictation());
+    assert!(!w.cloud_dictation_fast());
+    assert!(!w.list(false).unwrap().agent.cloud_dictation);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"cloudDictation": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call("workspace_settings_write", json!({"cloudDictation": true}))
+        .unwrap();
+    assert_eq!(l["agent"]["cloudDictation"], true);
+    assert!(w.cloud_dictation());
+    // The fast atomic read follows the write with no extra load (ADR 0123).
+    assert!(w.cloud_dictation_fast());
+    // A later write of another field keeps it.
+    w.call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert!(w.cloud_dictation());
+    assert!(w.cloud_dictation_fast());
+    // An old file with no field reads as off. The fast flag is stale until the next `load()`
+    // (a cache-clearing disk write, same as `cloud_dictation()`'s own read-through).
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cloudDictation");
+    write_file(&w, &s, &data);
+    assert!(!w.cloud_dictation());
+    assert!(!w.cloud_dictation_fast());
+}
+
+/// ADR 0123 follow-up: `settings_write` must store the fast flag only after `save` actually
+/// wrote the file. A failed write (here: a read-only store directory) leaves both the fast
+/// flag and the file itself unchanged.
+#[test]
+fn adr_0123_a_failed_settings_write_leaves_the_fast_flag_unchanged() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    assert!(!w.cloud_dictation_fast());
+    let before = fs::read(s.file()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = fs::metadata(&s.0).unwrap().permissions();
+        perm.set_mode(0o500); // read + execute only: no new file can be created here
+        fs::set_permissions(&s.0, perm).unwrap();
+        let err = w.call("workspace_settings_write", json!({"cloudDictation": true}));
+        // Restore before any assert can panic, so `Scratch::drop` can still clean up.
+        let mut perm = fs::metadata(&s.0).unwrap().permissions();
+        perm.set_mode(0o700);
+        fs::set_permissions(&s.0, perm).unwrap();
+        assert!(
+            err.is_err(),
+            "the write must fail for this test to mean anything"
+        );
+        assert_eq!(code(err.unwrap_err()), "workspace_storage_failed");
+    }
+    assert!(!w.cloud_dictation_fast());
+    assert!(!w.cloud_dictation());
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+/// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other
+/// value that is not a `system.ai.` id, becomes the default model. A file with no
+/// `cleanDictation` reads as true. A valid `system.ai.` id stays.
+#[test]
+fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
+    for old in [
+        "databricks-claude-sonnet-5-5",
+        "my-endpoint",
+        "system.ai.",
+        "x y",
+        "",
+    ] {
+        let s = Scratch::new();
+        let w = ready(&s);
+        w.list(false).unwrap();
+        let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+        data["agent"]["endpoint"] = json!(old);
+        data["agent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanDictation");
+        write_file(&w, &s, &data);
+        let l = w.list(false).unwrap();
+        assert_eq!(
+            l.agent.endpoint.as_str(),
+            "system.ai.claude-haiku-5-5",
+            "{old}"
+        );
+        assert!(l.agent.clean_dictation);
+    }
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]["endpoint"] = json!("system.ai.gpt-oss-20b");
+    write_file(&w, &s, &data);
+    assert_eq!(
+        w.list(false).unwrap().agent.endpoint.as_str(),
+        "system.ai.gpt-oss-20b"
+    );
+}
+
+/// ADR 0122: an old file with the `runProfile` setting still loads. The command refuses the field,
+/// and the next save drops it.
+#[test]
+fn an_old_file_with_run_profile_loads_and_the_next_save_drops_it() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]["runProfile"] = json!("other");
+    write_file(&w, &s, &data);
+    let l = w.call("workspace_settings_write", json!({"genieCallBudget": 5}));
+    assert!(l.unwrap()["agent"].get("runProfile").is_none());
+    let saved: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    assert!(saved["agent"].get("runProfile").is_none());
+    let bad = w.call("workspace_settings_write", json!({"runProfile": "other"}));
+    assert_eq!(code(bad.unwrap_err()), "invalid_args");
+}
+
+/// Slice 2a: the agent session snapshot.
+#[test]
+fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    for (id, name, home) in [
+        ("a", "A", "Sales Prod"),
+        ("b", "B", "sales-prod"),
+        ("c", "C", "fin"),
+    ] {
+        put_config(&cfg, id, name, home);
+    }
+    let w = WorkspaceStore::new(
+        &s.0,
+        cfg,
+        Arc::new(FakeT7(vec![
+            profile("Sales Prod", true),
+            profile("sales-prod", true),
+            profile("fin", true),
+            profile("pat", false),
+        ])),
+    );
+    w.make_home("fin", None).unwrap();
+    let snap = w.catalog_snapshot().unwrap();
+    let got: Vec<(&str, &str, bool, bool)> = snap
+        .catalog
+        .iter()
+        .map(|c| {
+            (
+                c.alias.as_str(),
+                c.profile.as_str(),
+                c.is_home,
+                c.is_agent_workspace,
+            )
+        })
+        .collect();
+    // Home first, then by name; an unsupported profile is not in the catalog; two profiles that
+    // slug to one alias get -2.
+    assert_eq!(
+        got,
+        [
+            ("fin", "fin", true, true),
+            ("sales-prod", "Sales Prod", false, false),
+            ("sales-prod-2", "sales-prod", false, false),
+        ]
+    );
+    assert_eq!(snap.home_profile.as_deref(), Some("fin"));
+    assert_eq!(snap.model, crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL);
+    assert_eq!((snap.cross_workspace, snap.budget), (false, 10));
+    // The model runs on the home profile, so the agent workspace is the home.
+    assert_eq!(
+        snap.catalog.iter().filter(|c| c.is_agent_workspace).count(),
+        1
+    );
+    // A workspace switched off leaves the catalog.
+    w.set_available("Sales Prod", false, None).unwrap();
+    assert_eq!(w.catalog_snapshot().unwrap().catalog.len(), 2);
+    // No home: no home profile and an empty catalog.
+    let s2 = Scratch::new();
+    let none = WorkspaceStore::new(
+        &s2.0,
+        s2.configs(),
+        Arc::new(FakeT7(vec![profile("x", true)])),
+    );
+    let snap = none.catalog_snapshot().unwrap();
+    assert!(snap.home_profile.is_none() && snap.catalog.is_empty());
+}
+
+/// I1: the whole alias, `-N` suffix included, stays within the 32 chars of the `workspace` arg.
+#[test]
+fn a_long_profile_name_with_a_collision_suffix_stays_within_32_chars() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    let (long_a, long_b) = ("a".repeat(80), "A".repeat(80));
+    for (id, name, home) in [("a", "A", &long_a), ("b", "B", &long_b)] {
+        put_config(&cfg, id, name, home);
+    }
+    let w = WorkspaceStore::new(
+        &s.0,
+        cfg,
+        Arc::new(FakeT7(vec![profile(&long_a, true), profile(&long_b, true)])),
+    );
+    let aliases: Vec<String> = w
+        .catalog_snapshot()
+        .unwrap()
+        .catalog
+        .iter()
+        .map(|c| c.alias.clone())
+        .collect();
+    assert_eq!(aliases.len(), 2);
+    assert_ne!(aliases[0], aliases[1]);
+    assert!(aliases.iter().all(|a| a.len() <= 32), "{aliases:?}");
+    assert!(aliases[1].ends_with("-2"), "{aliases:?}");
+}
+
+#[test]
+fn alias_slugs_are_safe_short_and_never_empty() {
+    assert_eq!(alias_slug("Sales (EU)"), "sales-eu");
+    assert_eq!(alias_slug("--"), "ws");
+    assert_eq!(alias_slug(&"a".repeat(80)).len(), 32);
+    assert_eq!(alias_slug("ÄÖ"), "ws");
 }
 
 // ---------- the allow-list ----------
@@ -664,18 +958,35 @@ fn ac_1_7_genie_ask_for_a_switched_off_profile_is_refused_before_any_send_on_eve
 }
 
 #[test]
-fn polls_cancels_and_listing_for_a_switched_off_profile_still_go_through() {
+fn polls_cancels_and_results_of_a_switched_off_profile_need_a_recorded_pair_and_listing_does_not() {
     let s = Scratch::new();
     let w = Arc::new(ready(&s));
     let r8 = Arc::new(CountingR8::default());
     let comp = McpCallComponent::with_gate(r8.clone(), Some(w));
-    for tool in [
-        "genie_poll_response",
-        "genie_cancel_response",
-        "genie_get_query_result",
-    ] {
+    let calls = [
+        (
+            "genie_poll_response",
+            json!({"conversation_id": "c-1", "response_id": "r-1"}),
+        ),
+        ("genie_cancel_response", json!({"conversation_id": "c-1"})),
+        (
+            "genie_get_query_result",
+            json!({"conversation_id": "c-1", "response_id": "r-1", "item_id": "pub_1_output"}),
+        ),
+    ];
+    // ADR 0117 follow-up: no recorded pair and a switched-off profile, so each is refused.
+    for (tool, args) in &calls {
+        let e = comp
+            .call("mcp_call", mcp_args("other", tool, json!({"args": args})))
+            .unwrap_err();
+        assert_eq!(e.code(), "workspace_not_available", "{tool}");
+    }
+    assert_eq!(r8.0.load(Ordering::SeqCst), 0, "nothing was sent");
+    // A pair that a successful ask recorded lets the call in flight end.
+    comp.pairs().record("other", "c-1");
+    for (tool, args) in &calls {
         assert!(
-            comp.call("mcp_call", mcp_args("other", tool, json!({})))
+            comp.call("mcp_call", mcp_args("other", tool, json!({"args": args})))
                 .is_ok(),
             "{tool}"
         );

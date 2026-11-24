@@ -36,7 +36,8 @@ use objc2::{define_class, ClassType, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::NSView;
 use objc2_app_kit::{
     NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSPanel,
-    NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowLevel, NSWindowStyleMask,
+    NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode,
+    NSWindowStyleMask,
 };
 use objc2_foundation::NSString;
 use objc2_web_kit::WKWebView;
@@ -270,6 +271,28 @@ where
     R: tauri::Runtime,
     F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
 {
+    on_main_with(window, true, f)
+}
+
+/// [`on_main`] for a step that must never destroy the window when it fails off the main thread
+/// (the child-window steps of a card: a failed attach or detach leaves a working card).
+fn on_main_keep<R, F>(window: &tauri::WebviewWindow<R>, f: F) -> Result<(), WindowError>
+where
+    R: tauri::Runtime,
+    F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
+{
+    on_main_with(window, false, f)
+}
+
+fn on_main_with<R, F>(
+    window: &tauri::WebviewWindow<R>,
+    destroy_on_fail: bool,
+    f: F,
+) -> Result<(), WindowError>
+where
+    R: tauri::Runtime,
+    F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
+{
     fn run<R: tauri::Runtime>(
         w: &tauri::WebviewWindow<R>,
         f: impl FnOnce(&NSWindow) -> Result<(), WindowError>,
@@ -286,7 +309,7 @@ where
     let w = window.clone();
     window
         .run_on_main_thread(move || {
-            if run(&w, f).is_err() {
+            if run(&w, f).is_err() && destroy_on_fail {
                 let _ = w.destroy();
             }
         })
@@ -321,11 +344,61 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for MacPanelStyle {
         // the keys from the app the user types in (MOG-03b). A card panel can still become key
         // (MOG-03a): a click on it makes it key (`accept_first_mouse`), and then its page gets the
         // keys and the IME. A MOG panel never becomes key (UX-19a).
+        // A card goes with its MOG panel while it is on screen: AppKit moves a child window with
+        // its parent on every step of a drag. `follow_mog` still keeps it on the screen and on
+        // the right side after the move.
+        let mog = card_parent(window, kind);
         on_main(window, move |ns| {
             ns.orderFrontRegardless();
+            if let Some(Ok(p)) = mog.map(|m| m.ns_window()) {
+                // SAFETY: `ns_window` gives the live NSWindow of the MOG; main thread.
+                let parent: &NSWindow = unsafe { &*(p as *const NSWindow) };
+                if ns.parentWindow().is_none() {
+                    // SAFETY: both are live windows on the main thread; the card is not a
+                    // child of any window yet.
+                    unsafe { parent.addChildWindow_ordered(ns, NSWindowOrderingMode::Above) };
+                }
+            }
             Ok(())
         })
     }
+
+    fn hide(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
+        if matches!(kind, WindowKind::Card(_)) {
+            // Leave the MOG first: a child window hides and shows with its parent otherwise.
+            on_main_keep(window, |ns| {
+                if let Some(parent) = ns.parentWindow() {
+                    parent.removeChildWindow(ns);
+                }
+                Ok(())
+            })?;
+        }
+        window.hide().map_err(|_| WindowError::HostFailed)
+    }
+}
+
+/// The MOG window that a card window belongs to.
+fn card_parent<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    kind: &WindowKind,
+) -> Option<tauri::WebviewWindow<R>> {
+    use tauri::Manager;
+    let WindowKind::Card(id) = kind else {
+        return None;
+    };
+    window
+        .app_handle()
+        .get_webview_window(&WindowKind::mog(id)?.label())
+}
+
+/// Called on the main thread at the end of each MOG drag (a `LeftMouseUp` on a MOG panel that
+/// ends a drag; a plain click does not call it).
+static DRAG_END: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Set the function that runs at the end of a MOG drag. The app uses it to put the card of each
+/// MOG in its place (`TauriWindowHost::follow_all`), whether or not AppKit sent a move event.
+pub fn set_drag_end_hook(f: impl Fn() + Send + Sync + 'static) {
+    let _ = DRAG_END.set(Box::new(f));
 }
 
 thread_local! {
@@ -406,7 +479,15 @@ fn handle(ev: &NSEvent) -> Option<()> {
     })?;
     match ev.r#type() {
         NSEventType::LeftMouseDown => PRESS.with(|p| *p.borrow_mut() = Some(ev.retain())),
-        NSEventType::LeftMouseUp => PRESS.with(|p| *p.borrow_mut() = None),
+        NSEventType::LeftMouseUp => {
+            PRESS.with(|p| *p.borrow_mut() = None);
+            // `Swallow` on an up is the end of a drag (see below); a plain click moves nothing.
+            if verdict == Verdict::Swallow {
+                if let Some(f) = DRAG_END.get() {
+                    f();
+                }
+            }
+        }
         _ => {}
     }
     // `Verdict::Pass` on a mouse-up means the gesture was a plain click, not a drag (`mog_drag`'s

@@ -68,6 +68,7 @@ describe('startBrain: visible PTT feedback (#551)', () => {
     const u = (insertionOn: boolean) => ({
       mogId: A,
       text: 'raw',
+      leaseId: 'lease-1',
       forceAsk: false,
       insertionOn,
       input: {} as never,

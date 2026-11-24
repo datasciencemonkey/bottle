@@ -264,6 +264,22 @@ describe('the real flow through the dictation-words wrapper', () => {
     return { done: await flow.confirm(scope, false), clear };
   };
 
+  it('[L-1] the words go when the local wipe worked, also if the remote phase throws', async () => {
+    const clear = vi.fn();
+    const w = clearingDictationWords(
+      {
+        dialog: vi.fn(),
+        confirm: async (_s, _a, onLocal) => {
+          onLocal?.();
+          throw new Error('remote');
+        },
+      },
+      clear,
+    );
+    await expect(w.confirm('everything', true)).rejects.toThrow();
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
   it('each scope completes through the wrapper; only everything clears the words', async () => {
     for (const scope of ['older_than_30d', 'older_than_90d', 'everything'] as const) {
       const { done, clear } = await run(scope, { local: 4, conversations: [] });

@@ -47,6 +47,15 @@ pub trait LocalAudio: Send + Sync {
     /// Delete what is left of `name` on the device after its pipeline ended with `done` (the
     /// sidecar and the empty temp dir). The default does nothing.
     fn tidy(&self, _name: &str) {}
+    /// Delete every file of `name` on the device: audio parts, temp files and the sidecar.
+    /// `true` when nothing of it is left. The default deletes nothing.
+    fn delete(&self, _name: &str) -> bool {
+        false
+    }
+    /// Does the device prove that no part of `name` was ever uploaded? The default cannot.
+    fn never_uploaded(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 /// No local audio (tests, and builds with no app data dir).
@@ -654,6 +663,7 @@ impl CloudAdapter {
                 .map(|p| LocalPart {
                     path: p.path.clone(),
                     duration_s: p.duration_s,
+                    held: Vec::new(),
                 })
                 .collect(),
         };
@@ -764,24 +774,6 @@ impl RecordingCloud for CloudAdapter {
             .collect())
     }
 
-    fn write_notes(
-        &self,
-        profile: &ProfileName,
-        endpoint: &EndpointName,
-        instructions: &Instructions,
-        transcript_md: &str,
-    ) -> RecordingResult<String> {
-        self.service
-            .notes(
-                profile.as_str(),
-                endpoint.as_str(),
-                RECORDING_MOG_TAG,
-                instructions.as_str(),
-                transcript_md,
-            )
-            .map_err(wire_kind)
-    }
-
     fn write_job(
         &self,
         profile: &ProfileName,
@@ -847,6 +839,7 @@ impl RecordingCloud for CloudAdapter {
                         part: s.part,
                     })
                     .collect(),
+                bottle_gaps: Vec::new(),
             };
             let tj = serde_json::to_vec_pretty(&doc).map_err(|_| RecordingErrorKind::Internal)?;
             w(transcript_json_file(name), &tj)?;
@@ -952,6 +945,14 @@ impl RecordingCloud for CloudAdapter {
                 out.push(s);
             }
         }
+        // A failed upload with no part in the volume and no audio left here was deleted on this
+        // device (`recording_delete` never touches the volume): nothing to retry, so no row.
+        out.retain(|r| {
+            let dead = r.status == RecordingStatus::Failed
+                && r.error_stage == Some(RecordingStatus::Uploading)
+                && r.parts_uploaded.unwrap_or(0) == 0;
+            !dead || local.contains_key(&r.name) || live.contains_key(&r.name)
+        });
         out.sort_by(|a, b| {
             b.started_at_ms
                 .cmp(&a.started_at_ms)
@@ -1091,6 +1092,48 @@ impl RecordingCloud for CloudAdapter {
             .map_err(err)
     }
 
+    fn delete(
+        &self,
+        profile: &ProfileName,
+        storage: Option<&RecordingStorage>,
+        id: &RecordingId,
+    ) -> RecordingResult<bool> {
+        let name = id.as_str();
+        // The id must name audio that Bottle's own temp store holds. No path crosses IPC.
+        if !self.local.names().iter().any(|(n, _)| n == name) {
+            return Ok(false);
+        }
+        if self.local.active().contains(name) || self.is_live(name) {
+            return Err(RecordingErrorKind::RecordingBusy);
+        }
+        // The in-flight slot also keeps a Retry out while the files go.
+        let Some(_guard) = self.begin(name) else {
+            return Err(RecordingErrorKind::RecordingBusy);
+        };
+        if storage.is_none() && !self.local.never_uploaded(name) {
+            // Settings has no storage now, but a part may have gone up before it was cleared.
+            return Err(RecordingErrorKind::RecordingBusy);
+        }
+        if let Some(storage) = storage {
+            // Read only. A recording with a part in the volume, or past the upload, is not
+            // "not uploaded": the volume copy is the one that counts.
+            let job = self
+                .service
+                .job(profile.as_str(), Self::root(storage), name)
+                .map_err(wire_kind)?;
+            if let Some(m) = job {
+                if !self.retry_allowed(&m) || m.parts.iter().any(|p| p.uploaded) {
+                    return Err(RecordingErrorKind::RecordingBusy);
+                }
+            }
+        }
+        if self.local.delete(name) {
+            Ok(true)
+        } else {
+            Err(RecordingErrorKind::Internal)
+        }
+    }
+
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>> {
         let active = self.local.active();
         let mut out: Vec<RecordingSummary> = self
@@ -1163,6 +1206,73 @@ mod tests {
             Arc::new(|_: &RecordingSummary| {}),
             Arc::new(|| 1_795_100_700_000i64),
         )
+    }
+
+    /// Local audio with one name that counts its delete calls.
+    struct OneLocal(std::sync::atomic::AtomicU32);
+    impl LocalAudio for OneLocal {
+        fn parts(&self, _name: &str) -> Vec<LocalPart> {
+            Vec::new()
+        }
+        fn names(&self) -> Vec<(String, u64)> {
+            vec![("2026-11-19_0905".to_owned(), 1)]
+        }
+        fn active(&self) -> HashSet<String> {
+            HashSet::new()
+        }
+        fn delete(&self, _name: &str) -> bool {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+        fn never_uploaded(&self, _name: &str) -> bool {
+            true
+        }
+    }
+
+    fn adapter_with(local: Arc<OneLocal>) -> CloudAdapter {
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http: Arc::new(ScriptedHttp::new()),
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            local,
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+    }
+
+    #[test]
+    fn delete_is_busy_while_a_run_holds_the_slot_or_a_live_worker_owns_the_name() {
+        let local = Arc::new(OneLocal(0.into()));
+        let a = adapter_with(local.clone());
+        let id = RecordingId::try_from("2026-11-19_0905".to_owned()).unwrap();
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let guard = a.begin("2026-11-19_0905").unwrap();
+        assert_eq!(
+            RecordingCloud::delete(&a, &p, None, &id),
+            Err(RecordingErrorKind::RecordingBusy)
+        );
+        drop(guard);
+        a.live.lock().unwrap().insert(
+            "2026-11-19_0905".to_owned(),
+            LiveStatus {
+                id: "r".to_owned(),
+                started_at_ms: 1,
+                recording: false,
+                announced: BTreeSet::new(),
+                uploaded: 0,
+                error: None,
+            },
+        );
+        assert_eq!(
+            RecordingCloud::delete(&a, &p, None, &id),
+            Err(RecordingErrorKind::RecordingBusy)
+        );
+        assert_eq!(local.0.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1240,8 +1350,8 @@ mod tests {
                 "2026-11-19_0905.opus",
                 1.0,
             )],
-            "databricks-gemini-3-8-flash",
-            "databricks-claude-sonnet-5-5",
+            "system.ai.gemini-3-8-flash",
+            "system.ai.claude-sonnet-5-5",
             &iso_utc(0),
         );
         m.status = status;

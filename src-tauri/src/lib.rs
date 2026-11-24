@@ -4,6 +4,7 @@
 //! secrets and I/O stay in `mog-core` (section 4.4). The IPC command surface is in `ipc` (#223).
 
 pub mod agent_host;
+pub mod agent_session_host;
 pub mod capture_host;
 pub mod cli_host;
 pub mod consent_host;
@@ -15,6 +16,7 @@ pub mod link_host;
 pub mod macos_panel;
 pub mod mcp_host;
 pub mod memory_host;
+pub mod model_host;
 pub mod mog_config_host;
 pub mod mog_drag;
 pub mod mog_look_host;
@@ -87,8 +89,14 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). `stt_transcribe`
     // takes the results from the store (#514); `BrainSegments` sends `capture.segment` (#514).
     let segments = capture_host::BrainSegments::new(std::sync::Arc::clone(&relay));
+    // ADR 0123: the cloud half of dictation. It reads the Settings choice on each take, so the
+    // model host can come up after R4.
     let stt =
-        mog_core::stt_engine::LocalStt::new(stt_loader(), std::sync::Arc::new(segments), |_| {});
+        mog_core::stt_engine::LocalStt::new(stt_loader(), std::sync::Arc::new(segments), |parts| {
+            parts.cloud = Some(std::sync::Arc::new(model_host::LazyCloudStt(
+                handle.clone(),
+            )));
+        });
     // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. R4 is its consumer (#46).
     let ptt = mog_core::audio_device::ptt_buffer::PttBuffer::new(std::sync::Arc::new(
         stt.engine().clone(),
@@ -128,13 +136,25 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     let device: Box<dyn mog_core::capture::AudioDevice> = Box::new(
         mog_core::audio_device::system::RecordingDevice::new(device, system),
     );
-    let host = capture_host::CaptureHost::with_stt(
+    // ADR 0118: the mic gate of the tap. The talk key hooks close it at key-down; the gate
+    // wrapper (outermost in the host's event chain) closes it for an overlay lease.
+    // Get or manage the gate, so it never depends on the order of the setup steps.
+    match handle.try_state::<hotkey_host::TalkGate>() {
+        Some(gate) => gate.attach(tap.clone()),
+        None => {
+            let gate = hotkey_host::TalkGate::default();
+            gate.attach(tap.clone());
+            handle.manage(gate);
+        }
+    }
+    let host = capture_host::CaptureHost::with_stt_gated(
         device,
         std::sync::Arc::clone(&clock),
         std::sync::Arc::clone(&relay),
         levels,
         ptt,
         stt.engine().clone(),
+        tap.clone(),
     )?;
     // ADR 0103: a muted mic must not end a call recording, so the session holds the mic's
     // zero-buffer watch while it records.
@@ -186,12 +206,30 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
         },
     )?;
     let recording = std::sync::Arc::new(recording);
+    // The session calls this hook when a start begins (before `RecordingTap::arm`) and when the
+    // recording ends. At the start, the talk key state that the hooks saw goes to the tap, so a
+    // key that is down when the recording starts keeps the gate closed (ADR 0118).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Some(hold) = mic_hold {
-        recording
-            .session()
-            .set_active_hook(std::sync::Arc::new(move |on| hold.set(on)));
-    }
+    let hold_mic = move |on: bool| {
+        if let Some(hold) = &mic_hold {
+            hold.set(on);
+        }
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let hold_mic = |_on: bool| {};
+    let key_gate = handle
+        .try_state::<hotkey_host::TalkGate>()
+        .map(|g| g.inner().clone());
+    recording
+        .session()
+        .set_active_hook(std::sync::Arc::new(move |on| {
+            if on {
+                if let Some(gate) = &key_gate {
+                    gate.resync();
+                }
+            }
+            hold_mic(on);
+        }));
     // Sleep stops a recording and finalizes it. Without the OS watch the app still runs.
     let _ = recording.watch_sleep(&*mog_core::token_events::os_session_source());
     // `recording.state` goes to the brain at each start, stop and system audio change.
@@ -289,6 +327,12 @@ pub fn run() {
         .manage(ipc::HubChannel::default())
         // ADR 0117: the `workspace_*` component. `workspaces_host::install` fills it in `setup`.
         .manage(workspaces_host::WorkspacesHost::default())
+        // ADR 0122: the agent component. `agent_session_host::install` fills it in `setup`.
+        .manage(agent_session_host::AgentSessionHost::default())
+        // Slice 2a: the ⌥G latch. `hotkey_host` arms it at each ⌥G up; the agent host redeems it.
+        .manage(std::sync::Arc::new(
+            mog_core::agent_run::orchestrator::approval::AskLatch::new(),
+        ))
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
         .manage(std::sync::Arc::new(
@@ -336,8 +380,24 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+            // The lamp moved: a card that is on screen goes with it, at the same place beside it.
+            if let tauri::WindowEvent::Moved(_) = event {
+                if let Some(windows::WindowKind::Mog(id)) =
+                    windows::WindowKind::from_label(window.label())
+                {
+                    if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_mog(&id);
+                    }
+                }
+            }
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
+                // ADR 0118: a closed MOG keeps no paste target.
+                if let Some(windows::WindowKind::Mog(id)) =
+                    windows::WindowKind::from_label(window.label())
+                {
+                    mog_core::insertion::targets().clear_mog(&id);
+                }
                 if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
                     host.window_destroyed(window.label());
                 }
@@ -352,6 +412,13 @@ pub fn run() {
                 let mtm = objc2::MainThreadMarker::new()
                     .ok_or("Bottle setup is not on the main thread")?;
                 macos_panel::install_drag_monitor(mtm);
+                // The end of a lamp drag puts each card in its place, move event or not.
+                let drag_end = handle.clone();
+                macos_panel::set_drag_end_hook(move || {
+                    if let Some(host) = drag_end.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_all();
+                    }
+                });
                 app.manage(TauriWindowHost::with_style(
                     handle.clone(),
                     Box::new(macos_panel::MacPanelStyle),
@@ -396,6 +463,12 @@ pub fn run() {
             let _ = mcp_host::install(handle);
             // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
             let _ = recording_cloud_host::install(handle);
+            // ADR 0122: `model_invoke` and the orchestrator chat client, on the same R6.
+            // On failure the content-free reason code is kept as managed state (no log sink exists
+            // in the host, SEC-16c); `model_invoke` then answers `host_failed`.
+            if let Err(e) = model_host::install(handle) {
+                handle.manage(model_host::InstallFailure(e.code()));
+            }
             // #523: `link_open`, over T7 and the OS opener.
             link_host::install(handle);
             // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.
@@ -403,6 +476,11 @@ pub fn run() {
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
             // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
             let _ = agent_host::install(handle);
+            // ADR 0122: the orchestrator host, on the chat client, R6 and the workspace store.
+            // The `ask_genie` guard comes first: the host takes it from managed state, and
+            // without it no session opens.
+            agent_session_host::install_guard(handle);
+            agent_session_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {
                 // MOG and card windows go through R11, so the cap and the ledger hold.
@@ -439,6 +517,8 @@ pub fn run() {
                 {
                     recording.shutdown();
                 }
+                // ADR 0122: abandon the model calls in flight and end the agent session.
+                agent_session_host::shutdown(app);
                 // R2: stop every capture, so the mic closes, and end the cap timer (#425).
                 if let Some(capture) = app.try_state::<capture_host::CaptureHost>() {
                     capture.shutdown();

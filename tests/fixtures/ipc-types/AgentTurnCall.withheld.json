@@ -1,0 +1,9 @@
+{
+  "callId": "c-4567ef01",
+  "turnId": "0123456789abcdef0123456789abcdef",
+  "workspaceId": "1234567890123456",
+  "profile": "DEFAULT",
+  "question": "Churn?",
+  "state": "answered",
+  "withheld": "injection_suspected"
+}

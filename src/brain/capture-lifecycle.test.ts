@@ -22,6 +22,8 @@ type Call = [string, Record<string, unknown>];
  * It keeps R2's one-lease rule (`CaptureCore::start`, ARC-F9): a start while another start is
  * pending gets `mic_busy`, and so does any start while a lease is live, except a PTT over a
  * hands-free lease. A released PTT stays live in the 120 ms post-roll until `endPostRoll()`.
+ * ADR 0118: a PTT over a lone session lease (a call recording) is an overlay and is granted;
+ * hands-free over it answers `recording_in_progress`.
  */
 function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'] } = {}) {
   const calls: Call[] = [];
@@ -38,10 +40,14 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
       const free =
         starting === 0 &&
         (modes.length === 0 ||
-          (modes.length === 1 && modes[0] === 'hands_free' && args.mode === 'ptt'));
+          (modes.length === 1 && modes[0] === 'hands_free' && args.mode === 'ptt') ||
+          (modes.length === 1 && modes[0] === 'session' && args.mode === 'ptt'));
       if (!free) {
         refused.push(['start', args]);
-        return Promise.reject(new Error('mic_busy'));
+        const recording = modes.includes('session');
+        return Promise.reject(
+          recording ? { error: 'recording_in_progress' } : new Error('mic_busy'),
+        );
       }
       const leaseId = String(++next);
       const state: CaptureState = {
@@ -84,6 +90,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
   };
   const refusals: { mogId: string; mode: string; error?: unknown }[] = [];
   const toggles: { mogId: string; liveAtToggle: number }[] = [];
+  const holds: { mogId: string; on: boolean }[] = [];
   const utterances: Utterance[] = [];
   const transcribed: SegmentRef[] = [];
   const texts = new Map<string, Transcribed>();
@@ -96,6 +103,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     onUtterance: (u) => void utterances.push(u),
     onRefused: (e) => void refusals.push(e),
     onRecordToggle: (e) => void toggles.push({ mogId: e.mogId, liveAtToggle: live.size }),
+    onHold: (e) => void holds.push(e),
     ...(opts.config ? { config: opts.config } : {}),
   };
   const lc = createCaptureLifecycle(deps);
@@ -125,6 +133,7 @@ function rig(opts: { holdStart?: boolean; config?: CaptureLifecycleDeps['config'
     refused,
     refusals,
     toggles,
+    holds,
     live,
     endPostRoll,
     utterances,
@@ -528,19 +537,100 @@ describe('capture lifecycle: the ⌥R record toggle (ADR 0103)', () => {
     expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 0 }]);
   });
 
-  it('[ADR-0103] a refused hold (a recording runs) still toggles: ⌥R stops the recording', async () => {
+  it('[ADR-0118] [AC-6.18] a hold during a recording is an overlay PTT: dictation routes as a PTT utterance', async () => {
     const r = rig();
-    // A recording holds the mic, so R2 refuses the PTT start (`recording_in_progress`).
+    // A call recording holds the session lease. The host grants the PTT as an overlay.
     r.live.set('rec', 'session');
     r.ptt('down', 0);
     await r.flush();
-    expect(r.refusals).toHaveLength(1);
+    expect(r.refusals).toEqual([]);
+    r.ptt('up', 2000);
+    await r.flush();
+    await r.lc.onSegment(r.seg('1'));
+    expect(names(r.calls)).toEqual(['start', 'release']);
+    expect(r.utterances).toHaveLength(1);
+    expect(r.utterances[0]).toMatchObject({ mode: 'ptt', forceAsk: false, text: 'hello world' });
+    // The recording's lease is not ours: no call touches it.
+    expect(r.calls.some((c) => c[1]['leaseId'] === 'rec')).toBe(false);
+  });
+
+  it('[ADR-0118] [AC-6.18] ⌥G in the hold of a recording asks', async () => {
+    const r = rig();
+    r.live.set('rec', 'session');
+    r.ptt('down', 0);
+    await r.flush();
+    r.ptt('up', 2000, A, true);
+    await r.flush();
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.utterances).toHaveLength(1);
+    expect(r.utterances[0]).toMatchObject({ mode: 'ptt', forceAsk: true });
+  });
+
+  it('[ADR-0118] hands-free during a recording answers recording_in_progress', async () => {
+    const r = rig();
+    r.live.set('rec', 'session');
+    r.ptt('down', 0);
+    r.ptt('up', 100);
+    r.ptt('down', 200);
+    r.ptt('up', 300);
+    r.endPostRoll();
+    r.lc.click(A);
+    await r.flush();
+    const hf = r.refusals.find((e) => e.mode === 'hands_free');
+    expect(hf?.error).toEqual({ error: 'recording_in_progress' });
+  });
+
+  it('[ADR-0103] [AC-6.13] ⌥R during a hold discards the PTT, then toggles (stops the recording)', async () => {
+    const r = rig();
+    r.live.set('rec', 'session');
+    r.ptt('down', 0);
+    await r.flush();
+    expect(r.refusals).toEqual([]);
     r.ptt('cancel', 900);
     r.lc.recordToggle(A);
     await r.flush();
-    expect(names(r.calls)).toEqual(['start']);
-    expect(r.toggles.map((t) => t.mogId)).toEqual([A]);
+    // The PTT is discarded first, and its audio never reaches STT. Then the toggle fires, with
+    // only the recording's lease left.
+    expect(names(r.calls)).toEqual(['start', 'discard']);
+    expect(r.toggles).toEqual([{ mogId: A, liveAtToggle: 1 }]);
+    await r.lc.onSegment(r.seg('1'));
+    expect(r.transcribed).toEqual([]);
     expect(r.utterances).toEqual([]);
+    expect(r.holds).toEqual([
+      { mogId: A, on: true },
+      { mogId: A, on: false },
+    ]);
+  });
+
+  it('[ADR-0118] [AC-6.15] onHold fires in pairs: on at the grant, off at the key-up or cancel', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    await r.flush();
+    expect(r.holds).toEqual([]);
+    await r.resolveStarts();
+    expect(r.holds).toEqual([{ mogId: A, on: true }]);
+    r.ptt('up', 2000);
+    await r.flush();
+    expect(r.holds).toEqual([
+      { mogId: A, on: true },
+      { mogId: A, on: false },
+    ]);
+  });
+
+  it('[ADR-0118] a press that ends before its grant, or is refused, shows no hold', async () => {
+    const r = rig({ holdStart: true });
+    r.ptt('down', 0);
+    r.ptt('cancel', 50);
+    await r.resolveStarts();
+    expect(r.holds).toEqual([]);
+    const refused = rig();
+    refused.live.set('x', 'hands_free');
+    refused.live.set('y', 'ptt');
+    refused.ptt('down', 0);
+    await refused.flush();
+    refused.ptt('up', 100);
+    await refused.flush();
+    expect(refused.holds).toEqual([]);
   });
 
   it('[ADR-0103] a toggle with no press (no open MOG) goes out at once', async () => {

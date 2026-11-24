@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -34,16 +35,16 @@ use crate::mog_config::MogConfigStore;
 use crate::profile_service::ProfileService;
 use crate::token_broker::{CliTokenBroker, TokenBroker};
 use crate::types::{
-    AgentSettings, EndpointName, GenieCallBudget, MogId, Profile, ProfileName, TokenState,
-    WorkspaceList, WorkspaceRow, WorkspaceSignIn,
+    default_clean_dictation, AgentSettings, GenieCallBudget, MogId, OrchestratorModel, Profile,
+    ProfileName, TokenState, WorkspaceList, WorkspaceRow, WorkspaceSignIn,
 };
 
 /// The file name in the app config dir.
 pub const FILE_NAME: &str = "workspaces.json";
 /// The schema version of the file.
 pub const SCHEMA_VERSION: u32 = 1;
-/// The default D9 agent model endpoint.
-pub const DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The default D9 orchestrator model (ADR 0122).
+pub const DEFAULT_ENDPOINT: &str = crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL;
 /// The sign-in probes that run at once, across all calls.
 pub const PROBE_PARALLEL: usize = 4;
 /// One `workspace_list` call waits at most this long for its probes.
@@ -64,11 +65,36 @@ pub trait WorkspaceGate: Send + Sync + std::fmt::Debug {
     /// True if `genie_ask` may go to `profile`: it is the home or it is switched on. It fails
     /// closed: a store that cannot be read allows nothing.
     fn allows(&self, profile: &str) -> bool;
+    /// The workspace URL (`https://host`) of a supported `profile`, for the link trust check.
+    /// `None` when unknown: no link is then trusted.
+    fn workspace_url(&self, _profile: &str) -> Option<String> {
+        None
+    }
 }
 
 /// T7 as the store sees it: the profile list.
 pub trait ProfileSource: Send + Sync {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>>;
+}
+
+/// SEC-28b: the admin lock on D1 as read from its source. `None` means the read failed.
+/// No admin source exists before slice 3, so it reads "not locked".
+fn read_d1_lock() -> Option<bool> {
+    Some(false)
+}
+
+/// SEC-28b: an admin lock on D1. It fails closed: a lock that cannot be read counts as locked.
+fn d1_locked() -> bool {
+    lock_of(read_d1_lock())
+}
+
+fn lock_of(read: Option<bool>) -> bool {
+    read.unwrap_or(true)
+}
+
+/// D1 as the agent session sees it: the lock forces it off (AC-2b.5).
+fn effective_d1(setting: bool, locked: bool) -> bool {
+    setting && !locked
 }
 
 impl ProfileSource for ProfileService {
@@ -113,6 +139,36 @@ fn is_auth_error(e: &CoreError) -> bool {
     )
 }
 
+/// The longest model alias, a `-N` suffix included. It matches the `workspace` limit of `ask_genie`.
+const ALIAS_MAX_CHARS: usize = 32;
+
+/// The model alias of a profile name: lower case, `[a-z0-9-]` only, at most `ALIAS_MAX_CHARS` (32) characters.
+fn alias_slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let t = out.trim_matches('-');
+    let t: String = t.chars().take(ALIAS_MAX_CHARS).collect();
+    let t = t.trim_matches('-').to_owned();
+    if t.is_empty() {
+        "ws".to_owned()
+    } else {
+        t
+    }
+}
+
+impl crate::agent_run::orchestrator::WorkspaceView for WorkspaceStore {
+    fn snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
+        self.catalog_snapshot()
+    }
+}
+
 // ---------- the file ----------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,12 +179,35 @@ struct Entry {
     available: bool,
 }
 
+fn default_model() -> OrchestratorModel {
+    OrchestratorModel::try_from(DEFAULT_ENDPOINT.to_owned())
+        .expect("the default orchestrator model is a valid id")
+}
+
+/// Reads any stored string: a valid `system.ai.` id stays, anything else becomes the default.
+fn migrate_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OrchestratorModel, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(OrchestratorModel::try_from(s).unwrap_or_else(|_| default_model()))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentData {
     cross_workspace_data: bool,
     genie_call_budget: GenieCallBudget,
-    endpoint: EndpointName,
+    /// ADR 0122: the orchestrator model. A stored value that is not a `system.ai.` id (the old
+    /// D9 default `databricks-claude-sonnet-5-5`) reads as the default.
+    #[serde(deserialize_with = "migrate_model")]
+    endpoint: OrchestratorModel,
+    #[serde(default = "default_clean_dictation")]
+    clean_dictation: bool,
+    /// ADR 0123: dictation goes to the home AI Gateway. A file from before reads as false.
+    #[serde(default)]
+    cloud_dictation: bool,
+    /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
+    /// kept and never written.
+    #[serde(default, skip_serializing, rename = "runProfile")]
+    _legacy_run_profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +343,13 @@ pub struct WorkspaceStore {
     slots: Arc<Slots>,
     /// One read-modify-write at a time.
     lock: Mutex<()>,
+    /// The parsed file, so the home, the model and the catalog reads of each call do not read
+    /// the disk again. Only this store writes the file: `save` empties the cache.
+    cache: Mutex<Option<Data>>,
+    /// A copy of `agent.cloud_dictation` (ADR 0123), kept by [`Self::load`] and
+    /// [`Self::settings_write`], so a key-down reads one atomic instead of the file-backed cache
+    /// (no lock, no clone, no disk).
+    cloud_dictation_flag: AtomicBool,
 }
 
 impl std::fmt::Debug for WorkspaceStore {
@@ -288,6 +374,8 @@ impl WorkspaceStore {
             probe_timeout: PROBE_TIMEOUT,
             slots: Slots::new(PROBE_PARALLEL),
             lock: Mutex::new(()),
+            cache: Mutex::new(None),
+            cloud_dictation_flag: AtomicBool::new(false),
         }
     }
 
@@ -309,6 +397,19 @@ impl WorkspaceStore {
     /// Read the file, or migrate it from the MOG configs when it is missing. A file that is
     /// there but bad is an error and stays on disk. The caller holds `lock`.
     fn load(&self) -> CoreResult<Data> {
+        if let Some(d) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+            self.cloud_dictation_flag
+                .store(d.agent.cloud_dictation, Ordering::SeqCst);
+            return Ok(d);
+        }
+        let data = self.load_from_disk()?;
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(data.clone());
+        self.cloud_dictation_flag
+            .store(data.agent.cloud_dictation, Ordering::SeqCst);
+        Ok(data)
+    }
+
+    fn load_from_disk(&self) -> CoreResult<Data> {
         let file = match fs::File::open(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -369,14 +470,18 @@ impl WorkspaceStore {
             agent: AgentData {
                 cross_workspace_data: false,
                 genie_call_budget: GenieCallBudget::DEFAULT,
-                endpoint: EndpointName::try_from(DEFAULT_ENDPOINT.to_owned())
-                    .expect("the default endpoint is a valid name"),
+                endpoint: default_model(),
+                clean_dictation: true,
+                cloud_dictation: false,
+                _legacy_run_profile: None,
             },
         })
     }
 
     fn save(&self, data: &Data) -> CoreResult<()> {
         let bytes = serde_json::to_vec_pretty(data).map_err(|_| storage_failed())?;
+        // The cache goes first: a failed write may leave the file in an unknown state.
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
         atomic_write(self.dir(), &self.path, &bytes)
     }
 
@@ -403,6 +508,37 @@ impl WorkspaceStore {
         } else {
             Err(refused("profile_invalid"))
         }
+    }
+
+    /// The home profile, read only. On the first load the store takes the home from the MOG
+    /// configs (the normal migration, `load`); this call changes nothing else. `None` when there
+    /// is none or the file cannot be read. It never picks a home when the choice is ambiguous
+    /// (ADR 0117, FLAG 5).
+    pub fn home(&self) -> Option<ProfileName> {
+        let _g = self.guard();
+        self.load().ok()?.home
+    }
+
+    /// The orchestrator model of the settings (ADR 0122), read only. `None` when the file cannot
+    /// be read.
+    pub fn orchestrator_model(&self) -> Option<String> {
+        let _g = self.guard();
+        Some(self.load().ok()?.agent.endpoint.as_str().to_owned())
+    }
+
+    /// "Dictation engine: Databricks" (ADR 0123), read only. `false` when the file cannot be
+    /// read: dictation then stays on the Mac.
+    pub fn cloud_dictation(&self) -> bool {
+        let _g = self.guard();
+        self.load().is_ok_and(|d| d.agent.cloud_dictation)
+    }
+
+    /// As [`Self::cloud_dictation`], but one atomic load: no guard, no cache lock, no disk
+    /// (ADR 0123). Used at key-down, where a key-down must not wait on a settings write. The
+    /// flag is set by [`Self::load`] (so it starts correct on the first real read) and by
+    /// [`Self::settings_write`] (so a write is visible at once, with no extra load).
+    pub fn cloud_dictation_fast(&self) -> bool {
+        self.cloud_dictation_flag.load(Ordering::SeqCst)
     }
 
     /// `workspace_list`.
@@ -450,15 +586,18 @@ impl WorkspaceStore {
             self.probe(&mut rows);
         }
         rows.sort_by(|a, b| b.is_home.cmp(&a.is_home).then(a.profile.cmp(&b.profile)));
+        let locked = d1_locked();
         Ok(WorkspaceList {
             home: data.home.clone(),
             lamp_mog_id: data.lamp_mog_id.clone(),
             workspaces: rows,
             agent: AgentSettings {
-                cross_workspace_data: data.agent.cross_workspace_data,
-                cross_workspace_locked: false,
+                cross_workspace_data: effective_d1(data.agent.cross_workspace_data, locked),
+                cross_workspace_locked: locked,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
+                clean_dictation: data.agent.clean_dictation,
+                cloud_dictation: data.agent.cloud_dictation,
             },
         })
     }
@@ -575,6 +714,67 @@ impl WorkspaceStore {
         self.render(&data, false)
     }
 
+    /// The agent session snapshot: the catalog with model aliases, D1, D2, the home profile and
+    /// the orchestrator model. It probes nothing. The catalog holds home and each available
+    /// profile that T7 supports, home first. A model alias is the profile name in lower case with
+    /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
+    /// the profile name itself in the prompt, only the alias and a display name.
+    pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
+        let data = {
+            let _g = self.guard();
+            self.load()?
+        };
+        let t7 = self
+            .profiles
+            .profiles(false)
+            .map_err(|_| refused("host_failed"))?;
+        // The model runs on the AI Gateway of the home profile (ADR 0122), so home is the agent
+        // workspace.
+        let home = data.home.clone();
+        let mut names: Vec<&str> = t7
+            .iter()
+            .filter(|p| p.supported && data.allows(&p.name))
+            .map(|p| p.name.as_str())
+            .collect();
+        names.sort_by(|a, b| {
+            let (ha, hb) = (
+                data.home.as_deref() == Some(*a),
+                data.home.as_deref() == Some(*b),
+            );
+            hb.cmp(&ha).then(a.cmp(b))
+        });
+        let mut used: Vec<String> = Vec::new();
+        let mut catalog = Vec::new();
+        for name in names {
+            let base = alias_slug(name);
+            let mut alias = base.clone();
+            let mut n = 2;
+            while used.contains(&alias) {
+                // The whole alias, suffix included, stays within the cap.
+                let suffix = format!("-{n}");
+                let keep = ALIAS_MAX_CHARS - suffix.len();
+                let head = base[..base.len().min(keep)].trim_end_matches('-');
+                alias = format!("{head}{suffix}");
+                n += 1;
+            }
+            used.push(alias.clone());
+            catalog.push(crate::agent_run::seam::CatalogEntry {
+                alias,
+                profile: name.to_owned(),
+                name: name.to_owned(),
+                is_home: data.home.as_deref() == Some(name),
+                is_agent_workspace: home.as_deref() == Some(name),
+            });
+        }
+        Ok(crate::agent_run::orchestrator::Snapshot {
+            catalog,
+            cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
+            budget: data.agent.genie_call_budget.get(),
+            home_profile: home,
+            model: data.agent.endpoint.as_str().to_owned(),
+        })
+    }
+
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
@@ -590,7 +790,18 @@ impl WorkspaceStore {
             if let Some(v) = &a.agent_endpoint {
                 data.agent.endpoint = v.clone();
             }
+            if let Some(v) = a.clean_dictation {
+                data.agent.clean_dictation = v;
+            }
+            if let Some(v) = a.cloud_dictation {
+                data.agent.cloud_dictation = v;
+            }
             self.save(&data)?;
+            // Only after a successful save: a failed write must not make the fast flag
+            // (ADR 0123) disagree with the file that is actually on disk.
+            if let Some(v) = a.cloud_dictation {
+                self.cloud_dictation_flag.store(v, Ordering::SeqCst);
+            }
             data
         };
         self.render(&data, false)
@@ -601,6 +812,12 @@ impl WorkspaceGate for WorkspaceStore {
     fn allows(&self, profile: &str) -> bool {
         let _g = self.guard();
         self.load().is_ok_and(|d| d.allows(profile))
+    }
+    fn workspace_url(&self, profile: &str) -> Option<String> {
+        let list = self.profiles.profiles(false).ok()?;
+        list.into_iter()
+            .find(|p| p.name == profile && p.supported)
+            .map(|p| p.host)
     }
 }
 
@@ -632,3 +849,24 @@ impl GatewayComponents for WorkspaceStore {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod d1_lock_tests {
+    use super::{d1_locked, effective_d1};
+
+    #[test]
+    fn ac_2b_5_a_lock_forces_d1_off_and_no_lock_keeps_the_setting() {
+        assert!(!effective_d1(true, true));
+        assert!(!effective_d1(false, true));
+        assert!(effective_d1(true, false));
+        assert!(!effective_d1(false, false));
+        assert!(!d1_locked(), "no admin source before slice 3");
+    }
+
+    #[test]
+    fn l3_a_lock_that_cannot_be_read_counts_as_locked() {
+        assert!(super::lock_of(None));
+        assert!(!super::lock_of(Some(false)));
+        assert!(super::lock_of(Some(true)));
+    }
+}

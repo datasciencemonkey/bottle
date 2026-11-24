@@ -163,7 +163,7 @@ struct StdRuntimeProcess {
 }
 
 /// Stop the runtime and every process it started. On unix the runtime leads its own process
-/// group, so a wrapper (`npx`, `uv run`, a shell shim) and its children stop too.
+/// group, so a wrapper (`npx`, `uv run`, a shell wrapper) and its children stop too.
 /// TODO(#111): on Windows put the runtime in a job object; today only the direct child stops.
 fn kill(child: &Mutex<Option<Child>>) {
     // `take` makes a second call a no-op: once the child is reaped its PID may be reused, so

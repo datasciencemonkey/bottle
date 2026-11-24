@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 use super::sink::{FrameSink, MicFrame, SinkEvent};
-use crate::capture::{CaptureEvents, Stopped};
+use crate::capture::{CaptureEvents, Lease, Stopped};
 use crate::types::CaptureState;
 
 /// The highest level rate: 30 Hz (CAP-16a, Table UX-LEVEL).
@@ -301,5 +301,9 @@ impl<E: CaptureEvents> CaptureEvents for LevelCaptureEvents<E> {
 
     fn stopped(&self, stopped: &Stopped) {
         self.inner.stopped(stopped);
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        self.inner.overlay_granted(lease);
     }
 }

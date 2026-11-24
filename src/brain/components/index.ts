@@ -2,9 +2,12 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
-import type { MogId } from '../../shared/interfaces';
+import type { AgentTurn, CaptureState, MogId, SegmentRef } from '../../shared/interfaces';
+import { createBrainLog } from '../log';
+import { createArrivalGate, noPasteOnEmpty } from '../arrival-gate';
 import { call } from '../../shared/ipc';
-import { createAskGate, wireAskGate } from '../ask-gate';
+import { capQuestion, createAskGate, wireAskGate } from '../ask-gate';
+import { sanitizeQuestion } from '../question-sanitizer';
 import {
   BrainBus,
   onViewInput,
@@ -28,7 +31,7 @@ import {
   lampOnlyManager,
   wireWorkspaces,
 } from '../workspaces';
-import { ipcRecordingApi, wireRecording } from '../recording-wiring';
+import { createHeldNote, ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
@@ -52,6 +55,24 @@ import {
   type ThreadStatus,
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
+import { createAgentCard, wireAgentChips } from '../agent-card';
+import {
+  asTurnEvent,
+  createAgentClient,
+  ipcAgentApi,
+  uuidOfTurn,
+  type AgentClient,
+} from '../agent-run';
+import { wireOrchestrator, ipcOrchestratorDeps } from '../orchestrator';
+import { createAskRouter, createFollowUpWindow, threadReplyMog } from '../agent-route';
+import {
+  clearingAgentPanel,
+  sendHubAgent,
+  wireHubAgent,
+  type HubAgentWiring,
+} from '../hub-agent-wiring';
+import { MOG_PALETTE } from '../../shared/mog-palette';
+import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { wireHubMemory } from '../hub-memory-wiring';
@@ -74,7 +95,8 @@ import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { STORE_EVENT } from '../../shared/store-view';
 import { wirePermissions } from '../permission-wiring';
-import { withOfflineFallback } from '../offline-intent';
+import { withDictationCleanup } from '../dictation-cleanup';
+import { offlineDecision, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
@@ -85,7 +107,6 @@ import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
-import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
@@ -111,13 +132,12 @@ export interface BrainComponentEntry {
   readonly factory: () => unknown;
 }
 
-/** T1..T15 in 4.3 table order. */
+/** T1..T15 in 4.3 table order. T5 (CleanupProvider) is removed: `withDictationCleanup` runs. */
 export const BRAIN_COMPONENTS = [
   { id: 'T1', name: 'MogManager', factory: () => createMogManager() },
   { id: 'T2', name: 'OperationTracker', factory: () => createOperationTracker() },
   { id: 'T3', name: 'CapturePolicy', factory: () => createCapturePolicy() },
   { id: 'T4', name: 'SttProvider', factory: () => createSttProvider() },
-  { id: 'T5', name: 'CleanupProvider', factory: () => createCleanupProvider() },
   { id: 'T6', name: 'RouterContextGate', factory: () => createRouterContextGate() },
   { id: 'T7', name: 'ProfileService', factory: () => createProfileService() },
   { id: 'T8', name: 'GenieBridge', factory: () => createGenieBridge() },
@@ -182,15 +202,45 @@ export function startBrain(): Brain {
     // hub Settings → Workspace list and runs the hub workspace actions. A change of the home
     // workspace, or of its name or colour, pushes the new identity to the lamp.
     const workspaces = createWorkspaces(
-      ipcWorkspacesDeps(
-        () => void workspaces.lampMogId().then((id) => id && talkTarget.reidentify(id)),
-      ),
+      ipcWorkspacesDeps(() => {
+        void workspaces.lampMogId().then((id) => id && talkTarget.reidentify(id));
+        // The orchestrator runs on the home workspace: a new home can change its status.
+        void orchestrator.refresh();
+      }),
     );
     wireWorkspaces(bus, workspaces);
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
+    const agentRef: {
+      client?: AgentClient;
+      /** A follow-up in an agent thread (the hub composer, or ⌥G on the thread). */
+      send?: (
+        threadId: string,
+        mogId: string | undefined,
+        question: string,
+        ticket?: string,
+      ) => void;
+    } = {};
+    const focusRef: { current?: ReturnType<typeof createThreadFocus> } = {};
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
+      // ADR 0121: the agent threads. The chips come from the workspaces list; the turns in memory
+      // win over the stored turn with the same UUID; a Delete makes the client forget the turns.
+      chipOf: (profile) => {
+        const w = workspaces.catalog().find((c) => c.profile === profile);
+        return {
+          name: w?.name ?? profile,
+          colorVariant: w?.colorVariant ?? MOG_PALETTE[0]?.id ?? '',
+        };
+      },
+      memoryTurns: () => agentRef.client?.turns() ?? [],
+      forgetThread: (threadId) => agentRef.client?.forgetThread(threadId),
+      // A deleted Genie thread is no follow-up target: ⌥G then asks as usual.
+      forgetConversation: (id) => {
+        const a = focusRef.current?.active();
+        if (a !== undefined && 'conversationId' in a && a.conversationId === id)
+          focusRef.current?.set(undefined);
+      },
       mogs: async () =>
         (await components.T1.list()).mogs.map((m) => ({
           mogId: m.mogId,
@@ -255,6 +305,7 @@ export function startBrain(): Brain {
     // thread come from the stored exchanges (ARC-2), because the composer itself never carries a
     // `mogId`, and its own copy of the profile is for display only.
     const threadFocus = createThreadFocus();
+    focusRef.current = threadFocus;
     const followup = createGenieFollowup({
       genie: components.T8,
       findThread: (conversationId) => conversations.findThread(conversationId),
@@ -271,6 +322,8 @@ export function startBrain(): Brain {
       sendAccess: (access: ThreadAccess) => {
         void emitTo('hub', HUB_THREAD_ACCESS_EVENT, access).catch(() => undefined);
       },
+      // ADR 0121: the composer of an agent thread. The host minted the Ask ticket for the click.
+      agentSend: (a, ticket) => agentRef.send?.(a.threadId, a.mogId, a.question, ticket),
     });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
@@ -282,8 +335,15 @@ export function startBrain(): Brain {
     // #124 (MEM-33a, SEC-15c, U9): Settings -> Wipe. The hub dialog runs the R14 Wipe only on the
     // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
     // contract; until then a Wipe fails safe and the dialog says that nothing changed.
+    // Slice 2a: every Wipe scope ends the agent session, so the panel content goes too.
+    const agentClear: { fn?: () => void; fence?: () => () => void } = {};
     wireWipe(bus, {
-      flow: clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
+      flow: clearingAgentPanel(
+        clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
+        () => agentClear.fn?.(),
+        () => agentClear.fence?.() ?? (() => undefined),
+        () => void createBrainLog().event('agent.turn', { ok: 0 }),
+      ),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
     // #16 (W-02a, W-02c, W-02d): the hub Settings show the CLI path and version from T7.
@@ -332,6 +392,32 @@ export function startBrain(): Brain {
     // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
     // closes.
     const cardClock = createSystemClock();
+    // UX slice 1: no Ask Genie arrival opens the card while the talk key is held (or hands-free
+    // listens); it applies 1.2 s after the paste of the hold.
+    const arrivalLog = createBrainLog();
+    const arrivalGate = createArrivalGate({
+      clock: cardClock,
+      schedule: timeoutScheduler(cardClock),
+      // A held arrival that throws: a fixed code, no content (SEC-16c).
+      onFault: () => void arrivalLog.event('card.render', { ok: 0 }),
+    });
+    bus.on(EVENTS['hotkey.ptt'].name, (p) => {
+      const e = asPttEvent(p, 0);
+      if (e) arrivalGate.onPtt(e);
+    });
+    bus.on(EVENTS['capture.state'].name, (p) => {
+      if (typeof p === 'object' && p !== null) arrivalGate.onCaptureState(p as CaptureState);
+    });
+    bus.on(EVENTS['capture.segment'].name, (p) => {
+      const seg = p as Partial<SegmentRef> | null;
+      if (seg?.final === true && typeof seg.segmentId === 'string')
+        arrivalGate.segmentFinal({ segmentId: seg.segmentId, leaseId: seg.leaseId });
+    });
+    // Esc in a card stops hands-free and drops its audio: no paste follows.
+    onViewInput(bus, (input) => {
+      if (input.kind === 'cancel' && input.from === `card-${input.mogId}`)
+        arrivalGate.handsFreeDiscarded();
+    });
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
@@ -351,6 +437,185 @@ export function startBrain(): Brain {
         );
       return s;
     };
+    // Slice 2a: the direct home path of ADR 0097 (#573). The router below sends a question here
+    // unless the orchestrator model takes it (ADR 0122, R-1 to R-15).
+    // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
+    // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
+    const directSend = createGenieDirectSend({
+      genie: components.T8,
+      cardFor: stackFor,
+      newOpId: () => crypto.randomUUID(),
+      // #40 (AT-09): each request that ends saves one local exchange row through T10.
+      onEnd: recordGenieExchange,
+      // #573: the MOG shows the work (processing), then the answer (answering, success) or
+      // the failure (error); the card shows next to the MOG when the outcome is on it.
+      onPhase: (mogId, phase, opId) => {
+        lastGenieOp.set(mogId, opId);
+        captureMood.ask(mogId, phase);
+      },
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      arrivals: arrivalGate,
+      // The card's "Change workspace…": the same path as the right-click "Change home
+      // workspace…": show the hub on that MOG's Edit form.
+      changeWorkspace: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+      hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+    });
+    // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
+    // events into the card of the turn and the history rows; the follow-up window is R-13.
+    const followUp = createFollowUpWindow(cardClock);
+    const agentLog = createBrainLog();
+    const agentCard = createAgentCard({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      arrivals: arrivalGate,
+      onCardOpen: (open) => followUp.card(open),
+      onFault: () => void agentLog.event('card.render', { ok: 0 }),
+    });
+    const routeNames = () => {
+      const cat = workspaces.catalog();
+      const home = cat.find((c) => c.isHome);
+      // ADR 0122: the orchestrator runs on the home workspace, always.
+      const name = home?.name ?? 'your home workspace';
+      return { agent: name, home: name };
+    };
+    /** A one-line pop-up (queue full, "Not sent."): it takes the card and waits for the hold gate. */
+    const showNote = (mogId: MogId, text: string) => {
+      // With an agent card open the note is one line inside it; the live and waiting turns stay.
+      if (agentCard.note(mogId, text)) return;
+      arrivalGate.whenClear(() => {
+        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true });
+        void call('window_card_show', { mogId }).catch(() => undefined);
+      });
+    };
+    const agentClient = createAgentClient({
+      api: ipcAgentApi(),
+      chipOf: (profile) => {
+        const w = workspaces.catalog().find((c) => c.profile === profile);
+        return {
+          name: w?.name ?? profile,
+          colorVariant: w?.colorVariant ?? MOG_PALETTE[0]?.id ?? '',
+        };
+      },
+      names: routeNames,
+      homeProfile: () => workspaces.home(),
+      hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+      newId: () => crypto.randomUUID(),
+      wallNow: () => Date.now(),
+      ...(recordGenieExchange ? { recordCall: recordGenieExchange } : {}),
+      // The direct answer takes the card: the agent card must not cover it.
+      // A fallback takes the card for its own turn only; a refused submit has no turn: the
+      // direct ask takes the card from every agent turn of this MOG.
+      direct: (turn, notice, turnId, isStale) => {
+        agentCard.takeover(turn.mogId, turnId);
+        // The fallback row joins its turn (ADR 0121): it is the home part of the turn.
+        return directSend(turn, {
+          notice,
+          ...(turnId !== undefined ? { splitGroupId: uuidOfTurn(turnId) } : {}),
+          ...(turnId !== undefined && isStale ? { isStale } : {}),
+        });
+      },
+      showTurn: (mogId, view) => agentCard.show(mogId, view),
+      dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
+      note: showNote,
+      phase: (mogId, phase) => captureMood.ask(mogId, phase),
+      followUp,
+      onChange: () => {
+        void hubRef.current?.push();
+        // A Delete that waited for a turn to settle goes now.
+        void conversations.retryDeferred();
+      },
+      log: agentLog,
+    });
+    agentRef.client = agentClient;
+    agentRef.send = (threadId, mogId, raw, ticket) => {
+      void (async () => {
+        // The hub names the MOG (the host bound the ticket to it); ⌥G takes the MOG of the thread.
+        // Either way it must be a defined MOG.
+        const known = conversations.threadMog(threadId) ?? agentClient.threadMog(threadId);
+        // The hub's MOG must own the thread: a mismatch writes a turn under one MOG with the
+        // root of another.
+        const owner = threadReplyMog(mogId, known);
+        if (owner === 'refused')
+          return mogId !== undefined ? showNote(mogId, 'Not sent.') : undefined;
+        const target = owner.mogId;
+        const clean = sanitizeQuestion(raw);
+        if (target === undefined) return;
+        if (!(await components.T1.list()).mogs.some((m) => m.mogId === target)) return;
+        if (clean === '') return showNote(target, 'Not sent.');
+        const home = await workspaces.home();
+        if (home === undefined) return showNote(target, 'Not sent.');
+        const question = capQuestion(clean).text;
+        const turn: AgentTurn = {
+          mogId: target,
+          question,
+          decision: offlineDecision(question),
+          recall: [],
+          target: home,
+        };
+        // A reply in the thread of the open session is a follow-up; else it starts a session.
+        const mode = agentClient.inSession(threadId) ? 'follow_up' : 'ask';
+        await agentClient.submit(turn, mode, ticket, threadId);
+      })().catch(() => (mogId !== undefined ? showNote(mogId, 'Not sent.') : undefined));
+    };
+    const hubRef: { current?: HubAgentWiring } = {};
+    agentClear.fn = () => {
+      agentClient.clear();
+      void hubRef.current?.push();
+    };
+    agentClear.fence = () => agentClient.fence();
+    bus.on(EVENTS['agent.turn'].name, (p) => {
+      agentClient.onTurnEvent(p);
+      // M3: a turn that ends failed, signed out or offline may mean the model is not ready.
+      const e = asTurnEvent(p);
+      if (e?.kind === 'ended') orchestrator.turnEnded(e.outcome);
+    });
+    bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
+    const askRouter = createAskRouter({
+      context: () => ({ orchestrator: orchestrator.status() }),
+      names: routeNames,
+      followUp,
+      agent: agentClient,
+      direct: directSend,
+      closeAgentCard: (mogId) => agentCard.takeover(mogId),
+      refreshOrchestrator: () => void orchestrator.refresh(),
+    });
+    // ADR 0122: the orchestrator model and the dictation switch in Settings → Workspace, and the
+    // status that the router reads.
+    const orchestrator = wireOrchestrator(
+      bus,
+      ipcOrchestratorDeps({
+        settings: () => workspaces.last()?.agent,
+        homeName: () => workspaces.catalog().find((c) => c.isHome)?.name ?? null,
+        write: (args) => workspaces.writeSettings(args),
+      }),
+    );
+    // The agent turns in memory (live, waiting, earlier) go to hub Conversations (ADR 0121).
+    hubRef.current = wireHubAgent(bus, {
+      client: agentClient,
+      send: sendHubAgent,
+      openSettings: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+    });
+    // The agent chips of the card: Stop, Open in Conversations, Open Settings.
+    wireAgentChips(bus, {
+      stop: (turnId) => void agentClient.stop(turnId),
+      // ADR 0121: the thread of the turn opens in hub Conversations, also before it is stored.
+      openAgent: (turnId) => {
+        void showHub();
+        const threadId = agentClient.threadOf(turnId);
+        if (threadId !== undefined) void conversations.openThread(threadId);
+      },
+      openSettings: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+      cardDone: (mogId) => agentCard.close(mogId),
+    });
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
     // Nothing goes to Genie without ⌥G or a chip press.
     const askGate = createAskGate({
@@ -363,29 +628,9 @@ export function startBrain(): Brain {
       // #163: the target is the MOG's home profile (no hop yet, TODO(#164)). With none,
       // nothing is sent: the pick card asks the user to pick one.
       target: (mogId) => homes.home(mogId),
-      // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
-      // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
-      send: createGenieDirectSend({
-        genie: components.T8,
-        cardFor: stackFor,
-        newOpId: () => crypto.randomUUID(),
-        // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: recordGenieExchange,
-        // #573: the MOG shows the work (processing), then the answer (answering, success) or
-        // the failure (error); the card shows next to the MOG when the outcome is on it.
-        onPhase: (mogId, phase, opId) => {
-          lastGenieOp.set(mogId, opId);
-          captureMood.ask(mogId, phase);
-        },
-        showCard: (mogId) => call('window_card_show', { mogId }),
-        // The card's "Change workspace…": the same path as the right-click "Change home
-        // workspace…": show the hub on that MOG's Edit form.
-        changeWorkspace: () => {
-          void showHub();
-          void workspaces.showSettings();
-        },
-        hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
-      }),
+      // The router sends the question to the orchestrator model or to the direct home path
+      // (ADR 0097).
+      send: (turn) => askRouter.send(turn),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
@@ -427,8 +672,11 @@ export function startBrain(): Brain {
     // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
     // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
     // the notification host has an IPC command.
+    const recordingApi = ipcRecordingApi(bus, recordingHomeProfile);
+    // ADR 0118: the first hold in a recording shows "Your call can still hear you." once.
+    const heldNote = createHeldNote({ api: recordingApi, mood: captureMood });
     wireRecording(bus, {
-      api: ipcRecordingApi(bus, recordingHomeProfile),
+      api: recordingApi,
       platform:
         cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
       mood: {
@@ -449,9 +697,34 @@ export function startBrain(): Brain {
     // and asks Rust to open it (Rust checks it a third time).
     wireLinkOpen(bus, {
       resolve: async (input, requestId) => {
+        // Slice 2a (L3): a link in an agent answer opens under the workspace whose host the URL
+        // names (not under the workspace that answered). It must be the host of a workspace that
+        // the user switched on; `trustedUrl` and Rust check it again. The click names a
+        // host; it counts only if it is the host of a workspace that the user switched on (the
+        // trust rule then checks the URL against that host again).
+        const ofAgentAnswer = async (): Promise<{ profile: string; host: string } | undefined> => {
+          const click = asLinkOpenClick(input.payload);
+          if (!click) return undefined;
+          let host = '';
+          try {
+            host = new URL(click.url).host.toLowerCase();
+          } catch {
+            return undefined;
+          }
+          const on = new Set(workspaces.catalog().map((c) => c.profile));
+          const p = (await ipcListProfiles()).find(
+            (x) => on.has(x.name) && bareHost(x.host) === host,
+          );
+          return p ? { profile: p.name, host: p.host } : undefined;
+        };
         if (input.from === 'hub') {
           const ws = requestId ? conversations.workspaceOf(requestId) : undefined;
-          return ws && ws.host !== '' ? { profile: ws.profile, host: ws.host } : undefined;
+          if (ws && ws.host !== '') return { profile: ws.profile, host: ws.host };
+          return requestId ? undefined : ofAgentAnswer();
+        }
+        if (agentCard.shown(input.mogId)) {
+          const w = await ofAgentAnswer();
+          if (w) return w;
         }
         const profile = homes.home(input.mogId);
         if (!profile) return undefined;
@@ -480,6 +753,8 @@ export function startBrain(): Brain {
           // Not a valid window label: nothing to hold or fade.
         }
       },
+      isWorking: (mogId, requestId) => directSend.isWorking(mogId, requestId),
+      closePending: (mogId, requestId) => directSend.close(mogId, requestId),
       lastOpId: (mogId) => lastGenieOp.get(mogId),
       // #103: show the hub, then open Conversations on this exchange. The wiring holds the open
       // until the hub acks it or asks for the list, so a hub that was not listening still gets it.
@@ -529,7 +804,10 @@ export function startBrain(): Brain {
     // home profile opens the profile picker. The user picks; Bottle never picks.
     const homes = createHomeProfiles(ipcHomeProfileDeps(() => workspaces.home()));
     const insertionOn = () => true;
-    const route = withOfflineFallback(ipcUtteranceDeps());
+    // ADR 0122: the pre-pass, the 1500 ms deadline and the grounding check wrap the router step.
+    const route = withDictationCleanup(withOfflineFallback(ipcUtteranceDeps()), {
+      cleanDictation: () => orchestrator.cleanDictation(),
+    });
     const pick = createProfilePick({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),
@@ -545,7 +823,17 @@ export function startBrain(): Brain {
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
-      onRefused: (e) => captureMood.refused(e.mogId, e.error),
+      onRefused: (e) => {
+        captureMood.refused(e.mogId, e.error);
+        // UX slice 1: a refused start has no paste, so held arrivals need not wait for one.
+        arrivalGate.refused();
+      },
+      // ADR 0118: a hold in a call recording shows "Call only" and, the first time, the note.
+      onHold: ({ mogId, on }) => {
+        if (mogId === '') return;
+        captureMood.hold(mogId, on);
+        if (on) heldNote.held(mogId);
+      },
       // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
       // refusal shows on the MOG of the press (none with no open MOG).
       onRecordToggle: ({ mogId }) =>
@@ -562,10 +850,11 @@ export function startBrain(): Brain {
         })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
-      transcribe: createLifecycleTranscriber(
-        components.T4,
-        sendOwnedCard,
-        createDictationCorrector(),
+      transcribe: noPasteOnEmpty(
+        createLifecycleTranscriber(components.T4, sendOwnedCard, createDictationCorrector(), () =>
+          orchestrator.cloudDictation(),
+        ),
+        (seg) => arrivalGate.pasteResolved(false, seg),
       ),
       // #59 (ADR 0053, ADR 0098): the MOG of the key-down owns the utterance (MOG-13a); a
       // dictation ends at `insert_text`; an ⌥G ask or a chip goes to T3.
@@ -589,6 +878,7 @@ export function startBrain(): Brain {
           void routeAskToFocusedThread(r, {
             focus: threadFocus,
             followup,
+            agentSend: (threadId, question) => agentRef.send?.(threadId, undefined, question),
             release: () => owner.release(owned.utteranceId),
             hubFocused: () => isHubFocused(),
           })
@@ -604,6 +894,8 @@ export function startBrain(): Brain {
             : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
+        // UX slice 1: the paste ended (or none came): the held arrivals follow 1.2 s later.
+        onPasteResolved: (pasted, seg) => arrivalGate.pasteResolved(pasted, seg),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);
@@ -621,7 +913,7 @@ export function startBrain(): Brain {
       if (!ok) return;
       void emitTo('hub', STORE_EVENT, storeGate.view()).catch(() => undefined);
       void conversations.push();
-      void workspaces.refresh();
+      void workspaces.refresh().then(() => orchestrator.refresh());
     });
     brain = { components, bus, talkTarget, conversations, ready: subscribed };
   }

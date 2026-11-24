@@ -11,6 +11,11 @@
  * - #145: a thread is every exchange that shares one Genie `conversationId`. The list shows one
  *   entry per thread (its latest exchange); the detail shows the whole thread, oldest first,
  *   then the optional reply composer (`composer`), the hub→brain seam for a follow-up question.
+ * - Agent threads (the MOG agent) list with the Genie threads: an "In progress" group on top, and
+ *   the detail is `AgentDetail`. `hub:conversations.open {threadId}` selects one.
+ * - Delete (the button, or Delete or Backspace on the list) and Clear failed hide at once and show
+ *   one Undo toast for 8 s. The view sends `conversations.delete` after that, when the area goes
+ *   away, or at once when a new delete starts (the Memory pattern).
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -23,11 +28,15 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
+import type { HubAgentView } from '../../shared/hub-agent';
+import { MEMORY_UNDO_MS } from '../../shared/hub-memory';
 import {
   asConversationsOpen,
   asHubConversations,
   CONVERSATIONS_VIEW_ID,
+  CONVERSATIONS_DELETE_MAX,
   HUB_CONVERSATIONS_EVENT,
   HUB_CONVERSATIONS_OPEN_EVENT,
   threadOf,
@@ -39,17 +48,35 @@ import { paletteColorOf } from '../../shared/mog-palette';
 import { ExternalLink } from 'lucide-react';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from '../card/safe-markdown';
+import { Button } from '../ui/button';
 import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
+import {
+  AgentDetail,
+  buildAgentEntries,
+  firstQuestion,
+  inProgress,
+  isFailedThread,
+  liveMeta,
+  threadLine,
+  threadOutcome,
+  workspaceNames,
+  type AgentEntry,
+} from './AgentThread';
+import { AgentComposer } from './ThreadComposer';
 
 const DAY_MS = 86_400_000;
 /** The most body rows of a table in a thread (the card shows fewer, `MAX_TABLE_ROWS`). */
 const CONV_TABLE_ROWS = 200;
 
 /** #ui-4: the small colour dot next to a MOG's name, the same colour as its lamp and card. */
-function MogDot({ row }: { row: ConversationRow }) {
-  const c = paletteColorOf(row.mogColorVariant, row.mogId);
+function MogDot({
+  row,
+}: {
+  row: { mogId?: string | undefined; mogName?: string; mogColorVariant?: string | undefined };
+}) {
+  const c = paletteColorOf(row.mogColorVariant, row.mogId ?? row.mogName ?? '');
   return (
     <span
       className="conv-mog-dot"
@@ -109,13 +136,13 @@ const fullDateOf = (ms: number) =>
 
 interface DayGroup {
   label: string;
-  rows: ConversationRow[];
+  rows: ListEntry[];
 }
 
-function groupByDay(rows: ConversationRow[], now: number): DayGroup[] {
+function groupByDay(rows: ListEntry[], now: number): DayGroup[] {
   const out: DayGroup[] = [];
   for (const r of rows) {
-    const label = dayLabel(r.askedAt, now);
+    const label = dayLabel(r.at, now);
     const last = out.at(-1);
     if (last && last.label === label) last.rows.push(r);
     else out.push({ label, rows: [r] });
@@ -140,14 +167,47 @@ function threadsNewestFirst(all: ConversationRow[]): ConversationRow[] {
   return out;
 }
 
+/** One entry of the list: a Genie thread (its latest exchange) or an agent thread. */
+interface ListEntry {
+  /** The option id and the selection: a `requestId`, or `a:<threadId>` for an agent thread. */
+  id: string;
+  /** The key `conversations.delete` takes: `c:`, `r:` or `a:`. */
+  deleteKey: string;
+  at: number;
+  failed: boolean;
+  inProgress: boolean;
+  row?: ConversationRow;
+  agent?: AgentEntry;
+}
+
+/** A Genie thread is failed when no exchange of it was answered. */
+function genieEntries(all: ConversationRow[]): ListEntry[] {
+  const answered = new Set<string>();
+  const keyOf = (r: ConversationRow) =>
+    r.conversationId === '' ? `request:${r.requestId}` : r.conversationId;
+  for (const r of all) if (r.status !== 'failed') answered.add(keyOf(r));
+  return threadsNewestFirst(all).map((r) => ({
+    id: r.requestId,
+    deleteKey: r.conversationId === '' ? `r:${r.requestId}` : `c:${r.conversationId}`,
+    at: r.askedAt,
+    failed: !answered.has(keyOf(r)),
+    inProgress: false,
+    row: r,
+  }));
+}
+
+const agentKey = (threadId: string) => `a:${threadId}`;
+
 /** The list the brain sends, and the selection a double-click asks for. */
-function useConversations(onOpen: () => void) {
+function useConversations(onOpen: () => void, onList: () => void) {
   const [list, setList] = useState<HubConversations | null>(null);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const openRef = useRef(onOpen);
+  const listRef = useRef(onList);
   useEffect(() => {
     openRef.current = onOpen;
-  }, [onOpen]);
+    listRef.current = onList;
+  }, [onOpen, onList]);
   useEffect(() => {
     const offs: (() => void)[] = [];
     let gone = false;
@@ -159,7 +219,10 @@ function useConversations(onOpen: () => void) {
         HUB_CONVERSATIONS_EVENT,
         (e) => {
           const l = asHubConversations(e.payload);
-          if (l) setList(l);
+          if (l) {
+            setList(l);
+            listRef.current();
+          }
         },
         { target },
       ).then(keep),
@@ -170,6 +233,8 @@ function useConversations(onOpen: () => void) {
           if (!o) return;
           // A double-click selects its exchange, also before the list comes.
           if (o.requestId) setSelectedId(o.requestId);
+          // An agent thread opens by its id, also before the store has it.
+          else if (o.threadId) setSelectedId(agentKey(o.threadId.toLowerCase()));
           // Ack, so the brain stops holding this open.
           void emitView(CONVERSATIONS_VIEW_ID, 'click', { action: 'conversations.opened' }).catch(
             () => undefined,
@@ -342,6 +407,38 @@ function ComposerSlot({
   );
 }
 
+/** The Delete button at the top right of a detail. A thread in progress has none: stop it first. */
+function DetailToolbar({
+  onDelete,
+  hint,
+  bare = false,
+}: {
+  onDelete: () => void;
+  hint: string;
+  /** No bar around the button: an agent thread puts it in its session row. */
+  bare?: boolean;
+}) {
+  const button = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-action="delete"
+      title={hint}
+      aria-label="Delete conversation"
+      onClick={onDelete}
+    >
+      Delete
+    </Button>
+  );
+  return bare ? button : <div className="conv-toolbar conv-detail-bar">{button}</div>;
+}
+
+const DELETE_HINT_TAIL =
+  "stays in Genie until you Wipe or Forget with 'Also delete Genie conversations'.";
+const GENIE_DELETE_HINT = `Deletes it from this Mac. The Genie conversation ${DELETE_HINT_TAIL}`;
+const AGENT_DELETE_HINT = `Deletes it from this Mac. The Genie conversations ${DELETE_HINT_TAIL.replace('stays', 'stay')}`;
+
 /**
  * The thread detail (#145, #103): every exchange that shares one Genie `conversationId`, oldest
  * first (question, answer, question, answer), then the reply composer.
@@ -350,10 +447,12 @@ function Detail({
   thread,
   focusRef,
   composer,
+  toolbar,
 }: {
   thread: ConversationRow[];
   focusRef: React.RefObject<HTMLElement | null>;
   composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+  toolbar: ReactNode;
 }) {
   const first = thread[0];
   const latest = thread.at(-1);
@@ -382,6 +481,7 @@ function Detail({
       animate={{ opacity: 1, filter: 'blur(0px)' }}
       transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
     >
+      {toolbar}
       <div ref={scrollRef} className="conv-thread">
         {thread.map((row) => (
           <Exchange
@@ -396,13 +496,90 @@ function Detail({
   );
 }
 
-function Message({ title, line, action }: { title: string; line?: string; action?: ReactNode }) {
+function Message({
+  title,
+  line,
+  action,
+  focusRef,
+}: {
+  title: string;
+  line?: string;
+  action?: ReactNode;
+  /** The empty state takes the focus when a Clear failed emptied the list. */
+  focusRef?: RefObject<HTMLDivElement | null>;
+}) {
   return (
-    <div className="conv-message" role="status">
+    <div
+      ref={focusRef}
+      className="conv-message"
+      role="status"
+      {...(focusRef ? { tabIndex: -1 } : {})}
+    >
       <p className="conv-message-title">{title}</p>
       {line && <p className="conv-message-line">{line}</p>}
       {action}
     </div>
+  );
+}
+
+/** One thread waiting for its 8 s: the keys to delete and the timer. */
+interface Pending {
+  keys: string[];
+  /** Clear failed: the brain skips a thread that was answered since. */
+  onlyFailed?: true;
+  timer: ReturnType<typeof setTimeout>;
+  /** The thread to select again on Undo. */
+  restore: string | undefined;
+}
+
+let toastKey = 0;
+
+/** The row of one agent thread in the list: the question and one meta line. */
+function AgentRowBody({ entry }: { entry: AgentEntry }) {
+  const names = workspaceNames(entry);
+  const outcome = threadOutcome(entry);
+  if (inProgress(entry)) {
+    const m = liveMeta(entry);
+    return (
+      <>
+        <span className="conv-row-q">{firstQuestion(entry)}</span>
+        <span className="conv-row-meta">
+          {m.running && <span className="conv-live-dot" data-live-dot aria-hidden="true" />}
+          {m.pill && <span className="agent-pill">{m.pill}</span>}
+          {m.text}
+        </span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="conv-row-q">{firstQuestion(entry)}</span>
+      <span className="conv-row-meta">
+        <span className="conv-mog">
+          <MogDot row={entry} />
+          {entry.mogName}
+        </span>
+        {' · '}
+        {timeOf(entry.at)}
+        {names.length > 0 && ` · ${names.join(', ')}`}
+        {outcome !== 'answered' && (
+          <>
+            {' · '}
+            <span
+              className={
+                outcome === 'failed'
+                  ? 'conv-status--failed'
+                  : outcome === 'needs_you'
+                    ? 'conv-status--needs'
+                    : undefined
+              }
+            >
+              {outcome === 'failed' ? 'Failed' : outcome === 'needs_you' ? 'Needs you' : 'Stopped'}
+            </span>
+          </>
+        )}
+      </span>
+    </>
   );
 }
 
@@ -411,18 +588,35 @@ export function Conversations({
   onOpen,
   now = Date.now,
   composer,
+  agent,
+  agentMogId,
 }: {
   active: boolean;
   onOpen: () => void;
   now?: () => number;
   /** #145: the reply composer of the selected thread's detail, or no composer at all. */
   composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
+  /** The orchestrator agent view (`hub:agent`): the in-memory turns of the agent threads. */
+  agent?: HubAgentView | undefined;
+  /** The MOG that the Hub knows, for a follow-up in a thread that the store does not have yet. */
+  agentMogId?: string | undefined;
 }) {
-  const { list, selectedId, setSelectedId, timedOut, tryAgain } = useConversations(onOpen);
+  // The keys of the threads that the view hides: the pending ones (8 s) and the ones sent, until
+  // the next list shows the truth. A list that comes in the 8 s never shows a pending one again.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const sentRef = useRef<ReadonlySet<string>>(new Set());
+  const onList = useCallback(() => {
+    const sent = sentRef.current;
+    if (sent.size === 0) return;
+    sentRef.current = new Set();
+    setHidden((h) => new Set([...h].filter((k) => !sent.has(k))));
+  }, []);
+  const { list, selectedId, setSelectedId, timedOut, tryAgain } = useConversations(onOpen, onList);
   const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLElement | null>(null);
   const baseId = useId();
-  const optionId = (requestId: string) => `${baseId}-${requestId}`;
+  const optionId = (id: string) => `${baseId}-${id}`;
+  const reduce = useReducedMotion();
 
   // Ask again when the area shows (Forget or Wipe may have changed the store). The first ask goes
   // after the listeners are on.
@@ -433,17 +627,55 @@ export function Conversations({
   }, [active]);
 
   const allRows = useMemo(() => list?.rows ?? [], [list]);
+  const storedAgent = list?.agentThreads;
+  const agentList = useMemo(
+    () => buildAgentEntries(storedAgent, agent, agentMogId, now()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the clock only stamps a thread the store lacks
+    [storedAgent, agent, agentMogId],
+  );
   // #145: the list shows one entry per thread (its latest exchange); the detail shows them all.
-  const entries = useMemo(() => threadsNewestFirst(allRows), [allRows]);
-  const selected = entries.find((r) => r.requestId === selectedId) ?? entries[0];
+  // The agent threads in progress come first (their own group), then all threads newest first.
+  const { running, entries } = useMemo(() => {
+    const agents: ListEntry[] = agentList.map((a) => ({
+      id: agentKey(a.threadId),
+      deleteKey: agentKey(a.threadId),
+      at: a.at,
+      failed: isFailedThread(a),
+      inProgress: inProgress(a),
+      agent: a,
+    }));
+    const geniePart = genieEntries(allRows).filter((e) => !hidden.has(e.deleteKey));
+    const agentPart = agents.filter((e) => !hidden.has(e.deleteKey)).sort((a, b) => b.at - a.at);
+    const run = agentPart.filter((e) => e.inProgress);
+    // Both lists are newest first: merge them and keep the order the brain gave the Genie threads.
+    const rest: ListEntry[] = [];
+    const later = agentPart.filter((e) => !e.inProgress);
+    let g = 0;
+    let a = 0;
+    while (g < geniePart.length || a < later.length) {
+      const ge = geniePart[g];
+      const ag = later[a];
+      if (ge && (!ag || ge.at >= ag.at)) {
+        rest.push(ge);
+        g += 1;
+      } else if (ag) {
+        rest.push(ag);
+        a += 1;
+      }
+    }
+    return { running: run, entries: [...run, ...rest] };
+  }, [allRows, agentList, hidden]);
+  const selected = entries.find((e) => e.id === selectedId) ?? entries[0];
+  const emptyRef = useRef<HTMLDivElement>(null);
   const selectedThread = useMemo(
-    () => (selected ? threadOf(allRows, selected) : undefined),
+    () => (selected?.row ? threadOf(allRows, selected.row) : undefined),
     [allRows, selected],
   );
+  const failedEntries = entries.filter((e) => e.failed && !e.inProgress);
 
   const select = useCallback(
-    (r: ConversationRow | undefined) => {
-      if (r) setSelectedId(r.requestId);
+    (e: ListEntry | undefined) => {
+      if (e) setSelectedId(e.id);
     },
     [setSelectedId],
   );
@@ -452,10 +684,97 @@ export function Conversations({
   useEffect(() => {
     if (!selected) return;
     const el = listRef.current?.querySelector<HTMLElement>(
-      `[data-request="${CSS.escape(selected.requestId)}"]`,
+      `[data-request="${CSS.escape(selected.id)}"]`,
     );
     el?.scrollIntoView?.({ block: 'nearest' });
   }, [selected]);
+
+  // --- Delete and Undo (the Memory pattern): hide at once, send after 8 s ---
+  const pendingRef = useRef<Pending | undefined>(undefined);
+  const [toast, setToast] = useState<{ key: number; text: string } | undefined>(undefined);
+  const flush = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = undefined;
+    clearTimeout(p.timer);
+    sentRef.current = new Set([...sentRef.current, ...p.keys]);
+    for (let i = 0; i < p.keys.length; i += CONVERSATIONS_DELETE_MAX) {
+      void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+        action: 'conversations.delete',
+        threads: p.keys.slice(i, i + CONVERSATIONS_DELETE_MAX),
+        ...(p.onlyFailed ? { onlyFailed: true } : {}),
+      }).catch(() => undefined);
+    }
+    setToast(undefined);
+  }, []);
+  // The delete goes when the area goes away or the window closes: the user asked for it.
+  useEffect(() => {
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, [flush]);
+
+  const startDelete = (
+    keys: string[],
+    text: string,
+    next: ListEntry | undefined,
+    onlyFailed?: true,
+  ) => {
+    if (keys.length === 0) return;
+    // A new delete sends the one before it at once; one toast at a time.
+    flush();
+    const restore = selected?.id;
+    pendingRef.current = {
+      keys,
+      ...(onlyFailed ? { onlyFailed } : {}),
+      restore,
+      timer: setTimeout(flush, MEMORY_UNDO_MS),
+    };
+    setHidden((h) => new Set([...h, ...keys]));
+    toastKey += 1;
+    setToast({ key: toastKey, text });
+    setSelectedId(next?.id);
+    // The row is gone: the keyboard stays in the list.
+    listRef.current?.focus();
+  };
+
+  const undoDelete = () => {
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = undefined;
+    clearTimeout(p.timer);
+    setHidden((h) => new Set([...h].filter((k) => !p.keys.includes(k))));
+    setToast(undefined);
+    if (p.restore !== undefined) setSelectedId(p.restore);
+    listRef.current?.focus();
+  };
+
+  const deleteSelected = () => {
+    if (!selected || selected.inProgress) return;
+    const i = entries.indexOf(selected);
+    startDelete([selected.deleteKey], 'Conversation deleted', entries[i + 1] ?? entries[i - 1]);
+  };
+
+  // Clear failed emptied the list: the focus goes to the empty state, not to the body.
+  const emptied = list !== null && entries.length === 0 && toast !== undefined;
+  useEffect(() => {
+    if (emptied) emptyRef.current?.focus();
+  }, [emptied]);
+
+  const clearFailed = () => {
+    const keys = failedEntries.map((e) => e.deleteKey);
+    const n = keys.length;
+    const gone = new Set(keys);
+    startDelete(
+      keys,
+      n === 1 ? '1 failed conversation cleared' : `${n} failed conversations cleared`,
+      entries.find((e) => !gone.has(e.deleteKey) && e.id === selected?.id) ??
+        entries.find((e) => !gone.has(e.deleteKey)),
+      true,
+    );
+  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (entries.length === 0) return;
@@ -472,12 +791,95 @@ export function Conversations({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       detailRef.current?.focus();
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteSelected();
     }
   };
 
   // Read the clock on each render, so "Today" moves on after midnight.
-  const groups = groupByDay(entries, now());
+  const groups = groupByDay(
+    entries.filter((e) => !e.inProgress),
+    now(),
+  );
 
+  const optionOf = (r: ListEntry) => {
+    const isSel = r === selected;
+    return (
+      // `layout` (ui-1, stands in for Magic UI's AnimatedList): the row animates to
+      // its new position instead of jumping, when the list re-sorts or grows.
+      <motion.div
+        key={r.id}
+        layout="position"
+        id={optionId(r.id)}
+        role="option"
+        aria-selected={isSel}
+        data-request={r.id}
+        {...(r.inProgress ? { 'data-in-progress': '' } : {})}
+        {...(r.agent && !r.inProgress && threadLine(r.agent) !== ''
+          ? { title: threadLine(r.agent) }
+          : {})}
+        className="conv-row"
+        onClick={() => {
+          select(r);
+          listRef.current?.focus();
+        }}
+      >
+        {r.agent ? (
+          <AgentRowBody entry={r.agent} />
+        ) : r.row ? (
+          <>
+            <span className="conv-row-q">{r.row.question || 'Question not saved'}</span>
+            <span className="conv-row-meta">
+              <span className="conv-mog">
+                <MogDot row={r.row} />
+                {r.row.mogName}
+              </span>
+              {' · '}
+              {timeOf(r.row.askedAt)}
+              {r.row.profile && ` · ${r.row.profile}`}
+              {r.row.status === 'failed' && (
+                <>
+                  {' · '}
+                  <span className="conv-status--failed">Failed</span>
+                </>
+              )}
+            </span>
+          </>
+        ) : null}
+      </motion.div>
+    );
+  };
+
+  // The Undo toast sits in the list column, so it never covers the composer (P1-3). With no list
+  // column (the empty and error states) it sits at the foot of the area.
+  const toastLive = (
+    <div role="status" className="conv-toast-live">
+      {toast !== undefined && (
+        <motion.div
+          key={toast.key}
+          className="conv-toast"
+          data-conversations-undo
+          initial={reduce ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <span>{toast.text}</span>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="text-[var(--mog-lid)] hover:text-[var(--mog-text)]"
+            data-action="undo"
+            onClick={undoDelete}
+          >
+            Undo
+          </Button>
+        </motion.div>
+      )}
+    </div>
+  );
+  let inListColumn = false;
   let body;
   if (list === null && timedOut) {
     body = (
@@ -512,77 +914,104 @@ export function Conversations({
     );
   } else if (entries.length === 0) {
     body = (
-      <Message title="No conversations yet." line="Hold Right Option and tap G to ask Genie." />
+      <Message
+        title="No conversations yet."
+        line="Hold Right Option and tap G to ask Genie."
+        focusRef={emptyRef}
+      />
     );
   } else {
+    const detailKey = selected?.row
+      ? selected.row.conversationId || selected.row.requestId
+      : selected?.id;
+    inListColumn = true;
     body = (
       <div className="conv-panes">
-        <div
-          ref={listRef}
-          className="conv-list"
-          role="listbox"
-          aria-label="Conversations"
-          tabIndex={0}
-          aria-activedescendant={selected ? optionId(selected.requestId) : undefined}
-          onKeyDown={onKeyDown}
-        >
-          {groups.map((g) => (
-            <div key={`${g.label}-${g.rows[0]?.requestId}`} role="group" aria-label={g.label}>
-              <div className="conv-day" aria-hidden="true">
-                {g.label}
-              </div>
-              {g.rows.map((r) => {
-                const isSel = r === selected;
-                return (
-                  // `layout` (ui-1, stands in for Magic UI's AnimatedList): the row animates to
-                  // its new position instead of jumping, when the list re-sorts or grows.
-                  <motion.div
-                    key={r.requestId}
-                    layout="position"
-                    id={optionId(r.requestId)}
-                    role="option"
-                    aria-selected={isSel}
-                    data-request={r.requestId}
-                    className="conv-row"
-                    onClick={() => {
-                      select(r);
-                      listRef.current?.focus();
-                    }}
-                  >
-                    <span className="conv-row-q">{r.question || 'Question not saved'}</span>
-                    <span className="conv-row-meta">
-                      <span className="conv-mog">
-                        <MogDot row={r} />
-                        {r.mogName}
-                      </span>
-                      {' · '}
-                      {timeOf(r.askedAt)}
-                      {r.profile && ` · ${r.profile}`}
-                      {r.status === 'failed' && (
-                        <>
-                          {' · '}
-                          <span className="conv-status--failed">Failed</span>
-                        </>
-                      )}
-                    </span>
-                  </motion.div>
-                );
-              })}
+        <div className="conv-listcol">
+          {failedEntries.length > 0 && (
+            <div className="conv-toolbar conv-list-bar">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+                data-action="clear-failed"
+                onClick={clearFailed}
+              >
+                {`Clear failed (${failedEntries.length})`}
+              </Button>
             </div>
-          ))}
+          )}
+          <div
+            ref={listRef}
+            className={toast !== undefined ? 'conv-list conv-list-toast' : 'conv-list'}
+            role="listbox"
+            aria-label="Conversations"
+            tabIndex={0}
+            aria-activedescendant={selected ? optionId(selected.id) : undefined}
+            onKeyDown={onKeyDown}
+          >
+            {running.length > 0 && (
+              <div role="group" aria-label="In progress">
+                <div className="conv-day" aria-hidden="true">
+                  In progress
+                </div>
+                {running.map(optionOf)}
+              </div>
+            )}
+            {groups.map((g) => (
+              <div key={`${g.label}-${g.rows[0]?.id}`} role="group" aria-label={g.label}>
+                <div className="conv-day" aria-hidden="true">
+                  {g.label}
+                </div>
+                {g.rows.map(optionOf)}
+              </div>
+            ))}
+          </div>
+          {toastLive}
         </div>
-        {selectedThread && (
-          <Detail
-            // One thread keeps one pane: a new exchange (the latest `requestId`) must not remount
-            // it, which would reset its scroll and re-announce the thread to the brain.
-            key={selected?.conversationId || selected?.requestId}
-            thread={selectedThread}
+        {selected?.agent ? (
+          <AgentDetail
+            // One thread keeps one pane.
+            key={detailKey}
+            entry={selected.agent}
+            agent={agent}
+            active={active}
             focusRef={detailRef}
-            // [review] the area can stay mounted (`hidden`) while the hub shows another view: the
-            // composer must unmount with it, so its `thread.active` announcement always goes
-            // with it, and a ⌥G never becomes a follow-up in a thread the user cannot see.
-            composer={active ? composer : undefined}
+            toolbar={
+              selected.inProgress ? null : (
+                <DetailToolbar bare onDelete={deleteSelected} hint={AGENT_DELETE_HINT} />
+              )
+            }
+            // The composer unmounts with the area, so its `thread.active_agent` announcement
+            // always goes with it (the same rule as the Genie composer below).
+            composer={
+              active ? (
+                <div data-slot="thread-composer" className="conv-composer">
+                  <AgentComposer
+                    threadId={selected.agent.threadId}
+                    mogId={selected.agent.mogId ?? agentMogId}
+                    agent={agent}
+                  />
+                </div>
+              ) : null
+            }
           />
+        ) : (
+          selectedThread && (
+            <Detail
+              // One thread keeps one pane: a new exchange (the latest `requestId`) must not remount
+              // it, which would reset its scroll and re-announce the thread to the brain.
+              key={detailKey}
+              thread={selectedThread}
+              focusRef={detailRef}
+              toolbar={<DetailToolbar onDelete={deleteSelected} hint={GENIE_DELETE_HINT} />}
+              // [review] the area can stay mounted (`hidden`) while the hub shows another view: the
+              // composer must unmount with it, so its `thread.active` announcement always goes
+              // with it, and a ⌥G never becomes a follow-up in a thread the user cannot see.
+              composer={active ? composer : undefined}
+            />
+          )
         )}
       </div>
     );
@@ -596,6 +1025,7 @@ export function Conversations({
       hidden={!active}
     >
       {body}
+      {!inListColumn && toastLive}
     </section>
   );
 }

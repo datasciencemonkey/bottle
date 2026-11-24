@@ -105,6 +105,45 @@ export function applyCardSide(side: CardSide, doc: Document = document): void {
   doc.documentElement.dataset['side'] = side;
 }
 
+/** The part of the Tauri window that `watchCardSide` needs. Tests give a fake. */
+export interface SideWindow {
+  onMoved?: (cb: () => void) => Promise<() => void>;
+  title?: () => Promise<string>;
+}
+
+/**
+ * The host moves the card with its MOG (`follow_mog`) and may put it on the other side: it sets
+ * the title first, then moves. Each move reads the title again, so the tail and the alignment
+ * follow the side. It needs no new permission (the card already reads its title and listens).
+ * Returns the stop function.
+ */
+export function watchCardSide(
+  w: SideWindow = getCurrentWindow(),
+  doc: Document = document,
+): () => void {
+  if (typeof w.onMoved !== 'function' || typeof w.title !== 'function') return () => undefined;
+  const title = w.title.bind(w);
+  let stopped = false;
+  let off: (() => void) | undefined;
+  void w
+    .onMoved(() => {
+      void title()
+        .then((t) => {
+          if (!stopped) applyCardSide(sideFromTitle(t), doc);
+        })
+        .catch(() => undefined);
+    })
+    .then((un) => {
+      if (stopped) un();
+      else off = un;
+    })
+    .catch(() => undefined);
+  return () => {
+    stopped = true;
+    off?.();
+  };
+}
+
 /**
  * The natural width (px) of the compact pill on screen (the pop-up or the Genie status pill), or
  * `undefined` for the answer card, which keeps the full width. The pill is measured without the
@@ -112,17 +151,22 @@ export function applyCardSide(side: CardSide, doc: Document = document): void {
  * window again (the fit runs again when the card changes, `CardView.tsx`).
  */
 export function measureCompactWidth(doc: Document = document): number | undefined {
-  const pill = doc.querySelector<HTMLElement>('.popup, .genie-working');
-  if (!pill) return undefined;
-  const prev = pill.style.maxWidth;
-  pill.style.maxWidth = 'none';
-  // The layout width with its fraction: not `offsetWidth`, which rounds down and cut the last
-  // letter, and not the box under a transform, because the pill fades and scales in. The used
-  // `width` of a border-box is the whole pill. `getBoundingClientRect` is the fallback.
-  const used = parseFloat(getComputedStyle(pill).width);
-  const w = Number.isFinite(used) && used > 0 ? used : pill.getBoundingClientRect().width;
-  pill.style.maxWidth = prev;
-  return w;
+  const pills = Array.from(doc.querySelectorAll<HTMLElement>('.popup, .genie-working'));
+  if (pills.length === 0) return undefined;
+  // UX slice 1: a pill and a pop-up can show together. The window takes the wider one.
+  let widest = 0;
+  for (const pill of pills) {
+    const prev = pill.style.maxWidth;
+    pill.style.maxWidth = 'none';
+    // The layout width with its fraction: not `offsetWidth`, which rounds down and cut the last
+    // letter, and not the box under a transform, because the pill fades and scales in. The used
+    // `width` of a border-box is the whole pill. `getBoundingClientRect` is the fallback.
+    const used = parseFloat(getComputedStyle(pill).width);
+    const w = Number.isFinite(used) && used > 0 ? used : pill.getBoundingClientRect().width;
+    pill.style.maxWidth = prev;
+    widest = Math.max(widest, w);
+  }
+  return widest;
 }
 
 /**

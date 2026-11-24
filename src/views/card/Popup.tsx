@@ -47,9 +47,14 @@ export interface PopupProps {
   card: CardUpdate;
   /** The user copied or dismissed the pop-up, or it faded. */
   onClose?: () => void;
+  /**
+   * UX slice 1: the pop-up shows under a pending Genie pill. Closing it must not hide the card
+   * window, because the pill still needs it.
+   */
+  stacked?: boolean;
 }
 
-export function Popup({ mogId, card, onClose, saved }: PopupProps) {
+export function Popup({ mogId, card, onClose, saved, stacked = false }: PopupProps) {
   const newest = card.blurbs[0];
   const [phase, setPhase] = useState<Phase>('shown');
   const [held, setHeld] = useState({ pointer: false, focus: false });
@@ -71,7 +76,7 @@ export function Popup({ mogId, card, onClose, saved }: PopupProps) {
   const close = () => {
     setPhase('gone');
     onClose?.();
-    void emitView(mogId, 'cancel');
+    if (!stacked) void emitView(mogId, 'cancel');
   };
 
   useEffect(() => {
@@ -156,14 +161,18 @@ export function Popup({ mogId, card, onClose, saved }: PopupProps) {
           {why}
         </span>
       )}
-      {copy && chip(copy, close)}
-      {ask && chip(ask)}
-      {ask && (
-        <span className="popup-hint" data-popup-hint>
-          {POPUP_ASK_HINT}
-        </span>
-      )}
-      {others.map((c) => chip(c))}
+      {/* One wrapping row for all controls (1, 2 or 3 chips): it drops under the text and wraps
+          by itself, so a chip is never clipped by the window. */}
+      <div className="popup-actions" data-popup-actions>
+        {copy && chip(copy, close)}
+        {ask && chip(ask)}
+        {others.map((c) => chip(c))}
+        {ask && (
+          <span className="popup-hint" data-popup-hint>
+            {POPUP_ASK_HINT}
+          </span>
+        )}
+      </div>
       <MemorySavedLive line={saved.line} onUndo={saved.undo} />
       {copy && (
         <button

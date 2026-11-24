@@ -12,14 +12,15 @@ import type { ChipView } from './card-chips';
 import type { SectionInput } from './card-sections';
 import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
-import { ASKING_GENIE } from '../shared/genie-status';
+import { ANSWER_READY, ASKING_GENIE } from '../shared/genie-status';
 import {
   CHANGE_WORKSPACE_LABEL,
   GENIE_DATA_FLOW_TEXT,
   TRY_AGAIN_LABEL,
   createGenieDirectSend,
+  type PartFence,
 } from './genie-direct';
-import type { GenieEnd } from './genie-history';
+import { createGenieHistory, type GenieEnd } from './genie-history';
 
 const OP = '00000000-0000-4000-8000-00000000c573';
 const Q = 'What was revenue last quarter?';
@@ -252,7 +253,7 @@ describe('genie direct send: the end of each request goes to the local history (
     queryItems: [],
   };
 
-  it('[AT-09] [G-21b] calls onEnd once, after the card, with the exact question and the ids', async () => {
+  it('[AT-09] [G-21b] calls onEnd once, at the terminal event (it is no arrival), with the exact question and the ids', async () => {
     const c = fakeCard();
     const b = fakeBridge([{ t: 'accepted', conversationId: 'c1', responseId: 'r1' }, answer]);
     const ends: GenieEnd[] = [];
@@ -261,8 +262,7 @@ describe('genie direct send: the end of each request goes to the local history (
       cardFor: () => c.card,
       newOpId: () => OP,
       onEnd: (x) => {
-        // The card already shows the answer when the history write starts.
-        expect(c.log.at(-1)?.completed).toBe(true);
+        // The history write is no arrival: it does not wait for the card update (UX slice 1).
         ends.push(x);
       },
     });
@@ -488,5 +488,420 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       keyNumbers: ['8,800 tables', '150 catalogs'],
     });
     expect(phases).toEqual(['working', 'answered']);
+  });
+
+  describe('UX slice 1: the arrival gate', () => {
+    const ANSWER: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [{ text: '4.2%' }],
+      deepLink: '',
+      queryItems: [],
+    };
+    const FAILED: AskEvent = { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' };
+
+    /** A gate double: `held` decides; held functions wait in `waiting` until `release`. */
+    function gateDouble(held: boolean) {
+      let h = held;
+      const waiting: Array<() => void> = [];
+      return {
+        arrivals: {
+          isHeld: () => h,
+          whenClear: (fn: () => void) => (h ? void waiting.push(fn) : fn()),
+        },
+        release() {
+          h = false;
+          for (const fn of waiting.splice(0)) fn();
+        },
+        waiting,
+      };
+    }
+
+    it('[AC-1.2] [AC-1.3] an answer in a hold changes only the pill to "Answer ready" (the history write still runs)', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const phases: string[] = [];
+      const shows: string[] = [];
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+        onPhase: (_m, p) => void phases.push(p),
+        showCard: (m) => void shows.push(m),
+        onEnd: (x) => void ends.push(x),
+      });
+      let done = false;
+      const p = send(turn()).then(() => (done = true));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, ANSWER_READY]);
+      expect(c.log.every((x) => !x.completed)).toBe(true);
+      // The clearing at the send, then the answer sections (the ready pill needs the deep link).
+      // No outcome blurb, no show, no mood phase: the view keeps the pill while the blurb works.
+      expect(c.expanded).toHaveLength(2);
+      expect(c.expanded[0]).toBeUndefined();
+      expect(c.expanded[1]).toMatchObject({ answerMd: 'Churn was 4.2%.' });
+      expect(shows).toEqual([]);
+      expect(phases).toEqual(['working']);
+      // #40: the history write is no arrival. It runs at the terminal event.
+      expect(ends).toHaveLength(1);
+      expect(done).toBe(false);
+
+      g.release();
+      await p;
+      expect(shows).toEqual([MOG]);
+      expect(phases).toEqual(['working', 'answered']);
+      expect(c.log.at(-1)).toMatchObject({ text: 'Churn was 4.2%.', completed: true });
+      expect(c.expanded.at(-1)).toMatchObject({ answerMd: 'Churn was 4.2%.' });
+      expect(ends).toHaveLength(1);
+    });
+
+    it('[AC-1.9] the pill of the own ask shows at once, in a hold', () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+      });
+      void send(turn());
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE]);
+    });
+
+    it('[AC-1.10] two held answers apply in arrival order, and the newest shows on the card', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const order: string[] = [];
+      let n = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const md = `answer ${++n}`;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                yield { ...ANSWER, md } as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        arrivals: g.arrivals,
+        onPhase: (_m, p, op) => void (p !== 'working' && order.push(op)),
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(order).toEqual([]);
+      g.release();
+      await both;
+      expect(order).toEqual(['op-1', 'op-2']);
+      expect(c.log.at(-1)?.text).toBe('answer 2');
+    });
+
+    it('an older request that applies after a newer one never overwrites its link and sections', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      let n = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                yield { ...ANSWER, md: `answer ${k}`, deepLink: `https://x.test/${k}` } as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        arrivals: g.arrivals,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      // Both answered in the hold: the newer request put its link last.
+      expect(c.expanded.at(-1)).toMatchObject({ answerMd: 'answer 2' });
+      // The older request applies after the newer one.
+      g.waiting.reverse();
+      g.release();
+      await both;
+      const puts = c.expanded.filter((x) => x !== undefined);
+      expect(puts.at(-1)).toMatchObject({ answerMd: 'answer 2', deepLink: 'https://x.test/2' });
+      expect(puts.some((x, i) => i > 1 && x?.answerMd === 'answer 1')).toBe(false);
+    });
+
+    it('an answer of request 1 while request 2 still works puts no sections on request 2', async () => {
+      const c = fakeCard();
+      let n = 0;
+      let failSecond: () => void = () => undefined;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                if (k === 2) await new Promise<void>((r) => (failSecond = r));
+                yield (
+                  k === 1
+                    ? { ...ANSWER, deepLink: 'https://x.test/1' }
+                    : { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' }
+                ) as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      failSecond();
+      await both;
+      expect(c.expanded.filter((x) => x !== undefined)).toEqual([]);
+    });
+
+    it('[AC-1.11] a failure waits for the gate too, and keeps the working pill', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      const phases: string[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([FAILED]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+        onPhase: (_m, p) => void phases.push(p),
+        showCard: () => undefined,
+      });
+      const p = send(turn());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE]);
+      expect(c.controls.size).toBe(0);
+      expect(phases).toEqual(['working']);
+      g.release();
+      await p;
+      expect(phases).toEqual(['working', 'failed']);
+      expect(c.controls.size).toBe(1);
+    });
+
+    it('with no hold the arrival applies at once, with no "Answer ready" pill', async () => {
+      const c = fakeCard();
+      const g = gateDouble(false);
+      const send = createGenieDirectSend({
+        genie: fakeBridge([ANSWER]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        arrivals: g.arrivals,
+      });
+      await send(turn());
+      expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, 'Churn was 4.2%.']);
+    });
+  });
+
+  describe('slice 2a: the fallback notice and the "Ask other workspaces too" chip', () => {
+    const answerEvent: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [],
+      deepLink: '',
+      queryItems: [],
+    };
+
+    it('[AC-2a.11] a fallback shows its one-line reason before the answer, and not in the saved end', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      await send(turn(), { notice: 'The orchestrator model is not reachable. Asked sales only.' });
+      expect(c.expanded.at(-1)?.answerMd).toBe(
+        '*The orchestrator model is not reachable. Asked sales only.*\n\nChurn was 4.2%.',
+      );
+      // History keeps the answer as Genie wrote it. "Remember this" reads the saved exchange
+      // (`remember-flow.ts`, `finalAnswerMd`), so neither one ever holds the notice.
+      expect(ends[0]?.end).toMatchObject({ t: 'answer', md: 'Churn was 4.2%.' });
+      expect(JSON.stringify(ends)).not.toContain('The orchestrator model is not reachable');
+    });
+
+    it('[ADR 0121] a fallback of an agent turn saves its row with the turn as split group', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      await send(turn(), { notice: 'n', splitGroupId: '51111111-2222-4333-8444-555555555540' });
+      await send(turn());
+      expect(ends[0]?.splitGroupId).toBe('51111111-2222-4333-8444-555555555540');
+      expect(ends[1]?.splitGroupId).toBeUndefined();
+    });
+
+    it('[Wipe] a fallback part row carries the fence, and a plain ask never does', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      let wiped = false;
+      await send(turn(), {
+        notice: 'n',
+        splitGroupId: '51111111-2222-4333-8444-555555555540',
+        isStale: () => wiped,
+      });
+      await send(turn(), { isStale: () => true });
+      expect(ends[0]?.isStale?.()).toBe(false);
+      wiped = true;
+      expect(ends[0]?.isStale?.()).toBe(true);
+      expect(ends[1]?.isStale).toBeUndefined();
+    });
+
+    const GROUP = '51111111-2222-4333-8444-555555555541';
+
+    it('[Wipe] a part fence that holds gets a replay, and the replay ends again with the same ids', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      let again: (() => void) | undefined;
+      await send(turn(), {
+        splitGroupId: GROUP,
+        isStale: (replay) => {
+          again = () => replay(() => false);
+          return true;
+        },
+      });
+      expect(ends).toHaveLength(1);
+      expect(ends[0]?.isStale?.()).toBe(true);
+      again?.();
+      expect(ends).toHaveLength(2);
+      expect(ends[1]).toMatchObject({ opId: OP, splitGroupId: GROUP });
+      expect(ends[1]?.isStale?.()).toBe(false);
+    });
+
+    /** The real history over a fake memory, and a fence that behaves like the one of agent-run. */
+    async function heldRig(gateRegister: boolean) {
+      let writes = 0;
+      let registers = 0;
+      let openRegister: () => void = () => undefined;
+      const registerGate = new Promise<void>((res) => (openRegister = res));
+      let openName: () => void = () => undefined;
+      const nameGate = new Promise<void>((res) => (openName = res));
+      const record = createGenieHistory({
+        memory: {
+          registerMog: async () => {
+            registers += 1;
+            if (gateRegister && registers === 1) await registerGate;
+          },
+          recordExchange: async () => void (writes += 1),
+        },
+        mogName: async () => {
+          if (!gateRegister) await nameGate;
+          return 'Lab';
+        },
+        hostOf: async () => undefined,
+        log: { event: () => true },
+      });
+      let gen = 0;
+      let up = false;
+      const holds: (() => void)[] = [];
+      const mk = (): PartFence => {
+        const g = gen;
+        let held = false;
+        return (replay) => {
+          if (g === gen && !up) return false;
+          if (!held) {
+            held = true;
+            const again = () => replay(mk());
+            if (up) holds.push(again);
+            else again();
+          }
+          return true;
+        };
+      };
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => fakeCard().card,
+        newOpId: () => OP,
+        onEnd: (x) => void record(x),
+      });
+      const raise = () => {
+        gen += 1;
+        up = true;
+      };
+      const lift = () => {
+        up = false;
+        for (const f of holds.splice(0)) f();
+      };
+      const settle = () => new Promise((r) => setTimeout(r, 0));
+      return { send, mk, raise, lift, holds, openName, openRegister, settle, writes: () => writes };
+    }
+
+    it('[Wipe] a fence raised during the name lookup holds the row: a failed Wipe writes it once', async () => {
+      const h = await heldRig(false);
+      await h.send(turn(), { splitGroupId: GROUP, isStale: h.mk() });
+      h.raise();
+      h.openName();
+      await h.settle();
+      expect(h.writes()).toBe(0);
+      h.lift();
+      await h.settle();
+      expect(h.writes()).toBe(1);
+    });
+
+    it('[Wipe] a fence raised during the name lookup holds the row: a good Wipe writes none', async () => {
+      const h = await heldRig(false);
+      await h.send(turn(), { splitGroupId: GROUP, isStale: h.mk() });
+      h.raise();
+      h.openName();
+      await h.settle();
+      h.holds.length = 0;
+      h.lift();
+      await h.settle();
+      expect(h.writes()).toBe(0);
+    });
+
+    it('[Wipe] a fence raised and lifted while the write is in flight: exactly one write', async () => {
+      const h = await heldRig(true);
+      await h.send(turn(), { splitGroupId: GROUP, isStale: h.mk() });
+      await h.settle();
+      h.raise();
+      h.lift();
+      h.openRegister();
+      await h.settle();
+      expect(h.writes()).toBe(1);
+    });
+
+    it('[R-8] an answered request offers no "Ask other workspaces too" chip (ADR 0122)', async () => {
+      const c = fakeCard();
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+      });
+      await send(turn());
+      expect(c.controls.size).toBe(0);
+    });
   });
 });

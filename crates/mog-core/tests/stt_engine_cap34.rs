@@ -44,6 +44,7 @@ impl TranscriptSink for Out {
 }
 struct NoEvents;
 impl CaptureEvents for NoEvents {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _s: &CaptureState) {}
     fn stopped(&self, _s: &Stopped) {}
 }

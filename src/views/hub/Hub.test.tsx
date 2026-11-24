@@ -134,10 +134,10 @@ describe('V1 hub view', () => {
     });
   });
 
-  it('[V1] shows the product name and the Labs label', async () => {
+  it('[V1] shows the product name and the experimental label', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('h1')?.textContent).toBe('Bottle');
-    expect(el.textContent).toContain('Databricks Labs / experimental');
+    expect(el.querySelector('main > p')?.textContent).toBe('experimental');
   });
 
   it('[ADR 0117] the hub has no MOG list: no live chips, no mogs area, one ready ping', async () => {
@@ -185,15 +185,19 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('.hub-area-title')?.textContent).toBe('Home');
     // The product header stays a direct child of main (AT-37).
     expect(el.querySelector('main > h1')?.textContent).toBe('Bottle');
-    expect(el.querySelector('main > p')?.textContent).toBe('Databricks Labs / experimental');
+    expect(el.querySelector('main > p')?.textContent).toBe('experimental');
   });
 
   it('[home] Home shows the lamp, the wordmark and the punchline, with no buttons', async () => {
     const { el } = await render(<Hub />);
     const h = home(el);
-    expect(h.querySelector('img')?.getAttribute('alt')).toContain('peeking out of its lamp');
-    expect(h.querySelector('[data-home-wordmark]')?.textContent).toBe('Bottle');
-    expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
+    expect(h.querySelector('[data-home-art][role="img"]')?.getAttribute('aria-label')).toContain(
+      'peeking out of its lamp',
+    );
+    expect(h.querySelector('[data-home-wordmark] .sr-only')?.textContent).toBe('Bottle');
+    // The hub header keeps the page's one h1; Home adds none.
+    expect(el.querySelectorAll('h1')).toHaveLength(1);
+    expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Your Genie, ready.');
     expect(h.querySelectorAll('button, a, [role="button"]')).toHaveLength(0);
     // Clicking the wordmark does nothing: the area stays Home.
     await act(async () => realClick(h.querySelector<HTMLElement>('[data-home-wordmark]')));
@@ -214,9 +218,10 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(home(el).querySelector('[data-home-wordmark]')).not.toBeNull();
   });
 
-  it('[home] the landing fades in by default', async () => {
+  it('[home] the landing plays its entrance by default', async () => {
     const { el } = await render(<Hub />);
-    expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
+    expect(home(el).getAttribute('data-motion')).toBe('full');
+    expect(home(el).getAttribute('data-phase')).toBe('intro');
   });
 
   it('[#103] the toggle opens the sidebar with Home, Conversations, Recordings, Memory, Settings', async () => {
@@ -231,6 +236,27 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
       'Settings',
     ]);
     expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('[#sidebar-align] the collapse button shares the pin button box and the icon column', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    const q = (sel: string) => el.querySelector<HTMLElement>(sel);
+    const collapseRow = () => q('[data-sidebar-collapse-row]');
+    const pinRow = () => q('[data-sidebar-pin-row]');
+    // Same hit target as the pin button.
+    expect(q('[data-sidebar-collapse]')?.className).toContain('size-6');
+    expect(q('[data-sidebar-pin]')?.className).toContain('size-6');
+    // Expanded: the collapse button starts on the icon column, not centred.
+    expect(collapseRow()?.className).toContain('justify-start');
+    expect(collapseRow()?.className).toContain('px-[var(--mog-space-1)]');
+    expect(collapseRow()?.className).not.toContain('justify-center');
+    expect(pinRow()?.className).toContain('justify-end');
+    // Collapsed: pin, nav icons and collapse button all sit on the one centre axis.
+    await act(async () => q('[data-sidebar-collapse]')?.click());
+    expect(collapseRow()?.className).toContain('justify-center');
+    expect(pinRow()?.className).toContain('justify-center');
+    for (const b of items(el)) expect(b.className).toContain('justify-center');
   });
 
   it('[home] Cmd+B and Cmd+\\ toggle the sidebar on Home', async () => {

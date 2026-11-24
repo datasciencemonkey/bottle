@@ -73,6 +73,7 @@
     "allow-recording-list",
     "allow-recording-detail",
     "allow-recording-retry",
+    "allow-recording-delete",
     "allow-recording-open",
     "allow-recording-open-system-audio-settings",
     "allow-link-open",
@@ -80,6 +81,14 @@
     "allow-workspace-list",
     "allow-workspace-set-available",
     "allow-workspace-make-home",
-    "allow-workspace-settings-write"
+    "allow-workspace-settings-write",
+    "allow-orchestrator-models",
+    "allow-orchestrator-status",
+    "allow-agent-turn-submit",
+    "allow-agent-turn-stop",
+    "allow-agent-turn-call",
+    "allow-agent-turn-result",
+    "allow-agent-session-state",
+    "allow-agent-session-end"
   ]
 }

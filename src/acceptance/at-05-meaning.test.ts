@@ -4,14 +4,15 @@
  * not overwrite user work.
  *
  * The corpus (numbers, units, negation, names, table names, self-corrections) and the meaning
- * oracle are `src/test-support/meaning.ts`; their self-tests run now. CleanupProvider (#55) is
- * built: its tests run with a `model_invoke` double that returns good and meaning-changing
+ * oracle are `src/test-support/meaning.ts`; their self-tests run now. The dictation cleanup
+ * (`withDictationCleanup`, ADR 0122) is built: its tests run with a `model_invoke` double that returns good and meaning-changing
  * replies. The raw and cleaned store with "Use raw text" (#61) and the MOG text card (#60) are
  * not built, so those tests stay `it.skip` with the feature issue. A skipped test never counts
  * as a pass.
  */
 import type { Tags } from '../shared/interfaces';
-import { createCleanupProvider } from '../brain/components/cleanup-provider';
+import { withDictationCleanup } from '../brain/dictation-cleanup';
+import { routeUtterance, ipcUtteranceDeps, type Utterance } from '../brain/utterance-route';
 import { createSttProvider } from '../brain/components/stt-provider';
 import { core } from '../brain/test-core';
 import { callsTo } from '../test-support/cloud-calls';
@@ -87,13 +88,48 @@ const MUTATIONS: ((t: string) => string)[] = [
   },
 ];
 
+const input: Utterance['input'] = {
+  profile: 'caller-profile',
+  speakerTrack: 'you',
+  captureMode: 'ptt',
+  pendingClarification: '',
+  recentTopics: [],
+  activeMogs: [{ id: MOG, name: 'Finance' }],
+  profiles: [],
+  currentTarget: 'caller-profile',
+};
+
+/** One dictation through the real cleanup path: returns the text that `insert_text` receives. */
+async function dictate(raw: string): Promise<{ text: string; usedRaw: boolean }> {
+  const inserted: string[] = [];
+  const base = ipcUtteranceDeps();
+  const deps = withDictationCleanup({
+    ...base,
+    insertText: async (a) => {
+      inserted.push(a.text);
+      return { result: 'inserted' };
+    },
+  });
+  await routeUtterance(
+    {
+      mogId: MOG,
+      text: raw,
+      leaseId: 'lease-1',
+      forceAsk: false,
+      insertionOn: true,
+      input,
+    },
+    deps,
+  );
+  return { text: inserted[0] ?? '', usedRaw: false };
+}
+
 describe('AT-05 preserve transcript meaning', () => {
   beforeEach(() => core.reset());
 
   it('[AT-05] [CAP-66a] [CAP-68] cleanup keeps numbers and entities exact or keeps the raw text', async () => {
     // Every corpus item meets every model reply of MUTATIONS through the real IPC path. The
     // failures are collected first, so each line below can fail on its own.
-    const cleanup = createCleanupProvider();
     const numberCases: string[] = [];
     const numberLost: string[] = [];
     const otherLost: string[] = [];
@@ -105,9 +141,9 @@ describe('AT-05 preserve transcript meaning', () => {
           : {},
       );
       for (const x of MEANING_CORPUS) {
-        const out = await cleanup.clean(x.raw, tags, { profile: 'caller-profile' });
+        const out = await dictate(x.raw);
         const failures = meaningFailures(x, out).map((f) => `${f} (${mutate.name})`);
-        if (!out.usedRaw) cleanedCount++;
+        cleanedCount++;
         // A number case: the raw text holds a digit or a spoken number word.
         if (/\d/.test(x.raw) || NUMBER_WORD.test(x.raw)) {
           numberCases.push(x.id);
@@ -128,23 +164,13 @@ describe('AT-05 preserve transcript meaning', () => {
     expect(cleanedCount).toBeGreaterThanOrEqual(MEANING_CORPUS.length);
   });
 
-  it('[AT-05] [CAP-66b] fewer than 4 words make no cleanup model call', async () => {
-    const out = await createCleanupProvider().clean('Send it now', tags, {
-      profile: 'caller-profile',
-    });
-    expect(out).toMatchObject({ text: 'Send it now', usedRaw: false, outcome: 'short' });
-    expect(callsTo(core.invoke.mock.calls, ['model_invoke'])).toEqual([]);
-  });
-
   it('[AT-05] [CAP-68] a cleanup model reply that changes a number falls back to the raw text', async () => {
-    // The model double returns a changed number; CleanupProvider must keep the raw text.
+    // The model double returns a changed number; the pre-pass text must go on.
     core.invoke.mockImplementation(async (cmd: string) =>
       cmd === 'model_invoke' ? chatCompletion('Ship 1,205 units to Lisbon by Friday.') : {},
     );
     const raw = 'ship 1,250 units to Lisbon by Friday';
-    expect(
-      await createCleanupProvider().clean(raw, tags, { profile: 'caller-profile' }),
-    ).toMatchObject({ text: raw, usedRaw: true, outcome: 'check_failed' });
+    expect((await dictate(raw)).text).toBe('Ship 1,250 units to Lisbon by Friday');
     expect(callsTo(core.invoke.mock.calls, ['model_invoke'])).toHaveLength(1);
   });
 

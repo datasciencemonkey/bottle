@@ -176,3 +176,28 @@ describe('safe markdown', () => {
     expect(growth(quadratic(20), '[').ratio).toBeGreaterThanOrEqual(STEP_MAX);
   }, 30_000);
 });
+
+describe('citation markers in safe markdown (ADR 0122)', () => {
+  const mark = (n: number) => (n === 1 ? <b data-m>M</b> : undefined);
+  const out = (md: string) =>
+    renderToStaticMarkup(
+      <SafeMarkdown
+        text={md}
+        trust={{ profileHost: 'h.example.test', allowedAppUrls: [] }}
+        renderMarker={mark}
+      />,
+    );
+
+  it('draws a known marker in text and in a table cell', () => {
+    expect(out('A [1] b')).toContain('<b data-m="true">M</b>');
+    expect(out('| a |\n| --- |\n| [1] |')).toContain(
+      '<td data-align="left"><b data-m="true">M</b></td>',
+    );
+  });
+
+  it('leaves unknown markers, code spans and link labels as they are', () => {
+    expect(out('A [2] b')).not.toContain('data-m');
+    expect(out('A `[1]` b')).not.toContain('data-m');
+    expect(out('A [1](https://h.example.test/x) b')).not.toContain('data-m');
+  });
+});

@@ -168,6 +168,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("recording_list", BH),
     row("recording_detail", BH),
     row("recording_retry", BH),
+    row("recording_delete", BH),
     row("recording_open", BH),
     // The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane.
     row("recording_open_system_audio_settings", BH),
@@ -190,6 +191,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("workspace_set_available", B),
     row("workspace_make_home", B),
     row("workspace_settings_write", B),
+    // ADR 0122: the orchestrator model and the ask loop. All brain-only: the hub uses
+    // `view_emit` only (ARC-4).
+    row("orchestrator_models", B),
+    row("orchestrator_status", B),
+    row("agent_turn_submit", B),
+    row("agent_turn_stop", B),
+    row("agent_turn_call", B),
+    row("agent_turn_result", B),
+    row("agent_session_state", B),
+    row("agent_session_end", B),
 ];
 
 /// The row of a command, if it exists.
@@ -527,6 +538,55 @@ pub enum IpcError {
     SttSetupUnavailable {
         command: String,
     },
+    // The ask loop (ADR 0122).
+    /// `agent_turn_submit`: no talk-key latch and no valid Ask ticket approved the question.
+    AskNotApproved {
+        command: String,
+    },
+    /// `agent_turn_submit`: 1 live turn and 3 waiting turns are in the queue.
+    AgentQueueFull {
+        command: String,
+    },
+    /// `agent_turn_*`: no turn with this ID is in the session.
+    AgentTurnUnknown {
+        command: String,
+    },
+    /// `agent_turn_submit`: the agent session cannot start or is ending.
+    AgentSessionUnavailable {
+        command: String,
+    },
+    /// `agent_turn_submit`: more than 6 turns a minute.
+    AgentRateLimited {
+        command: String,
+    },
+    /// `agent_turn_submit`: the agent profile does not use U2M sign-in.
+    AgentProfileUnsupported {
+        command: String,
+    },
+    /// `agent_turn_submit`: the agent profile must sign in again.
+    AgentSignedOut {
+        command: String,
+    },
+    /// `agent_turn_submit`: the orchestrator model is not set or not served.
+    AgentNotEligible {
+        command: String,
+    },
+    /// The agent turn ended because the device is offline.
+    AgentOffline {
+        command: String,
+    },
+    /// The agent turn ended at the 10 minute limit.
+    AgentTimeout {
+        command: String,
+    },
+    /// The agent turn failed.
+    AgentFailed {
+        command: String,
+    },
+    /// The turn ended after repeated refused tool calls.
+    AgentRefusals {
+        command: String,
+    },
 }
 
 impl std::fmt::Display for IpcError {
@@ -706,6 +766,36 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::SttSetupUnavailable { command } => {
                 write!(f, "{command}: this build has no local-stt feature")
+            }
+            IpcError::AskNotApproved { command } => write!(
+                f,
+                "{command}: a talk-key latch or an Ask ticket did not approve this question"
+            ),
+            IpcError::AgentQueueFull { command } => write!(f, "{command}: the agent queue is full"),
+            IpcError::AgentTurnUnknown { command } => write!(f, "{command}: no such agent turn"),
+            IpcError::AgentSessionUnavailable { command } => {
+                write!(f, "{command}: the agent session is not available")
+            }
+            IpcError::AgentRateLimited { command } => {
+                write!(f, "{command}: too many agent turns a minute")
+            }
+            IpcError::AgentProfileUnsupported { command } => {
+                write!(f, "{command}: the agent profile is not a U2M profile")
+            }
+            IpcError::AgentSignedOut { command } => {
+                write!(f, "{command}: the agent profile is signed out")
+            }
+            IpcError::AgentNotEligible { command } => write!(
+                f,
+                "{command}: the orchestrator model is not set or not served"
+            ),
+            IpcError::AgentOffline { command } => {
+                write!(f, "{command}: the agent turn ended offline")
+            }
+            IpcError::AgentTimeout { command } => write!(f, "{command}: the agent turn timed out"),
+            IpcError::AgentFailed { command } => write!(f, "{command}: the agent turn failed"),
+            IpcError::AgentRefusals { command } => {
+                write!(f, "{command}: the agent turn ended after repeated refusals")
             }
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
@@ -927,16 +1017,40 @@ args!(
 );
 args!(
     /// `workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and
-    /// the D9 agent endpoint name.
+    /// the D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and "Clean up dictation".
     WorkspaceSettingsWriteArgs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cross_workspace_data: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_endpoint: Option<crate::types::EndpointName>,
+        agent_endpoint: Option<crate::types::OrchestratorModel>,
+        /// ADR 0122: "Clean up dictation".
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "bool")]
+        clean_dictation: Option<bool>,
+        /// ADR 0123: "Dictation engine: Databricks".
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "bool")]
+        cloud_dictation: Option<bool>,
     }
 );
+
+/// A field that may be absent (no change) or a bool. `null` and every other type are refused.
+fn present_bool<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(d).map(Some)
+}
 args!(ProfileLoginArgs {
     /// The workspace that `databricks auth login --host` opens. Not a request target.
     workspace_url: String,
@@ -1014,6 +1128,9 @@ args!(SttTranscribeArgs {
 args!(InsertTextArgs {
     mog_id: MogId,
     text: String,
+    // ADR 0118 (UX slice 2): the capture lease of the hold. Rust pastes only into the app
+    // that had the focus when that lease was granted; else `target_changed`.
+    lease_id: LeaseRef,
 });
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1313,7 +1430,7 @@ args!(
     }
 );
 args!(
-    /// `recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.
+    /// `recording_detail`, `recording_retry` and `recording_delete` (ADR 0103). `profile`: the home profile.
     RecordingIdArgs {
         profile: ProfileName,
         id: crate::types::RecordingId,
@@ -1343,6 +1460,191 @@ args!(
     LinkOpenArgs {
         profile: ProfileName,
         url: String,
+    }
+);
+
+// ---------- the ask loop (ADR 0122) ----------
+
+/// A string with a fixed wire rule, also stated in the JSON Schema. `check` is the rule.
+macro_rules! checked_string {
+    ($(#[$m:meta])* $name:ident, $schema:tt, $check:expr) => {
+        $(#[$m])*
+        #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+
+        impl JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> Schema {
+                schemars::json_schema!($schema)
+            }
+        }
+
+        impl $name {
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = &'static str;
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                let ok: fn(&str) -> bool = $check;
+                if ok(&s) {
+                    Ok($name(s))
+                } else {
+                    Err(concat!("not a valid ", stringify!($name)))
+                }
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> String {
+                v.0
+            }
+        }
+    };
+}
+
+/// The wire rule of an agent turn ID and an agent session ID.
+pub const AGENT_ID_PATTERN: &str = "^[0-9a-f]{32}$";
+/// The wire rule of an agent Genie call ID.
+pub const AGENT_CALL_ID_PATTERN: &str = "^c-[0-9a-f]{8}$";
+/// The most characters of one agent question.
+pub const AGENT_QUESTION_MAX_CHARS: usize = 1000;
+/// The most characters of an `opId`.
+pub const AGENT_OP_ID_MAX_CHARS: usize = 64;
+
+fn is_lower_hex(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+checked_string!(
+    #[derive(Debug)]
+    /// A turn ID or a session ID of the agent: 32 lowercase hex characters.
+    AgentId,
+    { "type": "string", "pattern": AGENT_ID_PATTERN },
+    |s| s.len() == 32 && is_lower_hex(s)
+);
+checked_string!(
+    #[derive(Debug)]
+    /// An agent Genie call ID: `c-` and 8 lowercase hex characters.
+    AgentCallId,
+    { "type": "string", "pattern": AGENT_CALL_ID_PATTERN },
+    |s| s.strip_prefix("c-").is_some_and(|h| h.len() == 8 && is_lower_hex(h))
+);
+checked_string!(
+    /// The question of one agent turn: 1 to 1,000 Unicode code points. The minimum is checked
+    /// after trimming the white space at both ends. User content.
+    AgentQuestion,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_QUESTION_MAX_CHARS },
+    |s| s.chars().count() <= AGENT_QUESTION_MAX_CHARS && !s.trim().is_empty()
+);
+
+/// The most characters of an action ticket (a UUID v4, `action_ticket::new_ticket_id`).
+pub const AGENT_ACTION_TICKET_MAX_CHARS: usize = 36;
+
+checked_string!(
+    /// A host-minted action ticket: 1 to 36 characters (a UUID v4).
+    #[derive(Debug)]
+    AgentActionTicket,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_ACTION_TICKET_MAX_CHARS },
+    |s| (1..=AGENT_ACTION_TICKET_MAX_CHARS).contains(&s.chars().count())
+);
+checked_string!(
+    #[derive(Debug)]
+    /// The operation ID of one agent turn: 1 to 64 characters.
+    AgentOpId,
+    { "type": "string", "minLength": 1, "maxLength": AGENT_OP_ID_MAX_CHARS },
+    |s| (1..=AGENT_OP_ID_MAX_CHARS).contains(&s.chars().count())
+);
+
+impl std::fmt::Debug for AgentQuestion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "AgentQuestion(<redacted {} chars>)",
+            self.0.chars().count()
+        )
+    }
+}
+
+/// How the user asked: a new question, or a follow-up in the open session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAskMode {
+    Ask,
+    FollowUp,
+}
+
+args!(
+    /// `orchestrator_status` (ADR 0122). `recheck` clears the cached state.
+    OrchestratorStatusArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recheck: Option<bool>,
+    }
+);
+
+/// `agent_turn_submit`. It needs the talk-key latch or an Ask ticket. `question` is user
+/// content: the `Debug` output redacts it (SEC-16c).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentTurnSubmitArgs {
+    pub mog_id: MogId,
+    pub op_id: AgentOpId,
+    pub question: AgentQuestion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentAskMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_ticket: Option<AgentActionTicket>,
+}
+
+impl std::fmt::Debug for AgentTurnSubmitArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnSubmitArgs")
+            .field("mog_id", &self.mog_id)
+            .field("mode", &self.mode)
+            .field(
+                "question",
+                &format_args!(
+                    "<redacted {} chars>",
+                    self.question.as_str().chars().count()
+                ),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+args!(
+    /// `agent_turn_stop`: a live turn is interrupted, a queued turn is removed.
+    AgentTurnStopArgs { turn_id: AgentId }
+);
+args!(
+    /// `agent_turn_call`: the question and the reply of one Genie call.
+    AgentTurnCallArgs {
+        turn_id: AgentId,
+        call_id: AgentCallId,
+    }
+);
+args!(
+    /// `agent_turn_result`.
+    AgentTurnResultArgs { turn_id: AgentId }
+);
+
+/// Why the brain ends the session. Rust ends it itself on quit, Wipe and a setting change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionEndRequest {
+    // The New session button.
+    NewSession,
+}
+args!(
+    /// `agent_session_end`.
+    AgentSessionEndArgs {
+        reason: AgentSessionEndRequest
     }
 );
 
@@ -1402,6 +1704,14 @@ macro_rules! for_command {
             "workspace_set_available" => Some($f::<WorkspaceSetAvailableArgs>()),
             "workspace_make_home" => Some($f::<WorkspaceMakeHomeArgs>()),
             "workspace_settings_write" => Some($f::<WorkspaceSettingsWriteArgs>()),
+            "orchestrator_models" => Some($f::<NoArgs>()),
+            "orchestrator_status" => Some($f::<OrchestratorStatusArgs>()),
+            "agent_turn_submit" => Some($f::<AgentTurnSubmitArgs>()),
+            "agent_turn_stop" => Some($f::<AgentTurnStopArgs>()),
+            "agent_turn_call" => Some($f::<AgentTurnCallArgs>()),
+            "agent_turn_result" => Some($f::<AgentTurnResultArgs>()),
+            "agent_session_state" => Some($f::<NoArgs>()),
+            "agent_session_end" => Some($f::<AgentSessionEndArgs>()),
             "profile_login" => Some($f::<ProfileLoginArgs>()),
             "profile_select" => Some($f::<ProfileSelectArgs>()),
             "capture_start" => Some($f::<CaptureStartArgs>()),
@@ -1443,7 +1753,9 @@ macro_rules! for_command {
             "recording_volume_create" => Some($f::<RecordingVolumeCreateArgs>()),
             "recording_start" => Some($f::<RecordingStartArgs>()),
             "recording_list" => Some($f::<RecordingListArgs>()),
-            "recording_detail" | "recording_retry" => Some($f::<RecordingIdArgs>()),
+            "recording_detail" | "recording_retry" | "recording_delete" => {
+                Some($f::<RecordingIdArgs>())
+            }
             "recording_open" => Some($f::<RecordingOpenArgs>()),
             "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => Some($f::<NoArgs>()),
             "stt_model_consent" => Some($f::<SttModelConsentArgs>()),

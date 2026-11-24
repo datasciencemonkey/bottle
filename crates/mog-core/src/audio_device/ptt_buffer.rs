@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use super::normalize::normalize_peak;
 use super::sink::{FrameSink, MicFrame, SinkEvent};
 use crate::capture::{
-    parse_lease, CaptureEvents, LeaseNo, StopReason, Stopped, HANDS_FREE_MAX_MS, HOLD_MAX_MS,
+    parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped, HANDS_FREE_MAX_MS, HOLD_MAX_MS,
 };
 use crate::types::{CaptureMode, CaptureState, MogId};
 
@@ -321,6 +321,9 @@ struct State {
     current: Option<LeaseNo>,
     takes: Vec<Take>,
     ended: VecDeque<LeaseNo>,
+    /// The PTT overlay lease on a session lease (ADR 0118). `capture.state` shows the session
+    /// lease while it lives, so the internal `overlay_granted` hook sets this.
+    overlay: Option<LeaseNo>,
 }
 
 struct Shared {
@@ -375,6 +378,22 @@ impl PttBuffer {
     /// Follow one `capture.state`: a PTT or hands-free lease that records and is not paused
     /// takes the frames. Any other state takes none.
     pub fn on_state(&self, state: &CaptureState) {
+        {
+            // A directed PTT in a session (ADR 0118): the state shows the session lease, and
+            // the overlay lease keeps taking frames.
+            let mut st = self.lock();
+            if let Some(o) = st.overlay {
+                if state.mode == Some(CaptureMode::Session)
+                    && state.directed_to.is_some()
+                    && state.recording
+                    && !st.ended.contains(&o)
+                {
+                    st.current = Some(o);
+                    return;
+                }
+                st.overlay = None;
+            }
+        }
         let lease = state.lease_id.as_deref().and_then(|w| parse_lease(w).ok());
         let mode = state
             .mode
@@ -402,12 +421,37 @@ impl PttBuffer {
         drop(evicted);
     }
 
+    /// Follow an overlay PTT granted on a session lease: it takes a take of its own, and its
+    /// segments carry its own lease ID (ADR 0118).
+    pub fn on_overlay(&self, lease: &Lease) {
+        let mut evicted = None;
+        {
+            let mut st = self.lock();
+            if st.ended.contains(&lease.id) {
+                return;
+            }
+            if !st.takes.iter().any(|t| t.lease == lease.id) {
+                if st.takes.len() >= MAX_TAKES {
+                    evicted = Some(st.takes.remove(0));
+                }
+                st.takes
+                    .push(Take::new(lease.id, lease.mog_id.clone(), CaptureMode::Ptt));
+            }
+            st.overlay = Some(lease.id);
+            st.current = Some(lease.id);
+        }
+        drop(evicted);
+    }
+
     /// Follow one stop: drop the audio, or hand the utterance to the sink.
     pub fn on_stopped(&self, stopped: &Stopped) {
         let take = {
             let mut st = self.lock();
             if st.current == Some(stopped.lease_id) {
                 st.current = None;
+            }
+            if st.overlay == Some(stopped.lease_id) {
+                st.overlay = None;
             }
             if !st.ended.contains(&stopped.lease_id) {
                 if st.ended.len() >= ENDED_MEMORY {
@@ -505,5 +549,10 @@ impl<E: CaptureEvents> CaptureEvents for PttCaptureEvents<E> {
     fn stopped(&self, stopped: &Stopped) {
         self.buffer.on_stopped(stopped);
         self.inner.stopped(stopped);
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        self.buffer.on_overlay(lease);
+        self.inner.overlay_granted(lease);
     }
 }

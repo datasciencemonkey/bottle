@@ -46,7 +46,11 @@ fn ipc_route_ids() -> Vec<String> {
 
 #[test]
 fn sec_06a_unity_gateway_model_routes_carry_the_tags_header() {
-    for route in ["mlflow.chat_completions", "mlflow.embeddings"] {
+    for route in [
+        "mlflow.chat_completions",
+        "mlflow.responses",
+        "mlflow.embeddings",
+    ] {
         assert_eq!(
             route_call_kind(route),
             Some(CallKind::UnityGateway),
@@ -79,8 +83,8 @@ fn sec_06b_the_route_map_is_fixed_and_has_no_duplicates() {
     seen.sort();
     seen.dedup();
     assert_eq!(seen.len(), n, "duplicate route ID in ROUTES");
-    // Only the IPC routes and the two Unity Gateway model routes.
-    assert_eq!(n, ipc_route_ids().len() + 2);
+    // Only the IPC routes and the three Unity Gateway model routes (ADR 0122 adds responses).
+    assert_eq!(n, ipc_route_ids().len() + 3);
 }
 
 #[test]

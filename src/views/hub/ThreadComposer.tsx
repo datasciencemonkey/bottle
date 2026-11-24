@@ -27,6 +27,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ASKING_GENIE, timerText } from '../../shared/genie-status';
+import { HUB_SCOPE, type HubAgentView } from '../../shared/hub-agent';
 import {
   asThreadAccess,
   asThreadStatus,
@@ -38,6 +39,8 @@ import {
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { emitView } from '../view-ipc';
+import { notReadyText, QUEUE_LIMIT } from './AgentThread';
+import { useHubOrchestrator } from './use-hub-orchestrator';
 
 /**
  * A half-typed question for each thread, kept in memory only (never saved): the composer
@@ -50,6 +53,9 @@ const MAX_FIELD_PX = 136;
 
 /** The inline line when the view itself cannot reach the brain (a fixed Bottle text). */
 const SEND_FAILED = 'Bottle could not send this question.';
+/** The most characters of one agent question (`asAgentThreadSendAction`). */
+const QUESTION_MAX = 1000;
+const QUESTION_TOO_LONG = 'A question can have up to 1000 characters.';
 
 /** Appendix-style hint under the field: the voice route into this same thread (item 4). */
 const VOICE_HINT = 'Or hold Right Option and tap G';
@@ -312,7 +318,7 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
             drafts.set(conversationId, e.target.value);
           }}
           onKeyDown={onKeyDown}
-          placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up…'}
+          placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up'}
           aria-label="Ask a follow-up in this conversation"
           readOnly={sending}
           disabled={blocked}
@@ -320,6 +326,171 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
           rows={1}
         />
         <Button type="submit" disabled={sending || blocked || text.trim() === ''}>
+          Send
+        </Button>
+      </form>
+      <p className="thread-composer-hint mt-2 text-xs text-muted-foreground">{VOICE_HINT}</p>
+    </div>
+  );
+}
+
+/** The inline line when the queue is full. */
+export const queueFullText = (n: number) => `${n} questions are waiting. Send this when one lands.`;
+
+function announceAgent(threadId: string | undefined): void {
+  const payload = threadId
+    ? { action: 'thread.active_agent' as const, threadId }
+    : { action: 'thread.inactive' as const };
+  void emitView(CONVERSATIONS_VIEW_ID, 'click', payload).catch(() => undefined);
+}
+
+export interface AgentComposerProps {
+  threadId: string;
+  /** The MOG the follow-up goes to. Undefined until the Hub knows it: Send stays off. */
+  mogId: string | undefined;
+  agent: HubAgentView | undefined;
+}
+
+/**
+ * The composer of an agent thread: "Ask a follow-up". Send sends `agent.thread_send` for this
+ * thread (the reply of a live turn or a queued turn is the brain's call). While the hub has focus
+ * on it, a ⌥G is a follow-up in this thread (`thread.active_agent`). With the orchestrator model not ready
+ * it shows why, with Open Settings. With a full queue it keeps the text and turns Send off.
+ */
+export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
+  const key = `agent:${threadId}`;
+  const [text, setText] = useState(() => drafts.get(key) ?? '');
+  const [failed, setFailed] = useState(false);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const orchestrator = useHubOrchestrator();
+  const waiting = agent?.waiting.length ?? 0;
+  const full = waiting >= QUEUE_LIMIT;
+
+  useEffect(() => {
+    let focused = document.hasFocus();
+    const announce = () => announceAgent(focused ? threadId : undefined);
+    const onFocus = () => {
+      focused = true;
+      announce();
+    };
+    const onBlur = () => {
+      focused = false;
+      announce();
+    };
+    announce();
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      announceAgent(undefined);
+    };
+  }, [threadId]);
+
+  useEffect(() => {
+    const el = fieldRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
+  }, [text]);
+
+  if (agent !== undefined && orchestrator?.state !== undefined && orchestrator.state !== 'ready') {
+    return (
+      <div className="thread-composer max-w-[68ch]" data-agent-composer="not-ready">
+        <p className="thread-composer-signin mb-2 text-sm text-muted-foreground" role="status">
+          {notReadyText(orchestrator.state, orchestrator.homeName)}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-agent-open-settings
+          onClick={() =>
+            void emitView(HUB_SCOPE, 'click', { action: 'agent.open_settings' }).catch(
+              () => undefined,
+            )
+          }
+        >
+          Open Settings
+        </Button>
+      </div>
+    );
+  }
+
+  const blocked = full || mogId === undefined;
+  const send = () => {
+    const question = text.trim();
+    if (question === '' || blocked || mogId === undefined) return;
+    setFailed(false);
+    setText('');
+    drafts.delete(key);
+    void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+      action: 'agent.thread_send',
+      threadId,
+      mogId,
+      question,
+    }).catch(() => {
+      // The question comes back into the field, so nothing typed is lost.
+      setText(question);
+      drafts.set(key, question);
+      setFailed(true);
+    });
+  };
+
+  return (
+    <div className="thread-composer max-w-[68ch]" data-agent-composer="ready">
+      {full && (
+        <p
+          className="thread-composer-status mb-2 text-sm text-muted-foreground"
+          role="status"
+          data-agent-queue-full
+        >
+          {queueFullText(waiting)}
+        </p>
+      )}
+      {failed && (
+        <p className="thread-composer-error mb-2 text-sm text-destructive" role="alert">
+          {SEND_FAILED}
+        </p>
+      )}
+      {text.length >= QUESTION_MAX && (
+        <p
+          className="thread-composer-status mb-2 text-sm text-muted-foreground"
+          role="status"
+          data-agent-too-long
+        >
+          {QUESTION_TOO_LONG}
+        </p>
+      )}
+      <form
+        className="thread-composer-row flex items-end gap-2"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          send();
+        }}
+      >
+        <Textarea
+          className="thread-composer-field flex-1 overflow-y-auto"
+          value={text}
+          ref={fieldRef}
+          // The brain refuses a question over 1000 characters: the field stops at the limit.
+          maxLength={QUESTION_MAX}
+          onChange={(e) => {
+            setText(e.target.value);
+            drafts.set(key, e.target.value);
+          }}
+          onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder="Ask a follow-up"
+          aria-label="Ask a follow-up in this conversation"
+          rows={1}
+        />
+        <Button type="submit" disabled={blocked || text.trim() === ''}>
           Send
         </Button>
       </form>

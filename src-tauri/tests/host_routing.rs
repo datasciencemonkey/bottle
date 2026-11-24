@@ -21,6 +21,7 @@ use mog_core::keyboard_env::EnvReads;
 use mog_core::recording::{MemorySettingsStore as RecordingMemoryStore, RecordingComponent};
 use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // ---------- fakes ----------
@@ -362,6 +363,8 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "capture_resume"
                         | "insert_text"
                         | "mcp_call"
+                        // ADR 0122: a blocking HTTPS call to the AI Gateway.
+                        | "model_invoke"
                         // #307: R16 can spawn, wait for its lock or reap the runtime.
                         | "agent_start"
                         | "agent_stop"
@@ -380,6 +383,15 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "workspace_list"
                         | "workspace_set_available"
                         | "workspace_make_home"
+                        // ADR 0122: the orchestrator status and the ask loop.
+                        | "orchestrator_models"
+                        | "orchestrator_status"
+                        | "agent_turn_submit"
+                        | "agent_turn_stop"
+                        | "agent_turn_call"
+                        | "agent_turn_result"
+                        | "agent_session_state"
+                        | "agent_session_end"
                         // #413, #45: the install can download 487 MB before it checks hashes.
                         | "stt_model_install"
                         // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -410,7 +422,8 @@ fn mog_06a_insert_text_goes_to_the_paste_component() {
     let insert = FakeInsert::default();
     let mut c = comps("brain", &brain, None, None);
     c.insert = Some(&insert);
-    let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "a\nb"});
+    let args =
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "a\nb", "leaseId": "1"});
     assert_eq!(
         route(c, "insert_text", args.clone()),
         Ok(json!({"result": "inserted"}))
@@ -427,7 +440,7 @@ fn mog_06a_insert_text_without_a_paste_host_is_host_failed() {
     let got = route(
         comps("brain", &brain, None, None),
         "insert_text",
-        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x"}),
+        json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "x", "leaseId": "1"}),
     );
     assert_eq!(got, err("host_failed"));
 }
@@ -650,7 +663,7 @@ fn sec_03_every_rejection_is_only_an_error_code() {
         (
             "brain",
             "insert_text",
-            json!({"mogId": "a1", "text": SECRET}),
+            json!({"mogId": "a1", "text": SECRET, "leaseId": "1"}),
         ),
         // a view that speaks for another MOG
         (
@@ -798,6 +811,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "capture_resume"
                     | "insert_text"
                     | "mcp_call"
+                    | "model_invoke"
                     | "agent_start"
                     | "agent_stop"
                     | "agent_send"
@@ -811,6 +825,14 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "workspace_list"
                     | "workspace_set_available"
                     | "workspace_make_home"
+                    | "orchestrator_models"
+                    | "orchestrator_status"
+                    | "agent_turn_submit"
+                    | "agent_turn_stop"
+                    | "agent_turn_call"
+                    | "agent_turn_result"
+                    | "agent_session_state"
+                    | "agent_session_end"
                     | "stt_model_install"
                     | "stt_model_verify"
             );
@@ -1573,6 +1595,92 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// ADR 0122: the eight `orchestrator_*`, `agent_turn_*` and `agent_session_*` commands reach the
+/// agent session component from the brain only. With no component they answer `host_failed`, and
+/// the real component answers `host_failed` too until `install` fills it.
+#[test]
+fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
+    let id = "0123456789abcdef0123456789abcdef";
+    let rows = [
+        ("orchestrator_models", json!({})),
+        ("orchestrator_status", json!({"recheck": true})),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
+        ),
+        ("agent_turn_stop", json!({"turnId": id})),
+        (
+            "agent_turn_call",
+            json!({"turnId": id, "callId": "c-0123abcd"}),
+        ),
+        ("agent_turn_result", json!({"turnId": id})),
+        ("agent_session_state", json!({})),
+        ("agent_session_end", json!({"reason": "new_session"})),
+    ];
+    // The real component, before `install` fills it, answers `host_failed` (it is managed from
+    // the start, so a command never finds no component).
+    let empty = bottle_lib::agent_session_host::AgentSessionHost::default();
+    let stub = mog_core::ipc_gateway::NoComponents;
+    for (command, args) in rows {
+        let brain = FakeBrain::default();
+        let none = HostComponents::none("brain", &brain);
+        assert_eq!(
+            route(none, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_empty = HostComponents {
+            agent_session: Some(&empty),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_empty, command, args.clone()),
+            err("host_failed"),
+            "{command}"
+        );
+        let brain = FakeBrain::default();
+        let with_stub = HostComponents {
+            agent_session: Some(&stub),
+            ..HostComponents::none("brain", &brain)
+        };
+        assert_eq!(
+            route(with_stub, command, args.clone()),
+            err("not_implemented"),
+            "{command}"
+        );
+        for label in ["hub", "mog-m1", "card-m1"] {
+            let brain = FakeBrain::default();
+            let other = HostComponents {
+                agent_session: Some(&stub),
+                ..HostComponents::none(label, &brain)
+            };
+            assert_eq!(
+                route(other, command, args.clone()),
+                err("window_not_allowed"),
+                "{command} from {label}"
+            );
+        }
+    }
+}
+
+/// Slice 2a: the commands that wait on a process or the network leave the main thread.
+#[test]
+fn slice_2a_agent_commands_run_off_the_main_thread() {
+    for c in [
+        "orchestrator_models",
+        "orchestrator_status",
+        "agent_turn_submit",
+        "agent_turn_stop",
+        "agent_turn_call",
+        "agent_turn_result",
+        "agent_session_state",
+        "agent_session_end",
+    ] {
+        assert!(runs_off_main_thread(c), "{c}");
+    }
+}
+
 /// A fake T7 with one supported profile `p`.
 struct OneProfile;
 
@@ -1586,4 +1694,77 @@ impl mog_core::workspaces::ProfileSource for OneProfile {
             workspace_id: None,
         }])
     }
+}
+
+// ---------- model_invoke (ADR 0122, RTR-20a, SEC-02a) ----------
+
+/// A fake `model_invoke` component: it counts calls and answers with a fixed reply.
+#[derive(Default)]
+struct FakeModel {
+    calls: AtomicUsize,
+}
+
+impl GatewayComponents for FakeModel {
+    fn call(&self, command: &'static str, _args: Value) -> CoreResult<Value> {
+        assert_eq!(command, "model_invoke");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({"json": {"choices": []}}))
+    }
+}
+
+fn model_args() -> Value {
+    json!({
+        "role": "router",
+        "profile": "home",
+        "request": {"messages": [{"role": "user", "content": "hi"}]},
+        "tags": {"app": "bottle", "mog": "mog-1", "op": "router"},
+    })
+}
+
+fn model_route(
+    from: &str,
+    model: Option<&dyn GatewayComponents>,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    route(
+        HostComponents {
+            model,
+            ..HostComponents::none(from, &brain)
+        },
+        "model_invoke",
+        args,
+    )
+}
+
+#[test]
+fn adr_0122_model_invoke_reaches_the_component_for_the_brain_only() {
+    let fake = FakeModel::default();
+    assert_eq!(
+        model_route("brain", Some(&fake), model_args()),
+        Ok(json!({"json": {"choices": []}}))
+    );
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert_eq!(
+            model_route(label, Some(&fake), model_args()),
+            err("window_not_allowed"),
+            "{label}"
+        );
+    }
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn adr_0122_model_invoke_without_a_component_is_host_failed() {
+    assert_eq!(model_route("brain", None, model_args()), err("host_failed"));
+}
+
+#[test]
+fn rtr_20a_model_invoke_with_tools_never_reaches_the_component() {
+    let fake = FakeModel::default();
+    let mut a = model_args();
+    a["request"]["tools"] = json!([{"type": "function", "name": "x"}]);
+    assert_eq!(model_route("brain", Some(&fake), a), err("invalid_args"));
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
 }

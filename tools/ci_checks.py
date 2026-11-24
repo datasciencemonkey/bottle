@@ -11,7 +11,7 @@ Each check prints PASS or FAIL. The script exits non-zero if any check fails.
   gates       no release gate is reported as a pass without evidence (AT-22, scripts/check_gate_evidence.py)
   brandapproval brand approval record and mascot art checks; pending approval is "not passed" and
               only blocks --external (SEC-22a/b, COL-104, scripts/check_brand_gate.py)
-  names       no former name in UI text or metadata, the Labs label in the hub and About, no MOG in
+  names       no former name in UI text or metadata, the experimental label in the hub and About, no MOG in
               package or bundle IDs, and MOG only as a noun in UI text (MB-10a/b/c, AT-37, ADR 0030)
   structure   no junk, secrets, binaries or local tool state is committed; no file over 2 MB;
               every top-level entry is on the layout list; ADR numbers are unique; every
@@ -239,14 +239,14 @@ def check_brandapproval():
 # This check runs in the repo-checks workflow today. The pnpm test
 # `src/acceptance/at-37-naming.test.tsx` holds the same rules and also renders the views.
 # The patterns are built from parts, so this file holds no banned name.
-LABS_LABEL = "Databricks Labs / experimental"
-LABS_TITLE = f"Bottle ({LABS_LABEL})"
+EXPERIMENTAL_LABEL = "experimental"
+EXPERIMENTAL_TITLE = f"Bottle ({EXPERIMENTAL_LABEL})"
 BUNDLE_ID = "com.databricks.bottle"
 SEP = r"(?:[\s_-]|&nbsp;|&#160;|&#x0*a0;|&#32;)*"
 BANNED_NAME = re.compile("mo" + "ther" + SEP + "bri" + "cks", re.IGNORECASE)
 JSX_TEXT = re.compile(r">([^<>{}()=;]+)[<{]")
 UI_ATTR = re.compile(r'\b(?:aria-label|title|alt|placeholder)="([^"]*)"')
-LABS_VIEWS = ("src/views/hub/Hub.tsx", "src/views/hub/About.tsx")
+EXPERIMENTAL_VIEWS = ("src/views/hub/Hub.tsx", "src/views/hub/About.tsx")
 MOG_NOUN = re.compile(r"(?<![\w./:<>-])mogs?(?![\w/:<>-]|\.\w)", re.IGNORECASE)
 VIEW_PAGES = ("hub.html", "mog.html", "card.html", "brain.html")
 NAME_FILES = VIEW_PAGES + ("package.json", "Cargo.toml", "THIRD_PARTY_NOTICES.md",
@@ -291,15 +291,24 @@ def naming_problems(root):
         m = re.search(r"<title>(.*?)</title>", texts.get(rel, ""), re.IGNORECASE | re.DOTALL)
         if m:
             titles[rel] = m.group(1).strip()
-    if titles.get("hub.html") != LABS_TITLE:
-        problems.append(f"hub.html: the page title must be {LABS_TITLE!r} (Labs label, MB-10b)")
+    if titles.get("hub.html") != EXPERIMENTAL_TITLE:
+        problems.append(
+            f"hub.html: the page title must be {EXPERIMENTAL_TITLE!r} "
+            f"(experimental label, MB-10b)")
     windows = texts.get("src-tauri/src/windows.rs", "")
     window_titles = re.findall(r'\btitle:\s*"([^"]*)"', windows)
-    if LABS_TITLE not in window_titles:
-        problems.append(f"src-tauri/src/windows.rs: the hub title must be {LABS_TITLE!r} (Labs label, MB-10b)")
-    for rel in LABS_VIEWS:
-        if LABS_LABEL not in texts.get(rel, ""):
-            problems.append(f"{rel}: the view must show {LABS_LABEL!r} (Labs label, MB-10b)")
+    if EXPERIMENTAL_TITLE not in window_titles:
+        problems.append(
+            f"src-tauri/src/windows.rs: the hub title must be {EXPERIMENTAL_TITLE!r} "
+            f"(experimental label, MB-10b)")
+    for rel in EXPERIMENTAL_VIEWS:
+        # A plain substring test would pass if the label only sat in a comment (review finding).
+        # The label must render: a JSX text node, trimmed, equal to the label.
+        jsx_texts = [t.strip() for t in JSX_TEXT.findall(texts.get(rel, ""))]
+        if EXPERIMENTAL_LABEL not in jsx_texts:
+            problems.append(
+                f"{rel}: the view must show {EXPERIMENTAL_LABEL!r} as rendered text "
+                f"(experimental label, MB-10b)")
     problems += id_problems(texts)
     nouns = [(f"{rel} <title>", t) for rel, t in titles.items()]
     nouns += [(rel, t) for rel, t in descriptions(texts)]
@@ -354,7 +363,7 @@ def id_problems(texts):
 def check_names():
     problems = naming_problems(ROOT)
     return (not problems), ("\n".join(problems) if problems
-                            else "former names, Labs label, IDs and the MOG noun hold in UI text and metadata")
+                            else "former names, experimental label, IDs and the MOG noun hold in UI text and metadata")
 
 
 CHECKS = {"compile": check_compile, "html": check_html, "mascot": check_mascot,

@@ -1,0 +1,515 @@
+/* Home (the launch screen, Home.tsx): a small stage. The lamp mascot from its art layers, the
+   wordmark, the two keys and the punchline at the bottom edge. Every colour is a token from
+   ../tokens.css (no hex here, like hub.css); the one sampled value is the screen colour of the
+   art behind the eyes, for the blink lids (the same value as `.eyelids` in ../mog/mog.css).
+
+   Motion: Home.tsx plays the entrance (Motion `animate`) while `data-phase="intro"`; this file
+   holds the idle loops, which run only in `data-phase="idle"`, never with reduced motion, and
+   pause under `data-paused` (Home hidden, or the window not visible). Only transform and opacity
+   move. Each moving thing has its own box per job (entrance, idle loop, pointer depth), so a
+   Motion inline transform and a CSS loop never fight over one `transform`.
+
+   In the hub-legacy layer, like hub.css (see its top comment for the layer order). */
+@layer hub-legacy {
+  /* The section fills the content column, so the stage centres in the free space at any window
+     size. `overflow-x: clip`: the backdrop is wider than a narrow column and must never add a
+     scroll bar; it may spill upward into the free space under the header. */
+  .hub [data-hub-view='home'] {
+    --home-art: clamp(180px, 40vh, 320px);
+    --home-screen: rgb(24 45 52);
+
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    min-height: 20rem;
+    padding-right: var(--mog-space-6);
+    overflow-x: clip;
+  }
+
+  .hub [data-hub-view='home'][hidden] {
+    display: none;
+  }
+
+  .hub-home-stage {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-bottom: var(--mog-space-5);
+  }
+
+  /* The art box is the 400 px art square less its empty top (the layers start at about 25%), so
+     the wordmark sits close under the lamp. The depth boxes keep the full square, bottom-aligned,
+     and overflow upward into the free space. */
+  .home-art {
+    position: relative;
+    width: var(--home-art);
+    height: calc(var(--home-art) * 0.78);
+    flex: none;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .home-depth {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: var(--home-art);
+    height: var(--home-art);
+  }
+
+  .home-layer,
+  .home-lids {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* The backdrop: soft rays, a warm glow round the head and a few specks. Centred on the lamp
+     mouth, about two art widths across; the rays fade out well inside it, so no edge shows. */
+  .home-backdrop {
+    position: absolute;
+    left: calc(50% - var(--home-art) * 0.95);
+    top: calc(60% - var(--home-art) * 0.95);
+    width: calc(var(--home-art) * 1.9);
+    height: calc(var(--home-art) * 1.9);
+  }
+
+  .home-rays {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: repeating-conic-gradient(
+      from 0deg,
+      color-mix(in srgb, var(--mog-spark) 9%, transparent) 0deg 6deg,
+      transparent 6deg 22.5deg
+    );
+    /* Round, and faded out before the top of the art box, so the rays never meet an edge. */
+    mask-image:
+      radial-gradient(closest-side, black 22%, transparent 70%),
+      linear-gradient(180deg, transparent 10%, black 32%);
+    mask-composite: intersect;
+    opacity: 0.75;
+  }
+
+  .home-glow {
+    position: absolute;
+    left: 22%;
+    top: 20%;
+    width: 56%;
+    height: 56%;
+    border-radius: 50%;
+    background: radial-gradient(
+      closest-side,
+      color-mix(in srgb, var(--mog-spark) 26%, transparent),
+      color-mix(in srgb, var(--mog-lamp) 12%, transparent) 48%,
+      transparent 100%
+    );
+    opacity: 0.8;
+  }
+
+  .home-speck {
+    position: absolute;
+    width: var(--speck-size);
+    height: var(--speck-size);
+    border-radius: 50%;
+    background: var(--mog-spark);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--mog-spark) 60%, transparent);
+    opacity: 0.55;
+  }
+
+  .home-speck[data-tint='eye'] {
+    background: var(--mog-eye);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--mog-eye) 55%, transparent);
+  }
+
+  /* The lamp. `.home-lamp` takes the entrance; `.home-breathe` the idle breath, anchored at the
+     foot so the base never lifts off its shadow. */
+  .home-lamp,
+  .home-breathe {
+    position: absolute;
+    inset: 0;
+  }
+
+  .home-breathe {
+    transform-origin: 50% 92%;
+  }
+
+  /* The rim clip is fixed; the Genie moves inside it, so it slides behind the rim (as in the MOG). */
+  .home-genie-clip {
+    position: absolute;
+    inset: 0;
+    clip-path: inset(0 0 29% 0);
+  }
+
+  .home-genie,
+  .home-genie-bob {
+    position: absolute;
+    inset: 0;
+  }
+
+  .home-lids {
+    fill: var(--home-screen);
+  }
+
+  .home-lids rect {
+    transform-box: fill-box;
+    transform-origin: 50% 0;
+    transform: scaleY(0);
+  }
+
+  .home-genie-bob[data-blink] .home-lids rect {
+    animation: home-blink 160ms ease-in-out;
+  }
+
+  /* The gold spark over the head: an ignition burst, then the MOG's orbit (four nested boxes,
+     one loop each; the periods do not divide each other, so the pattern never repeats exactly). */
+  .home-spark-anchor {
+    --spark-r: calc(var(--home-art) * 0.055);
+
+    position: absolute;
+    left: 50%;
+    top: 36.5%;
+    width: 0;
+    height: 0;
+  }
+
+  .home-burst {
+    position: absolute;
+    left: calc(var(--home-art) * -0.11);
+    top: calc(var(--home-art) * -0.11);
+    display: block;
+    width: calc(var(--home-art) * 0.22);
+    height: calc(var(--home-art) * 0.22);
+    box-sizing: border-box;
+    border: 2px solid color-mix(in srgb, var(--mog-spark) 75%, transparent);
+    border-radius: 50%;
+    opacity: 0;
+  }
+
+  .home-spark,
+  .home-spark-orbit,
+  .home-spark-arm,
+  .home-spark-turn {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .home-spark-arm {
+    transform: translateX(var(--spark-r));
+  }
+
+  .home-spark-star {
+    position: absolute;
+    left: calc(var(--home-art) * -0.08);
+    top: calc(var(--home-art) * -0.08);
+    width: calc(var(--home-art) * 0.16);
+    height: calc(var(--home-art) * 0.16);
+    overflow: visible;
+  }
+
+  .home-spark-halo-in {
+    stop-color: var(--mog-spark);
+    stop-opacity: 0.55;
+  }
+
+  .home-spark-halo-out {
+    stop-color: var(--mog-spark);
+    stop-opacity: 0;
+  }
+
+  .home-spark-body {
+    fill: var(--mog-spark);
+  }
+
+  .home-spark-core {
+    fill: color-mix(in srgb, var(--mog-spark) 40%, var(--mog-on-accent));
+  }
+
+  /* The wordmark: each letter rises out of its own mask. The masks keep the line box, so the
+     reveal never moves the text round it. */
+  .hub-home-wordmark {
+    margin: var(--mog-space-2) 0 0;
+    font-size: clamp(2.75rem, 1.5rem + 3.2vw, 4.25rem);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.035em;
+    color: var(--mog-text);
+    cursor: default;
+    user-select: none;
+  }
+
+  .home-letters {
+    display: inline-flex;
+  }
+
+  .home-letter-mask {
+    display: inline-block;
+    padding: 0.06em 0.01em 0.14em;
+    margin-bottom: -0.14em;
+    overflow: clip;
+  }
+
+  .home-letter {
+    display: inline-block;
+    background: linear-gradient(
+      180deg,
+      var(--mog-text) 35%,
+      color-mix(in srgb, var(--mog-lid) 45%, var(--mog-text)) 100%
+    );
+    background-clip: text;
+    color: transparent;
+  }
+
+  .home-rule {
+    display: block;
+    width: 44px;
+    height: 2px;
+    margin: var(--mog-space-4) 0 var(--mog-space-5);
+    border-radius: var(--mog-radius-pill);
+    background: linear-gradient(90deg, transparent, var(--mog-spark), transparent);
+  }
+
+  /* The two keys that run Bottle, as key caps. */
+  .home-hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--mog-space-3) var(--mog-space-6);
+    margin: 0;
+    padding: 0 var(--mog-space-4);
+    list-style: none;
+  }
+
+  .home-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--mog-space-3);
+    font-size: var(--mog-text-md);
+    color: var(--mog-text-muted);
+  }
+
+  .home-keys {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--mog-space-1);
+  }
+
+  .home-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 26px;
+    padding: 0 var(--mog-space-2);
+    box-sizing: border-box;
+    border: 1px solid color-mix(in srgb, var(--mog-text) 16%, transparent);
+    border-radius: calc(var(--mog-radius-sm) + 2px);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--mog-surface-raised) 85%, var(--mog-text)) 0%,
+      var(--mog-surface-raised) 100%
+    );
+    box-shadow:
+      inset 0 -2px 0 color-mix(in srgb, var(--mog-surface) 70%, transparent),
+      0 1px 2px color-mix(in srgb, var(--mog-surface) 80%, transparent);
+    font: inherit;
+    font-size: var(--mog-text-sm);
+    font-weight: var(--mog-weight-medium);
+    line-height: 1;
+    color: var(--mog-text);
+  }
+
+  .home-kbd--square {
+    min-width: 26px;
+    padding: 0;
+  }
+
+  .home-plus {
+    font-size: var(--mog-text-sm);
+    color: var(--mog-text-muted);
+  }
+
+  .hub-home-punchline {
+    margin: 0;
+    padding-bottom: var(--mog-space-2);
+    font-size: var(--mog-text-md);
+    color: var(--mog-text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  /* Before the entrance's first frame: everything it brings in starts hidden, so nothing flashes
+     in its final place. Motion's inline values take over from here. */
+  .hub-home[data-phase='intro']
+    :is(
+      [data-home-backdrop],
+      [data-home-lamp],
+      [data-home-spark],
+      [data-home-letter],
+      [data-home-rule],
+      [data-home-hint],
+      [data-home-punchline]
+    ) {
+    opacity: 0;
+  }
+
+  /* The idle life (paused under `data-paused`, below). Every loop starts from the static frame (the entrance's last frame), so the
+     hand-over from the entrance never jumps. */
+  .hub-home[data-phase='idle'][data-motion='full'] .home-rays {
+    animation: home-turn 90s linear infinite;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-glow {
+    animation: home-pulse 5.2s ease-in-out infinite alternate;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-speck {
+    animation: home-twinkle var(--speck-loop) ease-in-out var(--speck-delay) infinite alternate;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-breathe {
+    animation: home-breathe 4.6s ease-in-out infinite alternate;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-genie-bob {
+    animation: home-bob 7s ease-in-out infinite;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-spark-orbit {
+    animation: home-turn 10s linear infinite;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-spark-arm {
+    animation: home-arm 5.3s ease-in-out infinite alternate;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-spark-turn {
+    animation: home-turn-back 10s linear infinite;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'] .home-spark-star {
+    animation: home-sparkle 2.9s ease-in-out infinite alternate;
+  }
+
+  .hub-home[data-phase='idle'][data-motion='full'][data-paused]
+    :is(
+      .home-rays,
+      .home-glow,
+      .home-speck,
+      .home-breathe,
+      .home-genie-bob,
+      .home-spark-orbit,
+      .home-spark-arm,
+      .home-spark-turn,
+      .home-spark-star
+    ) {
+    animation-play-state: paused;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hub-home * {
+      animation: none !important;
+    }
+  }
+
+  @keyframes home-turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes home-turn-back {
+    to {
+      transform: rotate(-360deg);
+    }
+  }
+
+  @keyframes home-arm {
+    from {
+      transform: translateX(var(--spark-r));
+    }
+
+    to {
+      transform: translateX(calc(var(--spark-r) * 0.7));
+    }
+  }
+
+  @keyframes home-sparkle {
+    from {
+      opacity: 1;
+      transform: scale(1) rotate(0deg);
+    }
+
+    to {
+      opacity: 0.78;
+      transform: scale(0.84) rotate(10deg);
+    }
+  }
+
+  @keyframes home-pulse {
+    from {
+      opacity: 0.8;
+      transform: scale(1);
+    }
+
+    to {
+      opacity: 1;
+      transform: scale(1.07);
+    }
+  }
+
+  @keyframes home-twinkle {
+    from {
+      opacity: 0.55;
+      transform: scale(1);
+    }
+
+    to {
+      opacity: 0.1;
+      transform: scale(0.6);
+    }
+  }
+
+  @keyframes home-breathe {
+    from {
+      transform: scale(1);
+    }
+
+    to {
+      transform: scale(1.018);
+    }
+  }
+
+  @keyframes home-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    25% {
+      transform: translateY(-1%);
+    }
+
+    75% {
+      transform: translateY(1.75%);
+    }
+  }
+
+  @keyframes home-blink {
+    0%,
+    100% {
+      transform: scaleY(0);
+    }
+
+    50% {
+      transform: scaleY(1);
+    }
+  }
+}

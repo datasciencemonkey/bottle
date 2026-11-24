@@ -240,6 +240,31 @@ describe('T4 SttProvider (#52)', () => {
       ).toBe('local_parakeet');
     });
 
+    it('[ADR 0123] a cloud transcript of R4 answers the local request, and nothing else does', async () => {
+      // With the Databricks dictation engine R4 answers `local_parakeet` with `dbx_gemini` text.
+      core.invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'stt_transcribe' ? transcript('dbx_gemini', { text: 'cloud words' }) : {},
+      );
+      const stt = createSttProvider();
+      const t = await stt.transcribe(seg, tags);
+      expect(t.provider).toBe('dbx_gemini');
+      expect(t.text).toBe('cloud words');
+      expect(providers()).toEqual(['local_parakeet']);
+      expect(stt.sttUse(seg.mogId).provider).toBe('dbx_gemini');
+      // An empty cloud text is not valid (cloud text is never empty).
+      core.reset();
+      core.invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'stt_transcribe' ? transcript('dbx_gemini', { text: ' ' }) : {},
+      );
+      await expect(createSttProvider().transcribe(seg, tags)).rejects.toBeInstanceOf(SttFailure);
+      // Whisper text is still not an answer to a local request.
+      core.reset();
+      core.invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'stt_transcribe' ? transcript('dbx_whisper', {}) : {},
+      );
+      await expect(createSttProvider().transcribe(seg, tags)).rejects.toBeInstanceOf(SttFailure);
+    });
+
     it('[CAP-60a] an empty local transcript is a valid "no speech" result, not a failure', async () => {
       useCore({ plans: { local_parakeet: { text: '' } } });
       const t = await createSttProvider({ config: ipcSttConfig(WHISPER_ON) }).transcribe(seg, tags);

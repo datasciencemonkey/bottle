@@ -28,6 +28,7 @@ import {
 } from './components/mood-mapper';
 import type { GeniePhase } from './genie-direct';
 import { EVENTS } from '../shared/ipc';
+import { CALL_ONLY_BADGE } from './components/mog-badges';
 import type { MoodPublisher, Scheduler } from './mood-publisher';
 
 export const REFUSAL_REASONS = [
@@ -60,7 +61,8 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, { text: string; label:
     label: 'Mic not started: allow the mic for Bottle in the system settings',
   },
   no_device: { text: 'No mic found', label: 'Mic not started: connect a microphone' },
-  // ADR 0103: while a recording runs, the talk key does not take the mic.
+  // ADR 0103, ADR 0118: during a recording a hold works (PTT). Hands-free, and any start while the
+  // recording starts or stops, does not take the mic.
   recording_in_progress: {
     text: 'Recording in progress',
     label: 'Mic not started: a call recording uses the mic. Press ⌥R in a hold to stop it',
@@ -128,6 +130,16 @@ export interface CaptureMood {
   callRecording(on: boolean, mogIds?: readonly MogId[]): void;
   /** ADR 0103: the notes of a recording are ready: the answer-ready moment on each known MOG. */
   recordingReady(): void;
+  /**
+   * ADR 0118: a talk-key hold runs (`on`) or ended in `mogId`. While one runs during a call
+   * recording the MOG shows the badge "Call only". Outside a recording it shows nothing.
+   */
+  hold(mogId: MogId, on: boolean): void;
+  /**
+   * ADR 0118: show the note "Your call can still hear you." on `mogId` for a few seconds. The
+   * caller (`recording-wiring.ts`) keeps the once-only rule.
+   */
+  heldNote(mogId: MogId): void;
 }
 
 interface Refusal {
@@ -137,6 +149,12 @@ interface Refusal {
   leaseAtRefusal: string | undefined;
   cancel: () => void;
 }
+
+/** ADR 0118: the note after the first hold in a recording. The call app still hears the user. */
+export const HELD_NOTE_TEXT = 'Your call can still hear you.';
+
+/** ADR 0118: how long the note stays on the MOG. */
+export const HELD_NOTE_MS = 6_000;
 
 /** #573: how long the ⌥G key-up shows `processing` before its request starts. */
 export const PENDING_ASK_MS = 15_000;
@@ -149,6 +167,9 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
   const known = new Set<MogId>();
   const refusals = new Map<MogId, Refusal>();
   const asks = new Map<MogId, { view: RequestView; cancel?: () => void }>();
+  /** ADR 0118: the MOGs whose talk key is held now. */
+  const holds = new Set<MogId>();
+  const notes = new Map<MogId, () => void>();
   let capture: CaptureState = IDLE;
   let callRec = false;
   /** When the last recording notes were ready (the success window of 4.8). */
@@ -160,9 +181,17 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     const a = asks.get(mogId);
     if (a) requests.push(a.view);
     if (readyAt !== undefined) requests.push({ phase: 'completed', at: readyAt });
-    const badges: MogBadgeView[] | undefined = r
-      ? [{ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false }]
-      : undefined;
+    const list: MogBadgeView[] = [];
+    if (r) list.push({ kind: 'capture_refused', ...REFUSAL_TEXT[r.reason], hoverOnly: false });
+    if (callRec && holds.has(mogId)) list.push({ ...CALL_ONLY_BADGE });
+    if (notes.has(mogId))
+      list.push({
+        kind: 'call_note',
+        text: HELD_NOTE_TEXT,
+        label: HELD_NOTE_TEXT,
+        hoverOnly: false,
+      });
+    const badges: MogBadgeView[] | undefined = list.length > 0 ? list : undefined;
     const sources = { mog: READY, capture, requests, ...(callRec ? { callRecording: true } : {}) };
     publisher.update(mogId, sources, undefined, badges);
   };
@@ -251,7 +280,29 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     callRecording(on, mogIds = []) {
       for (const id of mogIds) known.add(id);
       callRec = on;
+      // ADR 0118: a note that waits for its timer must not outlive the recording.
+      if (!on) {
+        for (const cancel of notes.values()) cancel();
+        notes.clear();
+      }
       for (const id of known) publish(id);
+    },
+    hold(mogId, on) {
+      known.add(mogId);
+      if (on) holds.add(mogId);
+      else holds.delete(mogId);
+      publish(mogId);
+    },
+    heldNote(mogId) {
+      known.add(mogId);
+      notes.get(mogId)?.();
+      const cancel = scheduler.at(clock.now() + HELD_NOTE_MS, () => {
+        if (notes.get(mogId) !== cancel) return;
+        notes.delete(mogId);
+        publish(mogId);
+      });
+      notes.set(mogId, cancel);
+      publish(mogId);
     },
     recordingReady() {
       const at = clock.now();

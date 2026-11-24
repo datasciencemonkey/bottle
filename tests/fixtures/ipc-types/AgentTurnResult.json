@@ -1,0 +1,17 @@
+{
+  "answer": "Revenue was 4.2 M.",
+  "answerKind": "note",
+  "sources": [
+    {
+      "workspaceId": "1234567890123456",
+      "callId": "c-0123abcd",
+      "turnId": "0123456789abcdef0123456789abcdef"
+    }
+  ],
+  "usage": {
+    "inputTokens": 15658,
+    "cachedInputTokens": 12000,
+    "outputTokens": 420,
+    "reasoningTokens": 0
+  }
+}

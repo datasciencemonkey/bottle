@@ -664,6 +664,55 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         shown
     }
 
+    /// The MOG window moved (the user dragged the lamp): a card that is on screen goes with it,
+    /// to the same place beside the MOG, keeping its size. This runs on the main thread (a
+    /// window event), so it takes no `op` guard and never builds or waits for a window. If the
+    /// ledger is busy, it skips this step: the next move event comes at once. A card that is
+    /// hidden, absent or closing stays where it is; its next show places it.
+    pub fn follow_mog(&self, mog_id: &str) {
+        let Ok(ledger) = self.ledger.try_lock() else {
+            return;
+        };
+        let state = ledger.card_state(mog_id);
+        drop(ledger);
+        if !card_follows_mog(state) {
+            return;
+        }
+        let Some(kind) = WindowKind::card(mog_id) else {
+            return;
+        };
+        let Some(w) = self.window(&kind) else {
+            return;
+        };
+        let Some(size) = logical_size(&w) else {
+            return;
+        };
+        let Some((at, side)) = self.card_geometry(mog_id, Some(size)) else {
+            return;
+        };
+        // The side goes into the title first, and only when it changes, so the view reads the new
+        // side when the move event comes (`watchCardSide`).
+        if title_changes(w.title().ok().as_deref(), side) {
+            set_side_title(&w, Some(side));
+        }
+        // On macOS the card is a child window of its MOG and has moved with it already.
+        if !same_place(&w, &at) {
+            let _ = move_to(&w, Some(&at));
+        }
+    }
+
+    /// Follow every open MOG once (the end of a lamp drag, so a card always ends in its place).
+    pub fn follow_all(&self) {
+        let Ok(ledger) = self.ledger.try_lock() else {
+            return;
+        };
+        let ids = ledger.open_ids();
+        drop(ledger);
+        for id in ids {
+            self.follow_mog(&id);
+        }
+    }
+
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
     /// monitor. `None` if the MOG window or its geometry is not there.
     /// `kept` is the `(width, height)` of a card that keeps its size (#573); `None` is one line.
@@ -750,6 +799,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
     }
 }
 
+/// True if a card in this state goes with its MOG when the lamp moves: only a card on screen.
+pub fn card_follows_mog(state: Option<CardState>) -> bool {
+    state == Some(CardState::Shown)
+}
+
 /// Tell the card view which side of its MOG it is on, in the window title (`windows::card_title`).
 /// The title is not shown (no decorations); the view reads it, so the card needs no read of the
 /// MOG window. A failed set changes nothing.
@@ -757,6 +811,26 @@ fn set_side_title<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, side: Option<w
     if let Some(side) = side {
         let _ = w.set_title(&windows::card_title(side));
     }
+}
+
+/// True if a window at the physical position `pos` is not at the logical place of `at` yet
+/// (half a logical pixel is the same place). `scale` is the scale factor of its monitor.
+pub fn needs_move(pos: (f64, f64), at: &Geometry, scale: f64) -> bool {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    (pos.0 / scale - at.x).abs() >= 0.5 || (pos.1 / scale - at.y).abs() >= 0.5
+}
+
+/// True if the title of the card window must change to tell the view this `side`.
+pub fn title_changes(old: Option<&str>, side: windows::CardSide) -> bool {
+    old != Some(windows::card_title(side).as_str())
+}
+
+/// True if the window `w` is at the place of `g` already.
+fn same_place<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, g: &Geometry) -> bool {
+    let (Ok(scale), Ok(pos)) = (w.scale_factor(), w.outer_position()) else {
+        return false;
+    };
+    !needs_move((f64::from(pos.x), f64::from(pos.y)), g, scale)
 }
 
 /// The logical `(width, height)` of `w`, if the platform gives it.

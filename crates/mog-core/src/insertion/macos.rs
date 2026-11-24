@@ -17,7 +17,9 @@
 //!
 //! None of these calls needs the main thread, so `insert_text` can run on a worker.
 
-use super::{mac_keys, mac_saved_item, mac_snapshot_is_concealed, Focus, InsertHost, KeyStroke};
+use super::{
+    mac_keys, mac_saved_item, mac_snapshot_is_concealed, AppId, Focus, InsertHost, KeyStroke,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::window_host::{ClipboardBackend, ClipboardPlatform, ClipboardWriter, MacPasteboard};
 use objc2::rc::{autoreleasepool, Retained};
@@ -43,6 +45,7 @@ extern "C" {
     fn AXIsProcessTrusted() -> u8;
     fn AXUIElementCreateSystemWide() -> CFTypeRef;
     fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
+    fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> i32;
     fn AXUIElementCopyAttributeValue(
         element: CFTypeRef,
         attribute: CFTypeRef,
@@ -59,6 +62,9 @@ extern "C" {
     fn IsSecureEventInputEnabled() -> u8;
 }
 
+/// The longest wait for an AX reply. A hung app must not hold the paste or the key hook for the
+/// 6 s default of AX (ADR 0118). A timeout is an AX error: the paste fails closed.
+const AX_TIMEOUT_SECS: f32 = 0.25;
 const AX_SUCCESS: i32 = 0;
 const AX_NO_VALUE: i32 = -25212;
 /// `kAXErrorFailure`.
@@ -112,6 +118,8 @@ fn focused_element() -> Result<Owned, i32> {
     if system.0.is_null() {
         return Err(AX_FAILURE);
     }
+    // SAFETY: `system` is a live system-wide AXUIElement; this sets the process-wide timeout.
+    unsafe { AXUIElementSetMessagingTimeout(system.0, AX_TIMEOUT_SECS) };
     ax_attribute(system.0, "AXFocusedUIElement")
 }
 
@@ -164,6 +172,21 @@ impl<B: ClipboardBackend + Copy> InsertHost for MacInsertHost<B> {
         // SAFETY: `focused` is a live CF object. CFHash agrees with CFEqual for AX elements.
         let hash = unsafe { CFHash(focused.0) } as u64;
         (u64::from(pid as u32) << 32) ^ hash
+    }
+
+    fn focused_app_pid(&self) -> AppId {
+        // ADR 0118: one source, the pid of the system-wide AX focused element, as in the focus
+        // checks. Never `NSWorkspace.frontmostApplication`. An AX error is no app: fail closed.
+        let Ok(focused) = focused_element() else {
+            return AppId::NONE;
+        };
+        let mut pid = 0i32;
+        // SAFETY: `focused` is a live AXUIElement and `pid` an out pointer.
+        let err = unsafe { AXUIElementGetPid(focused.0, &mut pid) };
+        match u32::try_from(pid) {
+            Ok(pid) if err == AX_SUCCESS => AppId::new(pid, 0),
+            _ => AppId::NONE,
+        }
     }
 
     fn snapshot_clipboard(&self) -> CoreResult<MacSnapshot> {

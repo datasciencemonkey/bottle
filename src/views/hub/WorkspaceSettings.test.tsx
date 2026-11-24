@@ -121,6 +121,35 @@ describe('Settings → Workspace', () => {
     );
   });
 
+  // Owner review 2026-11-24: shrink-0 controls beside a squeezed text column cut the host to
+  // "…", pushed "· status" to a second line, and ran past the card's edge in a narrow window.
+  it('[layout] the controls wrap as one group under the text; the host keeps its status line', async () => {
+    const { el } = await mount();
+    const row = li(el, 'old');
+    const line = row.querySelector('[data-workspace-row-line]') as HTMLElement;
+    expect(line.className).toContain('flex-wrap');
+    const text = line.querySelector('[data-workspace-text]') as HTMLElement;
+    // A floor for the text column: below it the controls go to their own line.
+    expect(text.className).toMatch(/flex-\[1_1_15rem\]/);
+    expect(text.className).toContain('min-w-0');
+    const controls = line.querySelector('[data-workspace-controls]') as HTMLElement;
+    expect(controls.className).not.toContain('shrink-0');
+    expect(controls.className).toContain('flex-wrap');
+    expect(controls.className).toContain('ml-auto');
+    expect(controls.className).toContain('max-w-full');
+    expect(controls.querySelector('[data-sign-in]')).not.toBeNull();
+    expect(controls.querySelector('[data-make-home]')).not.toBeNull();
+    // The host gives way with an ellipsis and has the whole host as a tooltip; the status never wraps.
+    const host = row.querySelector('[data-workspace-host]') as HTMLElement;
+    expect(host.className).toContain('truncate');
+    expect(host.className).toContain('min-w-0');
+    expect(host.getAttribute('title')).toBe('old.cloud.databricks.com');
+    const status = row.querySelector('[data-workspace-status]') as HTMLElement;
+    expect(status.className).toContain('whitespace-nowrap');
+    expect(status.className).toContain('shrink-0');
+    expect(status.parentElement?.className).not.toContain('flex-wrap');
+  });
+
   it('shows the four status texts', async () => {
     const { el } = await mount({
       ...LIST,
@@ -239,6 +268,75 @@ describe('Settings → Workspace', () => {
     expect(btn?.textContent).toBe('Sign in…');
     await click(btn);
     expect(hubClicks()).toEqual([{ action: 'workspace.sign_in', profile: 'old' }]);
+  });
+
+  it('an expired row shows the CLI command with a Copy button; a signed-in row shows none', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    const { el } = await mount();
+    expect(li(el, 'ops').querySelector('[data-sign-in-command]')).toBeNull();
+    const row = li(el, 'old');
+    expect(row.querySelector('code')?.textContent).toBe('databricks auth login --profile old');
+    await click(row.querySelector('[data-copy-command]'));
+    expect(write).toHaveBeenCalledWith('databricks auth login --profile old');
+    expect(row.querySelector('[data-copy-status]')?.textContent).toBe('Copied');
+  });
+
+  it('no CLI command shows while the cannot-sign-in-again notice is up', async () => {
+    const { el } = await mount({
+      ...LIST,
+      notice: {
+        kind: 'error',
+        text: 'Bottle cannot sign this workspace in again. Check the profile in your Databricks CLI config, then reopen Settings.',
+      },
+    });
+    expect(el.querySelector('[data-sign-in-command]')).toBeNull();
+  });
+
+  it('a failed copy says so instead of staying silent', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('no')) },
+      configurable: true,
+    });
+    const { el } = await mount();
+    await click(li(el, 'old').querySelector('[data-copy-command]'));
+    expect(li(el, 'old').querySelector('[data-copy-status]')?.textContent).toContain(
+      'Could not copy',
+    );
+  });
+
+  it('the waiting notice shows with the spinner; an error notice is an alert', async () => {
+    const waiting = 'Waiting for you to sign in in your browser…';
+    const { el } = await mount({
+      ...LIST,
+      busyProfile: 'old',
+      notice: { kind: 'info', text: waiting },
+    });
+    expect(el.querySelector('[data-workspace-notice="info"]')?.textContent).toBe(waiting);
+    expect(li(el, 'old').querySelector('[data-busy-spinner]')).not.toBeNull();
+    await click(li(el, 'old').querySelector('[data-cancel-sign-in]'));
+    expect(hubClicks()).toEqual([{ action: 'workspace.sign_in_cancel', profile: 'old' }]);
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, {
+      ...LIST,
+      notice: { kind: 'error', text: 'The Databricks CLI could not finish the sign-in.' },
+    });
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(
+      'The Databricks CLI could not finish the sign-in.',
+    );
+  });
+
+  it('Cancel shows only while the waiting notice is up, not for other busy work', async () => {
+    const { el } = await mount({ ...LIST, busyProfile: 'old' });
+    expect(el.querySelector('[data-cancel-sign-in]')).toBeNull();
+    const w = await mount({
+      ...LIST,
+      busyProfile: 'old',
+      notice: { kind: 'info', text: 'Waiting for you to sign in in your browser…' },
+    });
+    expect(w.el.querySelectorAll('[data-cancel-sign-in]')).toHaveLength(1);
   });
 
   it('busyProfile shows a spinner on that row only and disables its controls', async () => {
@@ -421,6 +519,40 @@ describe('Settings → Workspace', () => {
     expect(li(el, 'ops').querySelector('[data-row-panel]')).not.toBeNull();
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { ...LIST, busyProfile: 'ops' });
     expect(li(el, 'ops').querySelector('[data-row-panel]')).toBeNull();
+  });
+
+  it('Refresh workspaces: an accessible icon button that sends workspace.refresh', async () => {
+    const { el } = await mount();
+    const btn = el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]');
+    expect(btn?.getAttribute('aria-label')).toBe('Refresh workspaces');
+    expect(btn?.disabled).toBe(false);
+    await click(btn);
+    expect(hubClicks()).toEqual([{ action: 'workspace.refresh' }]);
+  });
+
+  it('Refresh workspaces spins and disables while the brain re-reads the list, undisabled once it ends', async () => {
+    const { el } = await mount();
+    const btn = () => el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]');
+    const icon = () => btn()?.querySelector('svg');
+    expect(icon()?.getAttribute('class')).not.toContain('animate-spin');
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { ...LIST, refreshing: true });
+    expect(btn()?.disabled).toBe(true);
+    expect(icon()?.getAttribute('class')).toContain('animate-spin');
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(btn()?.disabled).toBe(false);
+    expect(icon()?.getAttribute('class')).not.toContain('animate-spin');
+  });
+
+  it('[M1] Refresh workspaces is also disabled while a row sign-in or switch change is busy', async () => {
+    const { el } = await mount({ ...LIST, busyProfile: 'old' });
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(true);
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(false);
+  });
+
+  it('Refresh workspaces is disabled before the first list arrives', async () => {
+    const { el } = await render(<Host />);
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(true);
   });
 
   it('keeps the Connect another workspace… row at the bottom, with the hint line', async () => {

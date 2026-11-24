@@ -127,6 +127,7 @@ pub fn temp_parts_in(roots: &[std::path::PathBuf], name: &str) -> Vec<LocalPart>
         .map(|path| LocalPart {
             path,
             duration_s: 0.0,
+            held: Vec::new(),
         })
         .collect()
 }
@@ -224,6 +225,7 @@ pub fn resumable(
             .map(|path| LocalPart {
                 path,
                 duration_s: 0.0,
+                held: Vec::new(),
             })
             .collect();
         parts.sort_by(|a, b| a.path.file_name().cmp(&b.path.file_name()));
@@ -285,6 +287,54 @@ impl LocalAudio for TempAudio {
             .into_iter()
             .find(|(_, s, _)| s.name == name)
             .map(|(_, s, _)| s)
+    }
+    fn delete(&self, name: &str) -> bool {
+        // Never touch a recording that capture or a worker owns.
+        if (self.busy)().contains(name) {
+            return false;
+        }
+        // `<name>.` only: a name that is a prefix of another (`..._1`) stays safe.
+        let prefix = format!("{name}.");
+        let mine = |f: &str| is_audio_file_of(name, f) || f.starts_with(&prefix);
+        for root in &self.roots {
+            for dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
+                // A symlink is never followed: only real dirs and real files.
+                if !dir.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                let dir = dir.path();
+                let mut touched = false;
+                for file in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    let is_mine = file.file_name().to_str().is_some_and(mine);
+                    if is_mine
+                        && file.file_type().is_ok_and(|t| t.is_file())
+                        && std::fs::remove_file(file.path()).is_ok()
+                    {
+                        touched = true;
+                    }
+                }
+                if sidecar::read(&dir).is_some_and(|s| s.name == name) {
+                    sidecar::remove(&dir);
+                    touched = true;
+                }
+                // Only a dir this call emptied goes; another recording's dir stays.
+                if touched {
+                    let _ = std::fs::remove_dir(&dir);
+                }
+            }
+        }
+        !temp_names_in(&self.roots).iter().any(|(n, _)| n == name)
+    }
+    fn never_uploaded(&self, name: &str) -> bool {
+        // Parts upload in order and the device copy goes after each upload. The first part
+        // still here is the unsuffixed file or part 01 only when no part was ever sent. This
+        // assumes the local unlink after each upload (cloud.rs) succeeded.
+        temp_parts_in(&self.roots, name).first().is_some_and(|p| {
+            p.path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| !f.contains(".part") || f.contains(".part01."))
+        })
     }
     fn tidy(&self, name: &str) {
         for root in &self.roots {
@@ -467,6 +517,7 @@ fn local_part(p: &PartFile) -> LocalPart {
     LocalPart {
         path: p.path.clone(),
         duration_s: p.samples as f64 / f64::from(SAMPLE_RATE),
+        held: p.held.clone(),
     }
 }
 

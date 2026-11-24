@@ -28,6 +28,7 @@ const input: RouterInput = {
 const utterance = (over: Partial<Utterance> = {}): Utterance => ({
   mogId: MOG,
   text: SENTENCE,
+  leaseId: 'lease-1',
   forceAsk: false,
   insertionOn: true,
   input,
@@ -68,7 +69,9 @@ describe('utterance route (#59)', () => {
     const r = await routeUtterance(utterance(), d);
     expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     expect(calls).toEqual(['route', 'insert_text']);
-    expect(inserted).toEqual([{ mogId: MOG, text: 'Hi Sam, the deck is attached.' }]);
+    expect(inserted).toEqual([
+      { mogId: MOG, text: 'Hi Sam, the deck is attached.', leaseId: 'lease-1' },
+    ]);
   });
 
   it('[RTR-01c] an empty cleaned text inserts the STT text', async () => {
@@ -90,6 +93,17 @@ describe('utterance route (#59)', () => {
       route: 'chip',
       dictated: { route: 'insert_failed', reason: 'host_failed' },
     });
+  });
+
+  it('[AC-2.9] a target_changed paste keeps the text for Copy and the Ask Genie chip of the same text', async () => {
+    const { d, inserted } = deps(dictation(), 'target_changed');
+    const r = await routeUtterance(utterance(), d);
+    expect(r).toMatchObject({
+      route: 'chip',
+      decision: { genie_question: SENTENCE },
+      dictated: { route: 'insert_failed', reason: 'target_changed', text: SENTENCE },
+    });
+    expect(inserted).toHaveLength(1);
   });
 
   it('[RTR-01c] with insertion off a dictation goes to Copy and never to insert_text', async () => {
@@ -114,7 +128,7 @@ describe('utterance route (#59)', () => {
         dictated: { route: 'inserted' },
       });
       expect(calls).toEqual(['route', 'insert_text']);
-      expect(inserted).toEqual([{ mogId: MOG, text: asked }]);
+      expect(inserted).toEqual([{ mogId: MOG, text: asked, leaseId: 'lease-1' }]);
       // The fallback chip holds the exact text that was dictated, not a rewritten question.
       if (r.route !== 'chip') throw new Error('not a chip');
       expect(r.decision.genie_question).toBe(asked);
@@ -131,7 +145,7 @@ describe('utterance route (#59)', () => {
       if (r.route !== 'chip') throw new Error('not a chip');
       expect(r.decision.genie_question).toBe(SENTENCE);
       expect(calls).toEqual(['route', 'insert_text']);
-      expect(inserted).toEqual([{ mogId: MOG, text: SENTENCE }]);
+      expect(inserted).toEqual([{ mogId: MOG, text: SENTENCE, leaseId: 'lease-1' }]);
     }
   });
 
@@ -251,6 +265,21 @@ describe('utterance route (#59)', () => {
       cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},
     );
     expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('chip');
+  });
+
+  it('[CAP-67a] ipcUtteranceDeps gives only a dictation call the deadline', async () => {
+    core.reset();
+    core.invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},
+    );
+    const d = ipcUtteranceDeps();
+    await d.route(SENTENCE, MOG, input, { dictation: true });
+    await d.route(SENTENCE, MOG, input, { dictation: false });
+    const sent = core.invoke.mock.calls
+      .filter(([cmd]) => cmd === 'model_invoke')
+      .map(([, a]) => (a as { args: { deadlineMs?: number; request: { model?: string } } }).args);
+    expect(sent.map((a) => a.deadlineMs)).toEqual([1500, undefined]);
+    expect(sent.map((a) => a.request.model)).toEqual([undefined, undefined]);
   });
 
   it('[ADR 0113] a remember order is not pasted, not routed and not sent to the model', async () => {

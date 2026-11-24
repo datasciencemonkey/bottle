@@ -12,7 +12,11 @@ const row = {
 const list = {
   rows: [row],
   home: 'sales',
-  agent: { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 },
+  agent: {
+    crossWorkspaceData: false,
+    crossWorkspaceLocked: false,
+    genieCallBudget: 10,
+  },
 };
 
 describe('hub-workspaces shape checks (ADR 0117)', () => {
@@ -36,6 +40,10 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     });
     expect(asWorkspaceAction({ action: 'workspace.pick_home', profile: 'p' })).toBeDefined();
     expect(asWorkspaceAction({ action: 'workspace.sign_in', profile: 'p' })).toBeDefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel', profile: 'p', x: 1 })).toEqual({
+      action: 'workspace.sign_in_cancel',
+      profile: 'p',
+    });
     expect(asWorkspaceAction({ action: 'workspace.edit', profile: 'p', name: 'Fin' })).toEqual({
       action: 'workspace.edit',
       profile: 'p',
@@ -45,6 +53,12 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(
       asWorkspaceAction({ action: 'workspace.cross', crossWorkspaceData: true }),
     ).toBeDefined();
+  });
+
+  it('refuses the removed agent profile action', () => {
+    expect(
+      asWorkspaceAction({ action: 'workspace.agent_profile', profile: 'fin' }),
+    ).toBeUndefined();
   });
 
   it('refuses bad shapes', () => {
@@ -57,6 +71,8 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(
       asWorkspaceAction({ action: 'workspace.edit', profile: 'p', name: '  ' }),
     ).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel', profile: '' })).toBeUndefined();
     expect(asWorkspaceAction({ action: 'mog.create' })).toBeUndefined();
     expect(asWorkspaceAction(null)).toBeUndefined();
   });
@@ -69,6 +85,12 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       homePick: { suggested: 'sales', candidates: ['sales', 'fin'] },
     };
     expect(asHubWorkspaceList(pick)?.homePick).toEqual(pick.homePick);
+  });
+
+  it('drops a stale runProfile field from an older list', () => {
+    const got = asHubWorkspaceList({ ...list, agent: { ...list.agent, runProfile: 'x' } });
+    expect(got?.agent).toEqual(list.agent);
+    expect(got?.agent).not.toHaveProperty('runProfile');
   });
 
   it('drops unknown fields at every level', () => {

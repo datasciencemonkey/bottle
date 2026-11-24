@@ -27,6 +27,7 @@ import {
 import type { MogId, ProfileName } from '../shared/interfaces';
 import { call, type WorkspaceList, type WorkspaceRow } from '../shared/ipc';
 import { MOG_PALETTE, nextVariant } from '../shared/mog-palette';
+import { SIGN_IN_NOT_BROWSER, SIGN_IN_WAITING, signInCommand } from '../shared/sign-in-text';
 import { onViewInput, type BrainBus } from './bus';
 import { MOG_CONFIG_DEFAULTS, type MogConfig } from './components/mog-config';
 import {
@@ -53,9 +54,11 @@ export const WORKSPACE_TEXT = {
   storage_failed: 'Bottle could not read your workspaces. Try again.',
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
-  login_cancelled: 'The sign-in was cancelled.',
+  waiting: SIGN_IN_WAITING,
+  login_cancelled: 'Sign-in cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
+  not_browser: SIGN_IN_NOT_BROWSER,
   auth_expired: 'Bottle could not use the new sign-in for this workspace.',
   no_grant: 'Your account has no access to this workspace. Ask your workspace admin for access.',
   offline: 'Bottle cannot reach this workspace. Check your network.',
@@ -63,7 +66,7 @@ export const WORKSPACE_TEXT = {
 
 /** The text of a sign-in that the app does not run itself. `profile` is a name, never a token. */
 export const signInByHand = (profile: string): string =>
-  `To sign in again, run "databricks auth login --profile ${profile}" in Terminal, then reopen Settings.`;
+  `To sign in again, run "${signInCommand(profile)}" in Terminal, then reopen Settings.`;
 
 const SIGN_IN_CODES: ReadonlySet<string> = new Set([
   'login_cancelled',
@@ -90,9 +93,17 @@ export interface WorkspacesDeps {
   settingsWrite(args: {
     crossWorkspaceData?: boolean;
     genieCallBudget?: 5 | 10 | 20;
+    /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. */
+    agentEndpoint?: string;
+    /** ADR 0122: "Clean up dictation". */
+    cleanDictation?: boolean;
+    /** ADR 0123: "Dictation engine: Databricks". */
+    cloudDictation?: boolean;
   }): Promise<WorkspaceList>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
+  /** `profile_login_cancel`: stops the running sign-in of the profile. */
+  cancelLogin(profile: ProfileName): Promise<unknown>;
   configs: MogConfigClient;
   /** The local store, for the `mem.exchange.recent` statement of the home suggestion. */
   store: Pick<LocalMemoryStore, 'exec'>;
@@ -109,6 +120,14 @@ export interface WorkspacesDeps {
 export interface Workspaces {
   /** The last list that the Rust store gave, if any. */
   last(): WorkspaceList | undefined;
+  /** ADR 0122: write the orchestrator model or the dictation switch, then send the list. */
+  writeSettings(args: {
+    agentEndpoint?: string;
+    cleanDictation?: boolean;
+    cloudDictation?: boolean;
+  }): Promise<void>;
+  /** Slice 2a: the available workspaces with their names, for the routing rules. */
+  catalog(): { profile: string; name: string; isHome: boolean; colorVariant: string }[];
   /**
    * "Change workspace…": send the list with no notice, then with the plain settings notice, so
    * the hub switches to Settings → Workspace each time.
@@ -136,6 +155,15 @@ const supportedRow = (r: WorkspaceRow) => r.signIn !== 'unsupported' && r.signIn
 
 export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
   let last: WorkspaceList | undefined;
+  /** The last rows with their names. */
+  let namedRows: HubWorkspaceRow[] = [];
+  /** The notice of the last push the hub actually got (or would have), so a push with no
+   * `notice` of its own (`workspace.refresh`'s first, "refreshing" push) can carry it forward
+   * instead of wiping it off the screen. */
+  let lastNotice: HubWorkspaceList['notice'];
+  /** A `workspace.refresh` is already running: a second click does nothing instead of piling up
+   * another full re-read behind it. */
+  let refreshInFlight = false;
   /** Serialises the actions, so two clicks never write at once. */
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -195,6 +223,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             });
             for (const x of rows) {
               if (!isObj(x) || typeof x['askedAt'] !== 'number' || x['askedAt'] < since) continue;
+              // An agent turn row is not a question to one workspace (ADR 0121): it counts for none.
+              if (x['backendKind'] === 'genie_agent') continue;
               const p = typeof x['profileName'] === 'string' ? x['profileName'] : r.profile;
               if (counts.has(p)) counts.set(p, (counts.get(p) ?? 0) + 1);
             }
@@ -218,9 +248,14 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
 
   async function toHub(
     l: WorkspaceList,
-    extra: { busyProfile?: string; notice?: HubWorkspaceList['notice'] } = {},
+    extra: {
+      busyProfile?: string;
+      notice?: HubWorkspaceList['notice'];
+      refreshing?: boolean;
+    } = {},
   ): Promise<HubWorkspaceList> {
     const rows = await rowsOf(l);
+    namedRows = rows;
     const out: HubWorkspaceList = {
       rows,
       home: l.home,
@@ -248,16 +283,19 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     }
     if (extra.busyProfile !== undefined) out.busyProfile = extra.busyProfile;
     if (extra.notice) out.notice = extra.notice;
+    if (extra.refreshing) out.refreshing = true;
     return out;
   }
 
   const publish = async (
     l: WorkspaceList | undefined,
-    extra?: { busyProfile?: string; notice?: HubWorkspaceList['notice'] },
+    extra?: { busyProfile?: string; notice?: HubWorkspaceList['notice']; refreshing?: boolean },
   ): Promise<void> => {
     if (!l) return;
+    const out = await toHub(l, extra);
+    lastNotice = out.notice;
     try {
-      await deps.send(await toHub(l, extra));
+      await deps.send(out);
     } catch {
       // No hub is open. The hub asks again with workspaces.ready when it opens.
     }
@@ -345,6 +383,19 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       case 'workspaces.ready':
         // The hub opens: read again, and let the store probe the sign-in states.
         return publish(await fetchList(true));
+      case 'workspace.refresh': {
+        // "Refresh workspaces": the same re-read as a hub open, with a spinner on the button
+        // instead of the loading line (the hub already has a list to show while it waits).
+        // `lastNotice` rides along so an info notice already on screen (e.g. "Signed in again.")
+        // is not wiped the moment the spinner starts. `finally`: `refreshInFlight` clears even
+        // when the read fails, so a later click is never stuck skipped.
+        try {
+          await publish(last, { refreshing: true, notice: lastNotice });
+          return publish(await fetchList(true));
+        } finally {
+          refreshInFlight = false;
+        }
+      }
       case 'workspace.set_available': {
         const row = rowOf(a.profile);
         if (!row)
@@ -372,17 +423,33 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(l);
       }
       case 'workspace.sign_in': {
-        if (!rowOf(a.profile))
+        const row = rowOf(a.profile);
+        if (!row)
           return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
-        await publish(last, { busyProfile: a.profile });
+        // A click queued behind another sign-in of this row: that one may have signed it in.
+        if (row.signIn !== 'expired') return publish(last);
+        // `profile_reauth` blocks until the CLI ends (as `profile_login` does): say what it waits for.
+        await publish(last, {
+          busyProfile: a.profile,
+          notice: { kind: 'info', text: WORKSPACE_TEXT.waiting },
+        });
         try {
           await deps.reauth(a.profile);
         } catch (e) {
           const code = codeOf(e);
           if (code === 'not_implemented') {
-            // Slice 1 defers `profile_reauth`: a CLI re-login may drop other keys of the profile.
-            // The user signs in with the CLI; the next `workspaces.ready` reads the new state.
-            return publish(last, { notice: { kind: 'info', text: signInByHand(a.profile) } });
+            // The host has no re-sign-in (yet): show the CLI command as a visible error, not a
+            // quiet note. The hub row also has a Copy button. The next `workspaces.ready`
+            // reads the new state.
+            return publish(last, { notice: { kind: 'error', text: signInByHand(a.profile) } });
+          }
+          if (code === 'login_cancelled') {
+            const l = await fetchList().catch(() => last);
+            return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.login_cancelled } });
+          }
+          if (code === 'profile_invalid') {
+            // A PAT or service-principal profile: a CLI login would change it. The row has Copy.
+            return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_browser } });
           }
           const text = SIGN_IN_CODES.has(code)
             ? WORKSPACE_TEXT[code as keyof typeof WORKSPACE_TEXT]
@@ -393,6 +460,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         const l = await fetchList(true);
         return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.signed_in } });
       }
+      case 'workspace.sign_in_cancel':
+        return; // `act` runs it outside the queue.
       case 'workspace.edit':
         return edit(a);
       case 'workspace.budget':
@@ -401,11 +470,33 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(
           keep(await deps.settingsWrite({ crossWorkspaceData: a.crossWorkspaceData })),
         );
+      default:
+        return;
     }
   }
 
   return {
     last: () => last,
+    async writeSettings(args) {
+      await serial(async () => {
+        try {
+          await publish(keep(await deps.settingsWrite(args)));
+        } catch (e) {
+          await publish(last, { notice: noticeOf(e) });
+        }
+      });
+    },
+    catalog: () =>
+      namedRows
+        .filter(
+          (r) => (r.available || r.isHome) && r.signIn !== 'unsupported' && r.signIn !== 'missing',
+        )
+        .map((r) => ({
+          profile: r.profile,
+          name: r.name,
+          isHome: r.isHome,
+          colorVariant: r.colorVariant,
+        })),
     async refresh(opts) {
       try {
         const l = await fetchList(opts?.refresh);
@@ -492,8 +583,26 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         }
         await publish(last);
       }),
-    act: (action) =>
-      serial(async () => {
+    act: (action) => {
+      if (action.action === 'workspace.sign_in_cancel') {
+        if (!rowOf(action.profile)) {
+          return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
+        }
+        // The sign-in holds the queue until it ends: the cancel must not wait behind it. The
+        // waiting `workspace.sign_in` then ends with `login_cancelled`, which shows the notice.
+        return deps.cancelLogin(action.profile).then(
+          () => undefined,
+          () => publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.failed } }),
+        );
+      }
+      if (action.action === 'workspace.refresh') {
+        // A refresh is already running (or already queued behind one): skip, rather than piling
+        // up another full re-read. This check and set is synchronous, so two clicks in the same
+        // tick cannot both see it false.
+        if (refreshInFlight) return Promise.resolve();
+        refreshInFlight = true;
+      }
+      return serial(async () => {
         try {
           await run(action);
         } catch (e) {
@@ -501,7 +610,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             notice: noticeOf(e),
           });
         }
-      }),
+      });
+    },
   };
 }
 
@@ -520,6 +630,7 @@ export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
       call('workspace_make_home', { profile, ...(mogId !== undefined ? { mogId } : {}) }),
     settingsWrite: (args) => call('workspace_settings_write', args),
     reauth: (profile) => call('profile_reauth', { profile }),
+    cancelLogin: (profile) => call('profile_login_cancel', { profile }),
     configs,
     store: new IpcLocalMemoryStore(),
     send: (list) => emitTo('hub', HUB_WORKSPACES_EVENT, list),

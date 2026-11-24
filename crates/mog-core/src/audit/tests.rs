@@ -502,3 +502,23 @@ fn rtr_30_agent_action_holds_sizes_only_and_takes_no_hash() {
     }
     assert!(log.entries(MOG_A).unwrap().is_empty());
 }
+
+#[test]
+fn the_memory_store_is_a_ring_of_the_cap() {
+    let store = MemoryAuditStore::default();
+    let mk = |at| {
+        let args = AuditAppendArgs {
+            kind: "agent_action:genie_one".into(),
+            mog_id: MOG_A.into(),
+            op_id: OP_OP_1.into(),
+            sizes: BTreeMap::new(),
+        };
+        AuditEntry::new(&args, &BTreeMap::new(), at).unwrap()
+    };
+    for at in 0..(MEMORY_STORE_CAP as u64 + 5) {
+        store.append(mk(at)).unwrap();
+    }
+    let all = store.entries(MOG_A).unwrap();
+    assert_eq!(all.len(), MEMORY_STORE_CAP);
+    assert_eq!(all[0].at_ms, 5, "the oldest entries went first");
+}

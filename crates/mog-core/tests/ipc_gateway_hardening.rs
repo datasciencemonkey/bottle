@@ -82,7 +82,7 @@ fn sample(command: &str) -> (&'static str, Value) {
         "stt_transcribe" => {
             json!({"segmentId": "s1", "provider": "local_parakeet", "tags": t})
         }
-        "insert_text" => json!({"mogId": "a1", "text": "hello"}),
+        "insert_text" => json!({"mogId": "a1", "text": "hello", "leaseId": "1"}),
         "agent_start" => json!({"mogId": "a1", "harness": "claude"}),
         "agent_stop" | "mog_set_active" | "window_mog_close" | "window_card_show"
         | "window_card_hide" => json!({"mogId": "a1"}),
@@ -122,7 +122,9 @@ fn sample(command: &str) -> (&'static str, Value) {
         "recording_storage_probe" | "recording_list" => json!({"profile": "p"}),
         "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
-        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_detail" | "recording_retry" | "recording_delete" => {
+            json!({"profile": "p", "id": "rec-1"})
+        }
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => return ("hub", json!({})),
         "stt_model_consent" => return ("hub", json!({"consent": "granted"})),
@@ -138,6 +140,16 @@ fn sample(command: &str) -> (&'static str, Value) {
         "workspace_set_available" => json!({"profile": "p", "available": true}),
         "workspace_make_home" => json!({"profile": "p"}),
         "workspace_settings_write" => json!({"genieCallBudget": 10}),
+        "orchestrator_models" => json!({}),
+        "orchestrator_status" => json!({"recheck": true}),
+        "agent_turn_submit" => json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
+        "agent_turn_stop" => json!({"turnId": "0123456789abcdef0123456789abcdef"}),
+        "agent_turn_call" => {
+            json!({"turnId": "0123456789abcdef0123456789abcdef", "callId": "c-0123abcd"})
+        }
+        "agent_turn_result" => json!({"turnId": "0123456789abcdef0123456789abcdef"}),
+        "agent_session_state" => json!({}),
+        "agent_session_end" => json!({"reason": "new_session"}),
         other => panic!("no sample for {other}"),
     };
     ("brain", args)
@@ -489,6 +501,18 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::SttInstallBusy { command: s() },
         IpcError::SttModelsDirUnavailable { command: s() },
         IpcError::SttSetupUnavailable { command: s() },
+        IpcError::AskNotApproved { command: s() },
+        IpcError::AgentQueueFull { command: s() },
+        IpcError::AgentTurnUnknown { command: s() },
+        IpcError::AgentSessionUnavailable { command: s() },
+        IpcError::AgentRateLimited { command: s() },
+        IpcError::AgentProfileUnsupported { command: s() },
+        IpcError::AgentSignedOut { command: s() },
+        IpcError::AgentNotEligible { command: s() },
+        IpcError::AgentOffline { command: s() },
+        IpcError::AgentTimeout { command: s() },
+        IpcError::AgentFailed { command: s() },
+        IpcError::AgentRefusals { command: s() },
         IpcError::SecretRefused { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
@@ -800,6 +824,11 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
         json!({"genieCallBudget": 256}),
         json!({"agentEndpoint": "https://x.example.com/serving"}),
         json!({"agentEndpoint": ""}),
+        json!({"agentEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({"agentEndpoint": "system.ai."}),
+        json!({"cleanDictation": "yes"}),
+        json!({"cleanDictation": null}),
+        json!({"cleanDictation": 1}),
     ] {
         let err = handle("brain", "workspace_settings_write", bad.clone()).unwrap_err();
         assert_eq!(ipc_error_code(&err), "invalid_args", "{bad}");
@@ -807,10 +836,155 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
     for good in [
         json!({"genieCallBudget": 5}),
         json!({"genieCallBudget": 20}),
-        json!({"agentEndpoint": "databricks-claude-sonnet-5-5", "crossWorkspaceData": false}),
+        json!({"agentEndpoint": "system.ai.claude-haiku-5-5", "crossWorkspaceData": false}),
+        json!({"cleanDictation": false}),
     ] {
         if let Err(e) = handle("brain", "workspace_settings_write", good.clone()) {
             assert_ne!(ipc_error_code(&e), "invalid_args", "{good}");
         }
     }
+}
+
+const TURN: &str = "0123456789abcdef0123456789abcdef";
+
+/// Slice 2a: the agent commands refuse a bad question, `opId`, turn ID, call ID, mode or an
+/// unknown field with `invalid_args`, and accept the right shapes.
+#[test]
+fn slice_2a_agent_args_refuse_bad_values() {
+    use mog_core::ipc::handle;
+    let q1000 = "q".repeat(1000);
+    let q1001 = "q".repeat(1001);
+    let op64 = "o".repeat(64);
+    let op65 = "o".repeat(65);
+    let bad = [
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": ""}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": " \n\t "}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "actionTicket": ""}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "actionTicket": "t".repeat(37)}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": q1001}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "", "question": "q"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": op65, "question": "q"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "mode": "other"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "url": "x"}),
+        ),
+        ("agent_turn_submit", json!({"opId": "o", "question": "q"})),
+        (
+            "agent_turn_stop",
+            json!({"turnId": "ABCDEF0123456789abcdef0123456789"}),
+        ),
+        ("agent_turn_stop", json!({"turnId": "abc"})),
+        ("agent_turn_result", json!({"turnId": format!("{TURN}0")})),
+        (
+            "agent_turn_call",
+            json!({"turnId": TURN, "callId": "c-0123abc"}),
+        ),
+        (
+            "agent_turn_call",
+            json!({"turnId": TURN, "callId": "x-0123abcd"}),
+        ),
+        (
+            "agent_turn_call",
+            json!({"turnId": TURN, "callId": "c-0123ABCD"}),
+        ),
+        ("agent_session_end", json!({"reason": "quit"})),
+        ("agent_session_end", json!({})),
+        ("agent_session_state", json!({"x": 1})),
+        ("orchestrator_status", json!({"recheck": "yes"})),
+        ("orchestrator_models", json!({"profile": "p"})),
+        ("workspace_settings_write", json!({"runProfile": 5})),
+    ];
+    for (command, args) in bad {
+        let err = handle("brain", command, args.clone()).unwrap_err();
+        assert_eq!(ipc_error_code(&err), "invalid_args", "{command} {args}");
+    }
+    let good = [
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": op64, "question": q1000}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "q", "mode": "follow_up", "actionTicket": "t"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": "ü".repeat(1000)}),
+        ),
+        (
+            "agent_turn_call",
+            json!({"turnId": TURN, "callId": "c-0123abcd"}),
+        ),
+        (
+            "agent_turn_submit",
+            json!({"mogId": "m", "opId": "o", "question": " q ", "actionTicket": "t".repeat(36)}),
+        ),
+    ];
+    for (command, args) in good {
+        match handle("brain", command, args.clone()) {
+            Ok(_) | Err(IpcError::NotImplemented { .. }) => {}
+            Err(e) => panic!("{command} {args}: {e}"),
+        }
+    }
+}
+
+/// Slice 2a: no agent command is open to a view window (ARC-4).
+#[test]
+fn slice_2a_agent_commands_are_brain_only() {
+    use mog_core::ipc::handle;
+    for (command, args) in [
+        ("orchestrator_status", json!({})),
+        ("orchestrator_models", json!({})),
+        ("agent_turn_stop", json!({"turnId": TURN})),
+        ("agent_session_state", json!({})),
+    ] {
+        for label in ["hub", "mog-m1", "card-m1", "ffi"] {
+            let err = handle(label, command, args.clone()).unwrap_err();
+            assert_eq!(
+                ipc_error_code(&err),
+                "window_not_allowed",
+                "{command} {label}"
+            );
+        }
+    }
+}
+
+/// Slice 2a, SEC-16c: the `Debug` output of the submit args never holds the question.
+#[test]
+fn slice_2a_agent_turn_submit_debug_redacts_the_question() {
+    use mog_core::ipc::AgentTurnSubmitArgs;
+    let a: AgentTurnSubmitArgs = serde_json::from_value(
+        json!({"mogId": "m", "opId": "op-1", "question": "SECRET-QUESTION-TEXT"}),
+    )
+    .unwrap();
+    let shown = format!("{a:?}");
+    assert!(!shown.contains("SECRET-QUESTION-TEXT"), "{shown}");
+    assert!(shown.contains("redacted 20 chars"), "{shown}");
+    let q = format!("{:?}", a.question);
+    assert!(!q.contains("SECRET"), "{q}");
 }

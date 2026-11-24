@@ -16,6 +16,10 @@
  *   First the sections or Try again, then `showCard` (awaited), then the outcome blurb and
  *   `onPhase('answered' | 'failed')`: the card shows next to the MOG even if it was hidden while
  *   Genie worked, and it changes from the pill to the card in one update.
+ * - UX slice 1: this card update is an arrival, and it goes through the arrival gate. While the
+ *   talk key is held it waits (the pill reads "Answer ready" for an answer), and it applies
+ *   1.2 s after the paste of the hold. The returned promise resolves after the update. The
+ *   history write (#40) is no arrival: it runs at the terminal event.
  *
  * No failure is sent again by itself (G-15b). A failure shows [Try again]; only a click on it
  * sends the same question again, as a new request. TODO(#86): the footer and the deep link.
@@ -26,7 +30,8 @@
  * `submit` that throws) has no end.
  */
 import type { AgentTurn, AskRequest, GenieBridge, MogId, ProfileName } from '../shared/interfaces';
-import { ASKING_GENIE, genieBlurbId, genieStage } from '../shared/genie-status';
+import { ANSWER_READY, ASKING_GENIE, genieBlurbId, genieStage } from '../shared/genie-status';
+import type { ArrivalGate } from './arrival-gate';
 import type { CardStack } from './card-stack';
 import { isTerminal, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
@@ -48,7 +53,12 @@ export type GeniePhase = 'working' | 'answered' | 'failed' | 'cancelled';
 export interface GenieDirectDeps {
   /** T8. Only `submit` is used. */
   genie: Pick<GenieBridge, 'submit'>;
-  /** The card of the owner MOG. */
+  /**
+   * The card of the owner MOG. Close rules of the status pill: a close of the WORKING pill only
+   * hides the card window (no forget, no clear); the request runs on and the card shows again with
+   * its answer, through the arrival gate. A close of the READY pill is a real close: the card
+   * stays closed. A request that is not the newest of its MOG never shows the card window.
+   */
   cardFor(
     mogId: MogId,
   ): Pick<CardStack, 'add' | 'setExpanded'> &
@@ -65,6 +75,27 @@ export interface GenieDirectDeps {
   showCard?: ((mogId: MogId) => unknown) | undefined;
   /** "Change workspace…": show the hub on this MOG's Edit form (the home workspace field). */
   changeWorkspace?: ((mogId: MogId) => unknown) | undefined;
+  /**
+   * UX slice 1: the arrival gate. While the user holds the talk key, the terminal event changes
+   * only the pill to "Answer ready" (an answer) and the card update waits for `whenClear`.
+   */
+  arrivals?: Pick<ArrivalGate, 'isHeld' | 'whenClear'> | undefined;
+}
+
+/**
+ * The Wipe fence of a part row. It gets `replay`: the fence calls it with a fresh fence of the same
+ * kind to write the same row again (a row that a failed Wipe held back). It returns true to skip.
+ */
+export type PartFence = (replay: (again: PartFence) => void) => boolean;
+
+/** The options of one send. */
+export interface DirectSendOptions {
+  /** The fallback reason of slice 2a, one line: "The orchestrator model is not reachable. Asked sales only." */
+  notice?: string | undefined;
+  /** The fallback of an agent turn: its row joins the turn (`split_group_id` = the turn UUID). */
+  splitGroupId?: string | undefined;
+  /** With `splitGroupId`: the Wipe fence of the part row (`GenieEnd.isStale`). */
+  isStale?: PartFence | undefined;
 }
 
 /** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
@@ -77,7 +108,20 @@ function phaseOf(e: TerminalAskEvent): GeniePhase {
  * The `send` of the ask gate. It resolves when the request has ended; it rejects only when
  * `submit` throws before anything is sent (the gate then shows "Not sent.").
  */
-export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) => Promise<void> {
+export type GenieDirectSend = ((turn: AgentTurn, opts?: DirectSendOptions) => Promise<void>) & {
+  /**
+   * True while the request of `mogId` still works (no answer waits in a hold): a close of its
+   * pill then only hides the card. The request runs on, and its answer shows the card again.
+   */
+  isWorking(mogId: MogId, opId: string): boolean;
+  /**
+   * The user closed the pill of a request whose answer is ready (it waits for the end of the
+   * hold): the card stays closed when the answer applies, and its early sections go.
+   */
+  close(mogId: MogId, opId: string): void;
+};
+
+export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
   const safely = (fn: () => unknown) => {
     try {
       void Promise.resolve(fn()).catch(() => undefined);
@@ -85,7 +129,16 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       // A mood or window fault never stops the request or changes the card.
     }
   };
-  const send = (turn: AgentTurn): Promise<void> => {
+  /** The send number of the newest request that put its answer on each MOG's card (M4). */
+  const answerSeq = new Map<MogId, number>();
+  /** The number of the newest request that started on each MOG. */
+  const latestSend = new Map<MogId, number>();
+  let sends = 0;
+  /** The requests that have not shown their outcome yet: `working`, or `ready` in a hold. */
+  const live = new Map<string, { mogId: MogId; state: 'working' | 'ready' }>();
+  /** The requests whose ready pill the user closed: the card stays closed for them. */
+  const closed = new Set<string>();
+  const send = (turn: AgentTurn, opts: DirectSendOptions = {}): Promise<void> => {
     const req: AskRequest = {
       opId: deps.newOpId(),
       mogId: turn.mogId,
@@ -93,7 +146,11 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
       question: turn.question,
       tags: { app: 'bottle', mog: turn.mogId, op: 'genie' },
     };
+    const mySeq = ++sends;
+    // `submit` may throw: only a request that was sent takes the card.
     const { opId, events } = deps.genie.submit(req);
+    latestSend.set(turn.mogId, mySeq);
+    live.set(opId, { mogId: turn.mogId, state: 'working' });
     const card = deps.cardFor(turn.mogId);
     const id = genieBlurbId(opId);
     // The new status blurb goes on top first, then the old answer goes: the card never shows the
@@ -123,62 +180,120 @@ export function createGenieDirectSend(deps: GenieDirectDeps): (turn: AgentTurn) 
         // card must not stay on the working line, and nothing is sent again (G-15b).
       }
       end ??= { t: 'uncertain' };
-      // The answer sections and the Try again control go on while the blurb still works, so the
-      // card goes from the status pill to the answer or failure card in one step.
-      if (end.t === 'answer') {
-        // #523: the card draws links and "Open in Databricks" only for this workspace.
-        const host = await deps.hostOf?.(turn.target).catch(() => undefined);
-        card.setExpanded({
-          answerMd: end.md,
-          keyNumbers: end.keyNumbers.map((k) => k.text),
-          ...(end.deepLink ? { deepLink: end.deepLink } : {}),
-          ...(host ? { workspaceHost: host } : {}),
-          dataFlowText: GENIE_DATA_FLOW_TEXT,
-        });
-      } else if (phaseOf(end) === 'failed' && card.setControls) {
-        // GL-5: one user action sends the same question again, as a new request (G-15b).
-        const owner = `retry:${id}`;
-        // A workspace failure (VPN, proxy, network) also offers a text link to the MOG's Edit
-        // form. Try again stays the only button (W-07h: one primary action).
-        const wsId = `workspace:${id}`;
-        const offerWorkspace =
-          end.t === 'failed' && WORKSPACE_CODES.has(end.code) && deps.changeWorkspace !== undefined;
-        const chips = [{ id: owner, label: TRY_AGAIN_LABEL }];
-        if (offerWorkspace) chips.push({ id: wsId, label: CHANGE_WORKSPACE_LABEL });
-        card.setControls(owner, chips, (clicked) => {
-          if (clicked === wsId) {
-            safely(() => deps.changeWorkspace?.(turn.mogId));
-            return;
-          }
-          card.clearControls?.(owner);
-          safely(() => send(turn));
-        });
-      }
-      // R11 places the card first, then the outcome goes on it, so the view grows the card from
-      // its final place (no race between the view fit and the R11 move).
-      if (deps.showCard) {
-        try {
-          await deps.showCard(turn.mogId);
-        } catch {
-          // The card stays where it was; the outcome still goes on it.
-        }
-      }
-      card.add(outcomeBlurbInput(id, end));
-      safely(() => deps.onPhase?.(turn.mogId, phaseOf(end), opId));
-      // #40: the history write comes after the card, and a fault in it never reaches the card.
+      // #523: the card draws links and "Open in Databricks" only for this workspace.
+      const host =
+        end.t === 'answer' ? await deps.hostOf?.(turn.target).catch(() => undefined) : undefined;
+      const outcome = end;
+      // #40: the history write is not an arrival: it runs at the terminal event, and a fault in it never reaches the card.
       try {
-        deps.onEnd?.({
-          opId,
-          mogId: turn.mogId,
-          profile: turn.target,
-          question: turn.question,
-          end,
-          ...accepted,
-        });
+        const write = (fence: PartFence | undefined): void =>
+          deps.onEnd?.({
+            opId,
+            mogId: turn.mogId,
+            profile: turn.target,
+            question: turn.question,
+            end: outcome,
+            ...(opts.splitGroupId !== undefined ? { splitGroupId: opts.splitGroupId } : {}),
+            ...(opts.splitGroupId !== undefined && fence
+              ? { isStale: () => fence((again) => write(again)) }
+              : {}),
+            ...accepted,
+          });
+        write(opts.isStale);
       } catch {
         // The history logs its own fixed code; the answer on the card stays as it is.
       }
+      // Slice 2a: a fallback tells the user, in one line before the answer, why only one
+      // workspace was asked.
+      const putAnswer = (): void => {
+        if (outcome.t !== 'answer') return;
+        // The early put (ready pill) and the late put (`apply`) of an older request never
+        // overwrite the link and sections of a newer one. A request that started later owns the
+        // card, even if it has not answered yet. (A newer request that already put its answer
+        // has started later, so this one check covers both.)
+        if ((latestSend.get(turn.mogId) ?? 0) > mySeq) return;
+        answerSeq.set(turn.mogId, mySeq);
+        card.setExpanded({
+          answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
+          keyNumbers: outcome.keyNumbers.map((k) => k.text),
+          ...(outcome.deepLink ? { deepLink: outcome.deepLink } : {}),
+          ...(host ? { workspaceHost: host } : {}),
+          dataFlowText: GENIE_DATA_FLOW_TEXT,
+        });
+      };
+      const apply = async (): Promise<void> => {
+        live.delete(opId);
+        // The user closed the ready pill: the card stays closed. The blurb ends empty.
+        if (closed.delete(opId)) {
+          // The early sections of this request go too, if they are still the card's.
+          if (answerSeq.get(turn.mogId) === mySeq) card.setExpanded(undefined);
+          card.add({ id, text: '', completed: true });
+          safely(() => deps.onPhase?.(turn.mogId, phaseOf(outcome), opId));
+          return;
+        }
+        // The answer sections and the Try again control go on while the blurb still works, so the
+        // card goes from the status pill to the answer or failure card in one step.
+        if (outcome.t === 'answer') {
+          putAnswer();
+        } else if (phaseOf(outcome) === 'failed' && card.setControls) {
+          // GL-5: one user action sends the same question again, as a new request (G-15b).
+          const owner = `retry:${id}`;
+          // A workspace failure (VPN, proxy, network) also offers a text link to the MOG's Edit
+          // form. Try again stays the only button (W-07h: one primary action).
+          const wsId = `workspace:${id}`;
+          const offerWorkspace =
+            outcome.t === 'failed' &&
+            WORKSPACE_CODES.has(outcome.code) &&
+            deps.changeWorkspace !== undefined;
+          const chips = [{ id: owner, label: TRY_AGAIN_LABEL }];
+          if (offerWorkspace) chips.push({ id: wsId, label: CHANGE_WORKSPACE_LABEL });
+          card.setControls(owner, chips, (clicked) => {
+            if (clicked === wsId) {
+              safely(() => deps.changeWorkspace?.(turn.mogId));
+              return;
+            }
+            card.clearControls?.(owner);
+            safely(() => send(turn, opts));
+          });
+        }
+        // R11 places the card first, then the outcome goes on it, so the view grows the card from
+        // its final place (no race between the view fit and the R11 move).
+        // A request that started later owns the card (its pill may be closed): a late outcome of
+        // this one never shows an empty or foreign card window. The blurb and the phase still end.
+        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
+        if (deps.showCard && !newer) {
+          try {
+            await deps.showCard(turn.mogId);
+          } catch {
+            // The card stays where it was; the outcome still goes on it.
+          }
+        }
+        card.add(outcomeBlurbInput(id, outcome));
+        safely(() => deps.onPhase?.(turn.mogId, phaseOf(outcome), opId));
+      };
+      const arrivals = deps.arrivals;
+      // The pill tells the user an answer is ready, and the card waits for the key-up.
+      if (arrivals?.isHeld() && phaseOf(outcome) === 'answered') {
+        // The ready pill shows "Open in Databricks", so the deep link goes on with it. The blurb
+        // still works, so the view keeps the pill until the key-up.
+        putAnswer();
+        live.set(opId, { mogId: turn.mogId, state: 'ready' });
+        card.add({ id, text: ANSWER_READY });
+      }
+      await new Promise<void>((resolve, reject) => {
+        const run = () => void apply().then(resolve, reject);
+        if (arrivals) arrivals.whenClear(run);
+        else run();
+      });
     })();
   };
-  return send;
+  return Object.assign(send, {
+    isWorking: (mogId: MogId, opId: string) => {
+      const l = live.get(opId);
+      return l?.mogId === mogId && l.state === 'working';
+    },
+    close: (mogId: MogId, opId: string) => {
+      if (live.get(opId)?.mogId === mogId) closed.add(opId);
+    },
+  });
 }

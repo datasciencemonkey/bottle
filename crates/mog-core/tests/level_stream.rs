@@ -92,6 +92,7 @@ fn idle() -> CaptureState {
 struct Inner(Mutex<Vec<String>>);
 
 impl CaptureEvents for Inner {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, state: &CaptureState) {
         self.0
             .lock()

@@ -143,6 +143,11 @@ pub const ROUTE_TABLE: &[Route] = &[
         "/ai-gateway/mlflow/v1/chat/completions",
     ),
     r(
+        "mlflow.responses",
+        Method::Post,
+        "/ai-gateway/mlflow/v1/responses",
+    ),
+    r(
         "mlflow.embeddings",
         Method::Post,
         "/ai-gateway/mlflow/v1/embeddings",
@@ -203,8 +208,10 @@ pub const RECORDING_ROUTE_TABLE: &[Route] = &[
 ];
 
 /// The IPC routes of [`ROUTE_TABLE`] that the recording pipeline may also send (with a longer
-/// timeout): the Unity Gateway chat route (NFR-21a; never `/serving-endpoints`, NFR-21b).
-pub const RECORDING_MODEL_ROUTES: &[&str] = &["mlflow.chat_completions"];
+/// timeout): the Unity Gateway chat route (NFR-21a; never `/serving-endpoints`, NFR-21b), and the
+/// Responses route of the orchestrator model (ADR 0122), which the Rust `model_gateway` client
+/// sends through the same call.
+pub const RECORDING_MODEL_ROUTES: &[&str] = &["mlflow.chat_completions", "mlflow.responses"];
 
 /// The fixed recording route of `route_id` (a [`RECORDING_ROUTE_TABLE`] entry or a
 /// [`RECORDING_MODEL_ROUTES`] entry), or `unknown_route`.
