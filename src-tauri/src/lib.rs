@@ -405,6 +405,13 @@ pub fn run() {
                 let mtm = objc2::MainThreadMarker::new()
                     .ok_or("Bottle setup is not on the main thread")?;
                 macos_panel::install_drag_monitor(mtm);
+                // The end of a lamp drag puts each card in its place, move event or not.
+                let drag_end = handle.clone();
+                macos_panel::set_drag_end_hook(move || {
+                    if let Some(host) = drag_end.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_all();
+                    }
+                });
                 app.manage(TauriWindowHost::with_style(
                     handle.clone(),
                     Box::new(macos_panel::MacPanelStyle),

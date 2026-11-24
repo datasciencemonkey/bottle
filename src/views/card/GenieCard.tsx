@@ -230,9 +230,21 @@ export interface GenieCardProps {
   identity?: { name: string; colorVariant?: string } | undefined;
   /** Memory slice 1: the `memory:saved` line of this window (`useMemorySaved` in CardView). */
   saved?: MemorySavedApi;
+  /** The pill sits over a pop-up in the one card window (`CardView.tsx`). */
+  stacked?: boolean;
+  /** The user closed the working or ready pill: the view keeps it out of sight. */
+  onClosePill?: () => void;
 }
 
-export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: GenieCardProps) {
+export function GenieCard({
+  mogId,
+  card,
+  onSize,
+  identity,
+  saved = NO_SAVED,
+  stacked = false,
+  onClosePill,
+}: GenieCardProps) {
   const accent = identity && paletteColorOf(identity.colorVariant, mogId).hex;
   const newest = card.blurbs[0];
   const blurbId = newest?.id ?? '';
@@ -382,6 +394,8 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
 
   const end = useCallback(
     (fadeMs: number) => {
+      // A card that is gone sends no second `card_done`.
+      if (visRef.current === 'gone') return;
       clearTimeout(timer.current.handle);
       setVis(fadeMs === DISMISS_FADE_MS ? 'dismissing' : 'fading');
       timer.current.handle = setTimeout(() => {
@@ -516,20 +530,21 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   // stay outside it). A bottom fade shows only while it overflows.
   const pillQuestionRef = useRef<HTMLParagraphElement>(null);
   const [questionOverflows, setQuestionOverflows] = useState(false);
-  useLayoutEffect(() => {
+  // The fade shows while more of the question lies below: it goes at the scroll end.
+  const updateQuestionFade = useCallback(() => {
     const el = pillQuestionRef.current;
-    setQuestionOverflows(el ? el.scrollHeight > el.clientHeight + 1 : false);
-  }, [kind, question]);
-
-  // A user close of the working pill hides the card only; the request runs on. The answer then
-  // shows when it lands, so the card never comes back empty.
-  const closedWhileWorking = useRef(false);
+    setQuestionOverflows(el ? el.scrollHeight - el.scrollTop - el.clientHeight > 1 : false);
+  }, []);
+  useLayoutEffect(updateQuestionFade, [kind, question, updateQuestionFade]);
+  // A resize or a fit of the window changes the width, so the line breaks: measure again.
   useEffect(() => {
-    if (!closedWhileWorking.current || working || (text === '' && !answer)) return;
-    closedWhileWorking.current = false;
-    clearTimeout(timer.current.handle);
-    setVis('shown');
-  }, [working, text, answer]);
+    window.addEventListener('resize', updateQuestionFade);
+    return () => window.removeEventListener('resize', updateQuestionFade);
+  }, [updateQuestionFade]);
+  // The window fit changes the pill's size after the first layout: check the fade once more.
+  useEffect(() => {
+    void fitted.current.then(updateQuestionFade, updateQuestionFade);
+  }, [kind, text, question, updateQuestionFade]);
 
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
@@ -676,6 +691,7 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
               className="genie-pill-question"
               data-genie-pill-question
               data-overflow={questionOverflows ? '' : undefined}
+              onScroll={updateQuestionFade}
             >
               {question}
             </p>
@@ -709,8 +725,24 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
         onClick={(e) => {
           e.stopPropagation();
           if (visRef.current === 'gone') return;
-          // The user may close the working pill: it hides the card and cancels nothing.
-          if (workingRef.current) closedWhileWorking.current = true;
+          if (workingRef.current) {
+            // The user closed the pill. The view keeps it out of sight at once; the brain hides
+            // the window (a working request runs on and shows its answer when it lands). Over a
+            // pop-up, the pop-up stays: only a ready pill tells the brain, to keep it closed.
+            onClosePill?.();
+            if (!stacked)
+              void emitView(mogId, 'click', {
+                target: CARD_DONE,
+                ...(opId ? { requestId: opId } : {}),
+              }).catch(() => undefined);
+            else if (ready)
+              void emitView(mogId, 'click', {
+                target: CARD_DONE,
+                pillOnly: true,
+                ...(opId ? { requestId: opId } : {}),
+              }).catch(() => undefined);
+            return;
+          }
           end(DISMISS_FADE_MS);
         }}
       >

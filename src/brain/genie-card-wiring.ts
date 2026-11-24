@@ -37,6 +37,10 @@ export interface GenieCardWiringDeps {
   forget(mogId: MogId, requestId: string): void;
   /** Send an event to the card window of `mogId` only. */
   sendToCard(mogId: MogId, event: string, payload: Record<string, unknown>): void;
+  /** True while the request `requestId` still works (not ready, no outcome yet). */
+  isWorking?(requestId: string): boolean;
+  /** The user closed the pill of a request that has not shown its outcome: it stays closed. */
+  closePending?(requestId: string): void;
   /** The operation ID of the newest Genie request of `mogId`. */
   lastOpId(mogId: MogId): string | undefined;
   /** Show and focus the hub on Conversations; `requestId` selects one exchange. */
@@ -91,6 +95,18 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
       return;
     }
     if (p.target === CARD_DONE && fromCard) {
+      // A close of the working pill only hides the card. The request runs on, its blurb and
+      // answer stay, and the card shows again when the answer lands (owner decision).
+      if (requestId !== undefined && deps.isWorking?.(requestId)) {
+        deps.hideCard(mogId);
+        return;
+      }
+      // The stacked pill closed by the view: the pop-up stays, only the request is marked.
+      if ((p as { pillOnly?: unknown }).pillOnly === true) {
+        if (requestId !== undefined) deps.closePending?.(requestId);
+        return;
+      }
+      if (requestId !== undefined) deps.closePending?.(requestId);
       // A late `card_done` of an older request never hides the card of a newer one.
       const current = deps.lastOpId(mogId);
       if (requestId !== undefined && current !== undefined && requestId !== current) {

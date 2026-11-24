@@ -769,6 +769,39 @@ describe('Genie card links (#523)', () => {
       }
     });
 
+    it('drops the fade at the scroll end and shows it again after a resize that overflows', async () => {
+      const el = await mount();
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+        configurable: true,
+        get: () => 100,
+      });
+      try {
+        await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running', 'Q?'));
+        const q = el.querySelector('[data-genie-pill-question]') as HTMLElement;
+        expect(q.hasAttribute('data-overflow')).toBe(true);
+        q.scrollTop = 100;
+        await act(async () => void q.dispatchEvent(new Event('scroll')));
+        expect(q.hasAttribute('data-overflow')).toBe(false);
+        q.scrollTop = 0;
+        await act(async () => void window.dispatchEvent(new Event('resize')));
+        expect(q.hasAttribute('data-overflow')).toBe(true);
+      } finally {
+        delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      }
+    });
+
+    it('the question rule never truncates (no text-overflow, line-clamp or nowrap)', () => {
+      const css = readFileSync(join(__dirname, 'genie-card.css'), 'utf8').replace(
+        /\/\*[\s\S]*?\*\//g,
+        '',
+      );
+      const rules = [...css.matchAll(/(?:^|\})\s*([^{}]*\.genie-pill-question[^{}]*)\{([^}]*)\}/g)];
+      expect(rules.length).toBeGreaterThan(0);
+      for (const [, , body] of rules) {
+        expect(body).not.toMatch(/text-overflow|line-clamp|nowrap/i);
+      }
+    });
+
     it('takes no focus when the ready pill renders', async () => {
       const el = await mount();
       const focus = vi.spyOn(HTMLElement.prototype, 'focus');
@@ -792,9 +825,7 @@ describe('Genie card links (#523)', () => {
       expect(close.tabIndex).toBe(0);
       expect(document.activeElement).not.toBe(close);
       await act(async () => void close.click());
-      expect(clicks()).toEqual([]);
-      await advance(DISMISS_FADE_MS);
-      // Only the card is done, for this request; no cancel, no Conversations.
+      // The pill goes at once. Only the card is done, for this request; no cancel, no Conversations.
       expect(clicks().map((c) => c.payload)).toEqual([{ target: 'card_done', requestId: OP }]);
     });
 
@@ -805,8 +836,8 @@ describe('Genie card links (#523)', () => {
         '[data-genie="working"] button[data-action="dismiss"]',
       ) as HTMLButtonElement;
       await act(async () => void close.click());
-      await advance(DISMISS_FADE_MS);
       expect(done()).toBe(1);
+      expect(el.querySelector('[data-genie]')).toBeNull();
     });
 
     it('shows the answer when it lands after the user closed the working pill', async () => {
@@ -814,7 +845,8 @@ describe('Genie card links (#523)', () => {
       await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running the query', 'Q?'));
       const close = el.querySelector('button[data-action="dismiss"]') as HTMLButtonElement;
       await act(async () => void close.click());
-      await advance(DISMISS_FADE_MS);
+      expect(el.querySelector('[data-genie]')).toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Still running', 'Q?'));
       expect(el.querySelector('[data-genie]')).toBeNull();
       await tauri.emitTo(`card-${ID}`, 'card:update', answered);
       expect(el.querySelector('[data-genie="answer"]')).not.toBeNull();

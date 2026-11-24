@@ -931,9 +931,58 @@ fn follow_the_card_stays_on_screen_and_flips_to_the_facing_side_at_the_edge() {
     assert!(c.y >= 0.0 && c.y + c.height <= 900.0);
 }
 
+// The mock runtime keeps no window geometry (its position is always 0,0), so a test here proves
+// the gating and the safety of `follow_mog`; the place itself is the `card_beside_sized` tests
+// above, and the real move is a `needs:mac` check.
+
+#[test]
+fn follow_a_shown_card_keeps_its_state_and_size_and_is_safe_to_repeat() {
+    use tauri::Manager;
+    let (app, host, _rec, _clock) = host();
+    host.open_mog_window("m1").unwrap();
+    host.show_card("m1").unwrap();
+    let card = app.get_webview_window("card-m1").unwrap();
+    let size = card.outer_size().unwrap();
+    host.follow_mog("m1");
+    host.follow_mog("m1");
+    host.follow_all();
+    assert_eq!(host.card_state("m1"), Some(CardState::Shown));
+    assert_eq!(card.outer_size().unwrap(), size);
+}
+
+#[test]
+fn follow_a_card_that_is_absent_hidden_closing_or_unknown_makes_and_changes_nothing() {
+    use tauri::Manager;
+    let (app, host, rec, clock) = host();
+    host.open_mog_window("m1").unwrap();
+    // Absent, and a MOG that is not open: no window is made, no panic.
+    host.follow_mog("m1");
+    host.follow_mog("nope");
+    host.follow_mog("not a label!");
+    host.follow_all();
+    assert!(app.get_webview_window("card-m1").is_none());
+    assert_eq!(host.card_state("m1"), Some(CardState::Absent));
+    assert_eq!(rec.count("style card-m1"), 0);
+    // Hidden: it stays hidden.
+    host.show_card("m1").unwrap();
+    host.hide_card("m1").unwrap();
+    host.follow_mog("m1");
+    assert!(matches!(host.card_state("m1"), Some(CardState::Hidden(_))));
+    // Closing (taken by the reaper): the state does not change either.
+    clock.advance(CARD_HIDDEN_TTL + Duration::from_secs(1));
+    host.reap_hidden_cards();
+    let state = host.card_state("m1");
+    host.follow_mog("m1");
+    host.follow_all();
+    assert_eq!(host.card_state("m1"), state);
+    assert_ne!(state, Some(CardState::Shown));
+}
+
 #[test]
 fn follow_the_app_hooks_the_mog_moved_event_to_follow_mog() {
+    // The event hook is in the app setup, which a mock app does not run: check it is wired.
     let lib = code_of("src/lib.rs");
     assert!(lib.contains("WindowEvent::Moved"));
     assert!(lib.contains("follow_mog("));
+    assert!(lib.contains("set_drag_end_hook("));
 }

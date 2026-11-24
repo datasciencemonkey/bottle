@@ -2,7 +2,7 @@
 /** UX slice 1 (AC-1.13): the window fits again when a stacked pop-up leaves the pill alone. */
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { render, tauri } from '../test-tauri';
+import { inputEmits, render, tauri } from '../test-tauri';
 import { CardView } from './CardView';
 import { FADE_AFTER_MS, FADE_OUT_MS } from './Popup';
 
@@ -95,5 +95,36 @@ describe('stacked pill and pop-up: the window fit (UX slice 1)', () => {
     expect(r.el.querySelector('[data-answer]')).toBeNull();
     // The pill still has its link, read from the sections.
     expect(r.el.querySelector('a[data-action="open-in-databricks"]')).not.toBeNull();
+  });
+
+  it('a close of the stacked pill leaves the pop-up and sends no card_done', async () => {
+    tauri.label = `card-${ID}`;
+    const r = await render(<CardView mogId={ID} />);
+    roots.push(r.root);
+    const upd = (extra: object[] = []) => ({
+      mogId: ID,
+      blurbs: [
+        { id: 'd1', text: 'Quick update', completed: true },
+        { id: G, text: 'Running the query', pinned: false, completed: false },
+        ...extra,
+      ],
+      chips: [],
+    });
+    await tauri.emitTo(`card-${ID}`, 'card:update', upd());
+    const close = r.el.querySelector(
+      '[data-genie="working"] button[data-action="dismiss"]',
+    ) as HTMLElement;
+    await act(async () => void close.click());
+    expect(r.el.querySelector('[data-genie]')).toBeNull();
+    expect(r.el.querySelector('[data-popup]')).not.toBeNull();
+    expect(inputEmits().filter((e) => (e as { kind: string }).kind === 'click')).toEqual([]);
+    // The answer lands: the card shows it again.
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      mogId: ID,
+      blurbs: [{ id: G, text: 'Churn was 4.2%.', pinned: false, completed: true }],
+      chips: [],
+      sections: [{ id: 'answer', md: 'Churn was 4.2%.' }],
+    });
+    expect(r.el.querySelector('[data-genie="answer"]')).not.toBeNull();
   });
 });

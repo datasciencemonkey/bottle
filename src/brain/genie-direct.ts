@@ -103,9 +103,17 @@ function phaseOf(e: TerminalAskEvent): GeniePhase {
  * The `send` of the ask gate. It resolves when the request has ended; it rejects only when
  * `submit` throws before anything is sent (the gate then shows "Not sent.").
  */
-export function createGenieDirectSend(
-  deps: GenieDirectDeps,
-): (turn: AgentTurn, opts?: DirectSendOptions) => Promise<void> {
+export type GenieDirectSend = ((turn: AgentTurn, opts?: DirectSendOptions) => Promise<void>) & {
+  /** True while the request still works (no answer in a hold yet): a close of its pill hides only. */
+  isWorking(opId: string): boolean;
+  /**
+   * The user closed the pill of a request that has its answer ready, or is still waiting for the
+   * hold to end: its card stays closed when the answer applies.
+   */
+  close(opId: string): void;
+};
+
+export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
   const safely = (fn: () => unknown) => {
     try {
       void Promise.resolve(fn()).catch(() => undefined);
@@ -117,7 +125,12 @@ export function createGenieDirectSend(
   const moreOwner = new Map<MogId, string>();
   /** The send number of the newest request that put its answer on each MOG's card (M4). */
   const answerSeq = new Map<MogId, number>();
+  /** The number of the newest request that started on each MOG. */
+  const latestSend = new Map<MogId, number>();
   let sends = 0;
+  /** The requests that have not shown their outcome yet: `working`, or `ready` in a hold. */
+  const live = new Map<string, 'working' | 'ready'>();
+  const closed = new Set<string>();
   const send = (turn: AgentTurn, opts: DirectSendOptions = {}): Promise<void> => {
     const req: AskRequest = {
       opId: deps.newOpId(),
@@ -127,7 +140,9 @@ export function createGenieDirectSend(
       tags: { app: 'bottle', mog: turn.mogId, op: 'genie' },
     };
     const mySeq = ++sends;
+    latestSend.set(turn.mogId, mySeq);
     const { opId, events } = deps.genie.submit(req);
+    live.set(opId, 'working');
     const card = deps.cardFor(turn.mogId);
     const id = genieBlurbId(opId);
     // The new status blurb goes on top first, then the old answer goes: the card never shows the
@@ -184,6 +199,8 @@ export function createGenieDirectSend(
         // The early put (ready pill) and the late put (`apply`) of an older request never
         // overwrite the link and sections that a newer request already put.
         if ((answerSeq.get(turn.mogId) ?? 0) > mySeq) return;
+        // A request that started later owns the card, even if it has not answered yet.
+        if ((latestSend.get(turn.mogId) ?? 0) > mySeq) return;
         answerSeq.set(turn.mogId, mySeq);
         card.setExpanded({
           answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
@@ -194,6 +211,13 @@ export function createGenieDirectSend(
         });
       };
       const apply = async (): Promise<void> => {
+        live.delete(opId);
+        // The user closed the ready pill: the card stays closed. The blurb ends empty.
+        if (closed.delete(opId)) {
+          card.add({ id, text: '', completed: true });
+          safely(() => deps.onPhase?.(turn.mogId, phaseOf(outcome), opId));
+          return;
+        }
         // The answer sections and the Try again control go on while the blurb still works, so the
         // card goes from the status pill to the answer or failure card in one step.
         if (outcome.t === 'answer') {
@@ -250,6 +274,7 @@ export function createGenieDirectSend(
         // The ready pill shows "Open in Databricks", so the deep link goes on with it. The blurb
         // still works, so the view keeps the pill until the key-up.
         putAnswer();
+        live.set(opId, 'ready');
         card.add({ id, text: ANSWER_READY });
       }
       await new Promise<void>((resolve, reject) => {
@@ -259,5 +284,10 @@ export function createGenieDirectSend(
       });
     })();
   };
-  return send;
+  return Object.assign(send, {
+    isWorking: (opId: string) => live.get(opId) === 'working',
+    close: (opId: string) => {
+      if (live.has(opId)) closed.add(opId);
+    },
+  });
 }

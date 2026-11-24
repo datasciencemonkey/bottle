@@ -637,6 +637,39 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(puts.some((x, i) => i > 1 && x?.answerMd === 'answer 1')).toBe(false);
     });
 
+    it('an answer of request 1 while request 2 still works puts no sections on request 2', async () => {
+      const c = fakeCard();
+      let n = 0;
+      let failSecond: () => void = () => undefined;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                if (k === 2) await new Promise<void>((r) => (failSecond = r));
+                yield (
+                  k === 1
+                    ? { ...ANSWER, deepLink: 'https://x.test/1' }
+                    : { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' }
+                ) as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      failSecond();
+      await both;
+      expect(c.expanded.filter((x) => x !== undefined)).toEqual([]);
+    });
+
     it('[AC-1.11] a failure waits for the gate too, and keeps the working pill', async () => {
       const c = fakeCard();
       const g = gateDouble(true);

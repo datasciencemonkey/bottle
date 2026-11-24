@@ -690,8 +690,27 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         let Some((at, side)) = self.card_geometry(mog_id, Some(size)) else {
             return;
         };
-        let _ = move_to(&w, Some(&at));
-        set_side_title(&w, Some(side));
+        // The side goes into the title first, and only when it changes, so the view reads the new
+        // side when the move event comes (`watchCardSide`).
+        if w.title().ok().as_deref() != Some(windows::card_title(side).as_str()) {
+            set_side_title(&w, Some(side));
+        }
+        // On macOS the card is a child window of its MOG and has moved with it already.
+        if !same_place(&w, &at) {
+            let _ = move_to(&w, Some(&at));
+        }
+    }
+
+    /// Follow every open MOG once (the end of a lamp drag, so a card always ends in its place).
+    pub fn follow_all(&self) {
+        let Ok(ledger) = self.ledger.try_lock() else {
+            return;
+        };
+        let ids = ledger.open_ids();
+        drop(ledger);
+        for id in ids {
+            self.follow_mog(&id);
+        }
     }
 
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
@@ -792,6 +811,18 @@ fn set_side_title<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, side: Option<w
     if let Some(side) = side {
         let _ = w.set_title(&windows::card_title(side));
     }
+}
+
+/// True if the window `w` is at the place of `g` already (within half a logical pixel).
+fn same_place<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, g: &Geometry) -> bool {
+    let Ok(scale) = w.scale_factor() else {
+        return false;
+    };
+    let Ok(pos) = w.outer_position() else {
+        return false;
+    };
+    let p = pos.to_logical::<f64>(scale);
+    (p.x - g.x).abs() < 0.5 && (p.y - g.y).abs() < 0.5
 }
 
 /// The logical `(width, height)` of `w`, if the platform gives it.
