@@ -282,8 +282,8 @@ export function NewSessionConfirm({
     >
       <p id={id} className="m-0">
         {live
-          ? 'Start a new session? The live question stops and this list clears.'
-          : 'Start a new session? The waiting questions are removed and this list clears.'}
+          ? 'Start a new session? The live question stops. Your conversations stay.'
+          : 'Start a new session? The waiting questions are removed. Your conversations stay.'}
       </p>
       <div className="flex gap-[var(--mog-space-2)]">
         <Button type="button" size="sm" data-confirm-new-session onClick={onConfirm}>
