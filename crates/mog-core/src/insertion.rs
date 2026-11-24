@@ -335,6 +335,8 @@ pub fn note_os_focus_at_key_down(kind: NoteKind) {
     let _ = note_focus_at_key_down(targets(), kind, <MacInsertHost>::default());
     #[cfg(windows)]
     let _ = note_focus_at_key_down(targets(), kind, <WindowsInsertHost>::default());
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = kind;
 }
 
 /// Paste `text` into the focused app (MOG-06a), with the chord only (MOG-06b), and put the

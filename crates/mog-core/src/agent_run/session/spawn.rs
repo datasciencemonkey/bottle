@@ -8,7 +8,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::appserver::{ServerIo, ServerProc, SpawnSpec, Spawner};
+#[cfg(unix)]
+use super::appserver::ServerIo;
+use super::appserver::{ServerProc, SpawnSpec, Spawner};
 
 /// The grace between SIGTERM and SIGKILL.
 pub const TERM_GRACE: std::time::Duration = std::time::Duration::from_secs(2);

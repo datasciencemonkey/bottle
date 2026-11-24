@@ -475,6 +475,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     fn tempdir() -> PathBuf {
         let mut n = [0u8; 6];
         getrandom::fill(&mut n).unwrap();
