@@ -543,6 +543,10 @@ struct DelLocal {
     names: Mutex<Vec<(String, u64)>>,
     active: HashSet<String>,
     deleted: Mutex<Vec<String>>,
+    /// The device proves that no part ever went up (the first part is still here).
+    proven: bool,
+    /// The delete leaves files behind.
+    stuck: bool,
 }
 
 impl DelLocal {
@@ -556,6 +560,22 @@ impl DelLocal {
             ),
             active: active.iter().map(|s| (*s).to_owned()).collect(),
             deleted: Mutex::new(Vec::new()),
+            proven: true,
+            stuck: false,
+        })
+    }
+    fn with(names: &[&str], proven: bool, stuck: bool) -> Arc<Self> {
+        Arc::new(Self {
+            names: Mutex::new(
+                names
+                    .iter()
+                    .map(|n| ((*n).to_owned(), 1_795_097_100_000))
+                    .collect(),
+            ),
+            active: HashSet::new(),
+            deleted: Mutex::new(Vec::new()),
+            proven,
+            stuck,
         })
     }
 }
@@ -570,9 +590,16 @@ impl LocalAudio for DelLocal {
     fn active(&self) -> HashSet<String> {
         self.active.clone()
     }
-    fn delete(&self, name: &str) {
+    fn delete(&self, name: &str) -> bool {
+        if self.stuck {
+            return false;
+        }
         self.names.lock().unwrap().retain(|(n, _)| n != name);
         self.deleted.lock().unwrap().push(name.to_owned());
+        true
+    }
+    fn never_uploaded(&self, _name: &str) -> bool {
+        self.proven
     }
 }
 
@@ -730,4 +757,83 @@ fn rec_component_delete_refuses_an_id_that_is_not_in_the_store() {
         .unwrap_err();
     assert_eq!(e.code(), "invalid_args");
     assert!(http.seen().is_empty());
+}
+
+#[test]
+fn rec_component_delete_with_no_storage_needs_proof_that_nothing_uploaded() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = DelLocal::with(&[NAME], false, false);
+    let (c, _, _) = component_with(
+        &http,
+        None,
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    let e = c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap_err();
+    assert_eq!(e.code(), "recording_busy");
+    assert!(local.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn rec_component_delete_refuses_when_the_job_cannot_be_read() {
+    let http = Arc::new(ScriptedHttp::new());
+    http.json(
+        "files.download",
+        403,
+        json!({"error_code":"PERMISSION_DENIED"}),
+    );
+    let local = DelLocal::new(&[NAME], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    assert!(c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .is_err());
+    assert!(local.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn rec_component_delete_that_leaves_files_is_an_error() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = DelLocal::with(&[NAME], true, true);
+    let (c, _, _) = component_with(&http, None, local, Arc::new(|| 1_795_100_700_000i64));
+    let e = c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap_err();
+    assert_eq!(e.code(), "host_failed");
+}
+
+#[test]
+fn rec_component_list_keeps_rows_that_are_not_dead_failed_uploads() {
+    let list = |m: Value, local: Arc<dyn LocalAudio>| {
+        let http = Arc::new(ScriptedHttp::new());
+        http.json(
+            "files.list_directory",
+            200,
+            json!({"contents":[{"path":"x","is_directory":true,"name":NAME}]}),
+        );
+        http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
+        let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+        c.call("recording_list", json!({"profile":"fake-home"}))
+            .unwrap()
+    };
+    // Failed upload, audio still here: shown (Retry works).
+    let v = list(failed_upload_manifest(false), DelLocal::new(&[NAME], &[]));
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    // Failed with a part in the volume and no audio here: shown.
+    let v = list(failed_upload_manifest(true), DelLocal::new(&[], &[]));
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    // Failed at transcribe or notes: shown.
+    let v = list(manifest("failed"), DelLocal::new(&[], &[]));
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    let mut t = failed_upload_manifest(true);
+    t["error_kind"] = json!("transcribe_failed");
+    t["error_stage"] = json!("transcribing");
+    let v = list(t, DelLocal::new(&[], &[]));
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
 }

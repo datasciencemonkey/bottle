@@ -511,3 +511,69 @@ fn rec_delete_removes_the_audio_chunks_and_sidecar_of_one_recording_only() {
     assert_eq!(names, ["2026-11-20_0900_2"]);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn rec_delete_spares_empty_sibling_dirs_other_sidecars_and_symlinks() {
+    use mog_core::recording_cloud::contract::LocalAudio;
+    use mog_core::recording_cloud::sidecar::{self, Sidecar};
+    let root = temp("delete-safe");
+    let d = root.join("rec-1");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("2026-11-20_0900.opus"), b"OggS").unwrap();
+    // An empty dir: a capture that just started owns it.
+    let fresh = root.join("rec-fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    // A dir that holds only another recording's sidecar.
+    let side = root.join("rec-side");
+    std::fs::create_dir_all(&side).unwrap();
+    sidecar::write(
+        &side,
+        &Sidecar::new("rec-side", "2026-11-21_1000", 1, "fake-home", None),
+    )
+    .unwrap();
+    // A symlinked dir with a file of the same name is not followed.
+    let outside = temp("delete-outside");
+    std::fs::write(outside.join("2026-11-20_0900.opus"), b"OggS").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, root.join("rec-link")).unwrap();
+    let seam = TempAudio::new(vec![root.clone()], Arc::new(Default::default));
+    // The scan still lists the symlinked copy, so the call reports that files remain.
+    assert!(!seam.delete("2026-11-20_0900"));
+    assert!(!d.exists());
+    assert!(fresh.exists(), "an empty sibling dir survives");
+    assert!(
+        side.join("job.local.json").exists(),
+        "another sidecar survives"
+    );
+    assert!(
+        outside.join("2026-11-20_0900.opus").exists(),
+        "no symlink is followed"
+    );
+    // A busy name is never deleted.
+    let busy: std::collections::HashSet<String> = ["2026-11-21_1000".to_owned()].into();
+    let seam = TempAudio::new(vec![root.clone()], Arc::new(move || busy.clone()));
+    assert!(!seam.delete("2026-11-21_1000"));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+#[test]
+fn rec_delete_proves_nothing_uploaded_only_from_the_first_part() {
+    use mog_core::recording_cloud::contract::LocalAudio;
+    let root = temp("delete-proof");
+    let a = root.join("a");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::write(a.join("2026-11-20_0900.part01.opus"), b"x").unwrap();
+    std::fs::write(a.join("2026-11-20_0900.part02.opus"), b"x").unwrap();
+    let b = root.join("b");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(b.join("2026-11-21_0900.part02.opus"), b"x").unwrap();
+    let seam = TempAudio::new(vec![root.clone()], Arc::new(Default::default));
+    assert!(seam.never_uploaded("2026-11-20_0900"));
+    assert!(
+        !seam.never_uploaded("2026-11-21_0900"),
+        "part 01 went up and left"
+    );
+    assert!(!seam.never_uploaded("2026-12-01_0900"));
+    let _ = std::fs::remove_dir_all(root);
+}

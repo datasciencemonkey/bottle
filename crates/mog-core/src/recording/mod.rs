@@ -230,7 +230,9 @@ pub trait RecordingCloud: Send + Sync {
     /// Delete a recording that never reached the volume: its audio files, temp files and
     /// sidecar on this device. `Ok(false)`: no such recording on this device. A recording that
     /// captures, runs, or has parts in the volume gives `recording_busy`. It never writes to
-    /// the volume. `storage` is `None` when Settings has none (nothing remote can exist then).
+    /// the volume. `storage` is `None` when Settings has none: the volume cannot be read then,
+    /// so the device must prove that no part was ever uploaded, or the call is `recording_busy`.
+    /// Files that remain after the delete give an error.
     fn delete(
         &self,
         profile: &ProfileName,
