@@ -10,7 +10,7 @@ import {
   PENDING_ROUTER_EVAL,
 } from './components/router-model';
 import {
-  DICTATION_DEADLINE_MS,
+  DICTATION_CLEANUP_DEADLINE_MS,
   modelTextGrounded,
   withDictationCleanup,
 } from './dictation-cleanup';
@@ -110,7 +110,7 @@ describe('the model answers (CAP-66a)', () => {
 });
 
 describe('the deadline and the offline path (CAP-67b)', () => {
-  it('[CAP-67b] [AT-21] a model that is late at 900 ms gives the pre-pass text, with no retry', async () => {
+  it('[CAP-67b] [AT-21] a model that is late at 1500 ms gives the pre-pass text, with no retry', async () => {
     vi.useFakeTimers();
     let calls = 0;
     const h = harness(() => {
@@ -119,7 +119,7 @@ describe('the deadline and the offline path (CAP-67b)', () => {
     });
     const d = withDictationCleanup(h.base);
     const done = routeUtterance(utterance(), d);
-    await vi.advanceTimersByTimeAsync(DICTATION_DEADLINE_MS - 1);
+    await vi.advanceTimersByTimeAsync(DICTATION_CLEANUP_DEADLINE_MS - 1);
     expect(h.inserted).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     await done;
@@ -132,7 +132,7 @@ describe('the deadline and the offline path (CAP-67b)', () => {
     let late!: (d: ReturnType<typeof routerDecision>) => void;
     const h = harness(() => new Promise((res) => (late = res)));
     const done = routeUtterance(utterance(), withDictationCleanup(h.base));
-    await vi.advanceTimersByTimeAsync(DICTATION_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(DICTATION_CLEANUP_DEADLINE_MS);
     await done;
     late(routerDecision({ intent: 'dictation', cleaned_text: 'from the model' }));
     await vi.advanceTimersByTimeAsync(10);
@@ -217,7 +217,7 @@ describe('the ⌥G ask (RTR-17a)', () => {
     vi.useFakeTimers();
     const h = harness(() => new Promise(() => undefined));
     const done = routeUtterance(utterance({ forceAsk: true }), withDictationCleanup(h.base));
-    await vi.advanceTimersByTimeAsync(DICTATION_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(DICTATION_CLEANUP_DEADLINE_MS);
     expect(await done).toMatchObject({ route: 'ask', question: PRE });
   });
 

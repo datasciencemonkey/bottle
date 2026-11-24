@@ -794,7 +794,7 @@ export function startBrain(): Brain {
     // home profile opens the profile picker. The user picks; Bottle never picks.
     const homes = createHomeProfiles(ipcHomeProfileDeps(() => workspaces.home()));
     const insertionOn = () => true;
-    // ADR 0122: the pre-pass, the 900 ms deadline and the grounding check wrap the router step.
+    // ADR 0122: the pre-pass, the 1500 ms deadline and the grounding check wrap the router step.
     // TODO(integration): pass `cleanDictation: () => <the "Clean up dictation" setting>` here.
     const route = withDictationCleanup(withOfflineFallback(ipcUtteranceDeps()));
     const pick = createProfilePick({

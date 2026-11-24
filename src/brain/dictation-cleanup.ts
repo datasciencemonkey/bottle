@@ -4,7 +4,7 @@
  * `withDictationCleanup` wraps the route deps so that every pasted text is the pre-pass text or a
  * grounded model rewrite of it:
  * - The router input is the pre-pass text (`cleanup-prepass.ts`).
- * - The router call has a 900 ms deadline. When it passes, the pre-pass text is used at once, with
+ * - The router call has a 1500 ms deadline. When it passes, the pre-pass text is used at once, with
  *   no retry. A late reply changes nothing.
  * - The model `cleaned_text` must be grounded in the pre-pass text: no number, name or entity that
  *   the input does not hold, and no number lost. Else the pre-pass text is used.
@@ -22,8 +22,8 @@ import type { RouterInput } from './components/router-step';
 import { offlineDecision } from './offline-intent';
 import type { UtteranceRouteDeps } from './utterance-route';
 
-/** The deadline of a dictation router call (CAP-67a, D69). */
-export const DICTATION_DEADLINE_MS = 900;
+/** The deadline of a dictation router call (ADR 0122: the live probe shows 1.4 to 2.4 s per call; CAP-67a said 900 ms). */
+export const DICTATION_CLEANUP_DEADLINE_MS = 1500;
 
 export interface DictationCleanupConfig {
   /**
@@ -31,7 +31,7 @@ export interface DictationCleanupConfig {
    * `cleanDictation`; the integration step passes a reader of the real setting here.
    */
   cleanDictation?: () => boolean;
-  /** A lower deadline for tests. It is never above `DICTATION_DEADLINE_MS`. */
+  /** A lower deadline for tests. It is never above `DICTATION_CLEANUP_DEADLINE_MS`. */
   deadlineMs?: number;
 }
 
@@ -57,7 +57,10 @@ export function withDictationCleanup(
   deps: UtteranceRouteDeps,
   cfg: DictationCleanupConfig = {},
 ): UtteranceRouteDeps {
-  const deadlineMs = Math.min(cfg.deadlineMs ?? DICTATION_DEADLINE_MS, DICTATION_DEADLINE_MS);
+  const deadlineMs = Math.min(
+    cfg.deadlineMs ?? DICTATION_CLEANUP_DEADLINE_MS,
+    DICTATION_CLEANUP_DEADLINE_MS,
+  );
   const cleanOn = cfg.cleanDictation ?? (() => true);
   return {
     ...deps,
