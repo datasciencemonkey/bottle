@@ -32,7 +32,9 @@ After the 0.1.6 test, the owner found these problems:
 
 1. **One orchestrator model.** The default is `system.ai.claude-haiku-5-5`, and the fallback is `system.ai.gpt-oss-20b`.
    - The user picks it in Settings → Workspace, from the chat models that the home workspace's AI Gateway serves and that support tools and strict JSON. Each model is labelled "Tested" or "Not tested" from the eval record.
-   - Every call uses `POST /ai-gateway/mlflow/v1/chat/completions` on the home profile (NFR-21a), through `model_gateway::ChatClient`.
+   - Every call uses the Responses API, `POST /ai-gateway/mlflow/v1/responses`, on the home profile (NFR-21a), through `model_gateway::ChatClient`. Each body sets `"store": false`.
+   - Gateway facts (DEFAULT, 2026-11-24): Anthropic models refuse `text.format` structured output. So the ask loop ends with a terminal `submit_answer` tool, and the router asks for JSON in its instructions and validates the reply. One call takes about 1.3 to 2.4 s, so dictation cleanup has a 1.5 s budget. Past that, Bottle pastes the local pre-pass text.
+   - ⌥G sends the local pre-pass text as the question. The model's `cleaned_text` is used only for the dictation paste, and only after a strict check: only words from the input, the same negations, and no new links or instructions.
 2. **Two modes with different permissions.**
    - **Clean mode** runs on every utterance as `model_invoke` role `router`. It has no tools, so RTR-20a and ADR 0056 do not change. A local filler pre-pass runs first. The call has a deadline of about 900 ms, and on a timeout Bottle uses the pre-pass text.
    - **Ask mode** runs only on ⌥G, as a Rust tool loop in `agent_run::orchestrator`.
