@@ -99,36 +99,72 @@
   /* Most stage lines fit, so the pill keeps its width when the stage changes. */
   min-width: 184px;
   min-height: 38px;
-  padding: 0 14px;
+  /* The right padding leaves room for the close control. */
+  padding: 0 36px 0 14px;
   border-radius: var(--mog-radius-pill);
   animation: genie-in 180ms var(--mog-ease-out) both;
 }
 
-/* The pill shows the whole question, wrapped under the stage line (never an ellipsis), and in
-   the ready state the quiet "Open in Databricks" link. The window grows to fit (`fit-window.ts`).
-   A pill with no question stays one line. */
+/* The pill shows the question, wrapped under the stage line (never an ellipsis), and in the
+   ready state the quiet "Open in Databricks" link. The window grows to fit (`fit-window.ts`).
+   A pill with no question stays one line. Many lines would spill past a capsule, so it takes a
+   card-like corner (`GenieCard.tsx` starts the grow motion from the real computed corner). */
 .genie-working:has(.genie-pill-question) {
   flex-wrap: wrap;
   row-gap: 4px;
   padding-top: 9px;
   padding-bottom: 9px;
+  border-radius: 16px;
 }
 
+/* A long question scrolls in its own area of at most 8 lines, so the pill always fits the card
+   window (`CARD_WINDOW_MAX_HEIGHT`). The status row and the link row stay outside the scroll. */
 .genie-pill-question {
   flex: 1 0 100%;
   min-width: 0;
+  max-height: calc(8 * 1.4em);
   margin: 0;
+  overflow-y: auto;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
-  word-break: break-word;
+}
+
+/* A subtle bottom fade, only while the question overflows its area. */
+.genie-pill-question[data-overflow] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+}
+
+/* The link row keeps its height before the answer is ready: the placeholder has the size of the
+   link and shows nothing, so "Answer ready" never changes the size of the pill. */
+.genie-pill-linkrow {
+  display: flex;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.genie-pill-link-ph {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* It takes its own last line (`.genie-databricks`); only the size is smaller than in the footer. */
 .genie-toggle.genie-pill-link {
   font-size: var(--mog-text-xs);
+}
+
+/* The close control of the pill sits at the top right, clear of the timer. */
+.genie-working .genie-dismiss {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.genie-working:has(.genie-pill-question) .genie-dismiss {
+  top: 6px;
+  transform: none;
 }
 
 .genie-stage-slot {

@@ -115,6 +115,9 @@ export function createGenieDirectSend(
   };
   /** The chip owner of each MOG's newest R-8 chip, so a new request takes the old one away. */
   const moreOwner = new Map<MogId, string>();
+  /** The send number of the newest request that put its answer on each MOG's card (M4). */
+  const answerSeq = new Map<MogId, number>();
+  let sends = 0;
   const send = (turn: AgentTurn, opts: DirectSendOptions = {}): Promise<void> => {
     const req: AskRequest = {
       opId: deps.newOpId(),
@@ -123,6 +126,7 @@ export function createGenieDirectSend(
       question: turn.question,
       tags: { app: 'bottle', mog: turn.mogId, op: 'genie' },
     };
+    const mySeq = ++sends;
     const { opId, events } = deps.genie.submit(req);
     const card = deps.cardFor(turn.mogId);
     const id = genieBlurbId(opId);
@@ -177,6 +181,10 @@ export function createGenieDirectSend(
       // workspace was asked.
       const putAnswer = (): void => {
         if (outcome.t !== 'answer') return;
+        // The early put (ready pill) and the late put (`apply`) of an older request never
+        // overwrite the link and sections that a newer request already put.
+        if ((answerSeq.get(turn.mogId) ?? 0) > mySeq) return;
+        answerSeq.set(turn.mogId, mySeq);
         card.setExpanded({
           answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
           keyNumbers: outcome.keyNumbers.map((k) => k.text),
@@ -212,7 +220,12 @@ export function createGenieDirectSend(
           });
         }
         if (outcome.t === 'answer' && card.setControls) {
-          const more = deps.offerOthers?.(turn, opId);
+          let more: ChipView | undefined;
+          try {
+            more = deps.offerOthers?.(turn, opId);
+          } catch {
+            // A fault in the chip offer never changes the card. `safely` cannot return a value.
+          }
           if (more) {
             const owner = `more:${id}`;
             moreOwner.set(turn.mogId, owner);

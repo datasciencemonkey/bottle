@@ -64,4 +64,36 @@ describe('stacked pill and pop-up: the window fit (UX slice 1)', () => {
     expect(fits.calls.at(-1)).toBe(PILL_PX);
     expect(fits.calls.filter((p) => p === PILL_PX).length).toBeGreaterThan(0);
   });
+  it('a ready pill that has the sections, under a newer pop-up, shows no answer in the hold', async () => {
+    tauri.label = `card-${ID}`;
+    const r = await render(<CardView mogId={ID} />);
+    roots.push(r.root);
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      mogId: ID,
+      // The newest blurb is a dictation pop-up; the pending Genie pill says "Answer ready".
+      blurbs: [
+        { id: 'd1', text: 'Quick update', completed: true },
+        { id: G, text: 'Answer ready', pinned: false, completed: false },
+        { id: 'ask:u1', text: '"What was churn?"', pinned: false, completed: true },
+      ],
+      chips: [],
+      // The brain puts the sections on with the ready pill (for the deep link).
+      sections: [
+        { id: 'answer', md: 'Churn was 4.2%.' },
+        { id: 'keyNumbers', items: ['4.2%'] },
+        {
+          id: 'footer',
+          deepLink: 'https://acme.cloud.databricks.test/one/chat/threads/c1?o=1',
+          workspaceHost: 'https://acme.cloud.databricks.test',
+        },
+      ],
+    });
+    expect(r.el.querySelector('[data-genie="working"][data-ready]')).not.toBeNull();
+    expect(r.el.querySelector('[data-popup]')).not.toBeNull();
+    expect(r.el.querySelector('.card-panel')).toBeNull();
+    expect(r.el.querySelector('[data-section="answer"]')).toBeNull();
+    expect(r.el.querySelector('[data-answer]')).toBeNull();
+    // The pill still has its link, read from the sections.
+    expect(r.el.querySelector('a[data-action="open-in-databricks"]')).not.toBeNull();
+  });
 });

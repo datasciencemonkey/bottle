@@ -602,6 +602,41 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(c.log.at(-1)?.text).toBe('answer 2');
     });
 
+    it('an older request that applies after a newer one never overwrites its link and sections', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      let n = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                yield { ...ANSWER, md: `answer ${k}`, deepLink: `https://x.test/${k}` } as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        arrivals: g.arrivals,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      // Both answered in the hold: the newer request put its link last.
+      expect(c.expanded.at(-1)).toMatchObject({ answerMd: 'answer 2' });
+      // The older request applies after the newer one.
+      g.waiting.reverse();
+      g.release();
+      await both;
+      const puts = c.expanded.filter((x) => x !== undefined);
+      expect(puts.at(-1)).toMatchObject({ answerMd: 'answer 2', deepLink: 'https://x.test/2' });
+      expect(puts.some((x, i) => i > 1 && x?.answerMd === 'answer 1')).toBe(false);
+    });
+
     it('[AC-1.11] a failure waits for the gate too, and keeps the working pill', async () => {
       const c = fakeCard();
       const g = gateDouble(true);

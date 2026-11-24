@@ -668,12 +668,9 @@ describe('Genie card links (#523)', () => {
       const el = await mount();
       await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running the query', LONG));
       const q = el.querySelector('[data-genie="working"] [data-genie-pill-question]');
+      // The whole question is in the DOM, not cut, with no truncation attribute or class.
       expect(q?.textContent).toBe(LONG);
-      const css = readFileSync(join(__dirname, 'genie-card.css'), 'utf8');
-      const rule = /\.genie-pill-question \{([^}]*)\}/.exec(css)?.[1] ?? '';
-      expect(rule).toContain('white-space: normal');
-      expect(rule).toContain('overflow-wrap: anywhere');
-      expect(rule).not.toMatch(/text-overflow|line-clamp|nowrap|overflow: hidden/);
+      expect(q?.getAttribute('title')).toBeNull();
     });
 
     it('shows no link before the answer is ready, and none without a deep link', async () => {
@@ -698,7 +695,7 @@ describe('Genie card links (#523)', () => {
       expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
     });
 
-    it('shows a focusable link on the ready pill and sends the same link_open click', async () => {
+    it('shows a link on the ready pill and sends the same link_open click', async () => {
       const el = await mount();
       await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?', [footer]));
       const a = el.querySelector(
@@ -706,13 +703,121 @@ describe('Genie card links (#523)', () => {
       ) as HTMLAnchorElement;
       expect(a.textContent).toBe('Open in Databricks');
       expect(a.getAttribute('href')).toBe(DEEP);
-      expect(a.tabIndex).toBeGreaterThanOrEqual(0);
+      expect(a.getAttribute('aria-label')).toBe('Open in Databricks (opens in browser)');
       const ev = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
       await act(async () => void a.dispatchEvent(ev));
       expect(ev.defaultPrevented).toBe(true);
       expect(linkClicks()).toHaveLength(1);
       expect(linkClicks()[0]?.payload).toEqual({ target: 'link_open', url: DEEP });
       expect(clicks().some((c) => c.payload.target === 'open_conversations')).toBe(false);
+    });
+
+    it('reserves the link row before ready (hidden, not focusable) and the link replaces it', async () => {
+      const el = await mount();
+      await tauri.emitTo(
+        `card-${ID}`,
+        'card:update',
+        pillWith('Running the query', 'Q?', [footer]),
+      );
+      const ph = el.querySelector('[data-genie="working"] [data-pill-link-placeholder]');
+      expect(ph).not.toBeNull();
+      expect(ph?.getAttribute('aria-hidden')).toBe('true');
+      expect(ph?.tagName).not.toBe('A');
+      expect(ph?.closest('.genie-pill-linkrow')).not.toBeNull();
+      expect(el.querySelector('a[data-action="open-in-databricks"]')).toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?', [footer]));
+      expect(el.querySelector('[data-pill-link-placeholder]')).toBeNull();
+      const row = el.querySelector('.genie-pill-linkrow');
+      expect(row?.querySelector('a[data-action="open-in-databricks"]')).not.toBeNull();
+      // The row stays: the ready moment adds no row, so the pill keeps its size.
+      expect(el.querySelectorAll('.genie-pill-linkrow')).toHaveLength(1);
+    });
+
+    it('keeps the link outside the scroller for a question longer than the cap', async () => {
+      const el = await mount();
+      const huge = `${LONG} `.repeat(12).trim();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, huge, [footer]));
+      const q = el.querySelector('[data-genie-pill-question]') as HTMLElement;
+      expect(q.textContent).toBe(huge);
+      const a = el.querySelector('a[data-action="open-in-databricks"]');
+      expect(a).not.toBeNull();
+      expect(q.contains(a)).toBe(false);
+      expect(q.contains(el.querySelector('[data-genie-stage]'))).toBe(false);
+    });
+
+    it('marks the question as overflowing only when it does', async () => {
+      const el = await mount();
+      const set = (scroll: number) => {
+        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+          configurable: true,
+          get: () => scroll,
+        });
+      };
+      try {
+        set(100);
+        await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running', 'Q?'));
+        expect(el.querySelector('[data-genie-pill-question]')?.hasAttribute('data-overflow')).toBe(
+          true,
+        );
+        set(0);
+        await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running', 'Q2?'));
+        expect(el.querySelector('[data-genie-pill-question]')?.hasAttribute('data-overflow')).toBe(
+          false,
+        );
+      } finally {
+        delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      }
+    });
+
+    it('takes no focus when the ready pill renders', async () => {
+      const el = await mount();
+      const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+      try {
+        await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running', 'Q?', [footer]));
+        await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?', [footer]));
+        expect(el.querySelector('a[data-action="open-in-databricks"]')).not.toBeNull();
+        expect(focus).not.toHaveBeenCalled();
+      } finally {
+        focus.mockRestore();
+      }
+    });
+
+    it('has a close control on the working pill that hides the card and cancels nothing', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running the query', 'Q?'));
+      const close = el.querySelector(
+        '[data-genie="working"] button[data-action="dismiss"]',
+      ) as HTMLButtonElement;
+      expect(close.getAttribute('aria-label')).toBe(CLOSE_LABEL);
+      expect(close.tabIndex).toBe(0);
+      expect(document.activeElement).not.toBe(close);
+      await act(async () => void close.click());
+      expect(clicks()).toEqual([]);
+      await advance(DISMISS_FADE_MS);
+      // Only the card is done, for this request; no cancel, no Conversations.
+      expect(clicks().map((c) => c.payload)).toEqual([{ target: 'card_done', requestId: OP }]);
+    });
+
+    it('has the same close control on the ready pill', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?', [footer]));
+      const close = el.querySelector(
+        '[data-genie="working"] button[data-action="dismiss"]',
+      ) as HTMLButtonElement;
+      await act(async () => void close.click());
+      await advance(DISMISS_FADE_MS);
+      expect(done()).toBe(1);
+    });
+
+    it('shows the answer when it lands after the user closed the working pill', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running the query', 'Q?'));
+      const close = el.querySelector('button[data-action="dismiss"]') as HTMLButtonElement;
+      await act(async () => void close.click());
+      await advance(DISMISS_FADE_MS);
+      expect(el.querySelector('[data-genie]')).toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+      expect(el.querySelector('[data-genie="answer"]')).not.toBeNull();
     });
   });
 

@@ -62,6 +62,7 @@ export const FAILURE_TITLE = 'Genie could not answer.';
 export const OPEN_IN_BOTTLE_LABEL = 'Open in Bottle';
 /** #523: the footer link to the same conversation in the workspace (the brain opens it). */
 export const OPEN_IN_DATABRICKS_LABEL = 'Open in Databricks';
+export const OPEN_IN_DATABRICKS_ARIA = 'Open in Databricks (opens in browser)';
 export const TABLE_MORE_HINT = 'Open in Bottle to see them all';
 export const SHOW_MORE_LABEL = 'Show more';
 export const SHOW_LESS_LABEL = 'Show less';
@@ -178,6 +179,41 @@ function questionOf(card: CardUpdate): string | undefined {
   return line.replace(/^"([\s\S]*)"$/, '$1');
 }
 
+/**
+ * The quiet "Open in Databricks" link of the pill and the footer. It sends the same `link_open`
+ * click; the brain and the host check the URL again (#523).
+ */
+function DatabricksLink({
+  url,
+  onOpen,
+  className = '',
+}: {
+  url: string;
+  onOpen: (url: string) => void;
+  className?: string;
+}) {
+  return (
+    <a
+      className={`genie-toggle genie-databricks ${className}`.trim()}
+      data-action="open-in-databricks"
+      href={url}
+      rel="noopener noreferrer"
+      title={url}
+      aria-label={OPEN_IN_DATABRICKS_ARIA}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.detail > 1) return;
+        onOpen(url);
+      }}
+    >
+      {OPEN_IN_DATABRICKS_LABEL}
+      <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+    </a>
+  );
+}
+
 export interface GenieCardProps {
   mogId: MogId;
   card: CardUpdate;
@@ -222,6 +258,7 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const changeWorkspace = card.chips.find((c) => c.id === `workspace:${blurbId}`);
   // Slice 2a, R-8: the chip that sends this question to the agent too. Its id names the request.
   const askOthers = card.chips.find((c) => c.id === `agent-more:${opId}`);
+  const question = questionOf(card);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
   // UX slice 1: an answer is waiting for the talk-key hold to end. The pill says so, with no timer.
@@ -475,20 +512,42 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
     fitted.current = Promise.resolve(measure());
   }, [onSize, measure, kind, text, card.sections, card.blurbs, retry, vis, saved.line]);
 
+  // M3: a very long question scrolls inside its own capped area (the status row and the link row
+  // stay outside it). A bottom fade shows only while it overflows.
+  const pillQuestionRef = useRef<HTMLParagraphElement>(null);
+  const [questionOverflows, setQuestionOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = pillQuestionRef.current;
+    setQuestionOverflows(el ? el.scrollHeight > el.clientHeight + 1 : false);
+  }, [kind, question]);
+
+  // A user close of the working pill hides the card only; the request runs on. The answer then
+  // shows when it lands, so the card never comes back empty.
+  const closedWhileWorking = useRef(false);
+  useEffect(() => {
+    if (!closedWhileWorking.current || working || (text === '' && !answer)) return;
+    closedWhileWorking.current = false;
+    clearTimeout(timer.current.handle);
+    setVis('shown');
+  }, [working, text, answer]);
+
   // The pill grows into the card: the same element animates from its old size and corners to
   // the new ones. The motion waits until the window has its new height.
-  const prev = useRef<{ kind: string; w: number; h: number; radius: string } | undefined>(
-    undefined,
-  );
+  const prev = useRef<
+    { kind: string; w: number; h: number; radius: string; capsule: boolean } | undefined
+  >(undefined);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     const radius = getComputedStyle(el).borderRadius;
     const was = prev.current;
-    prev.current = { kind, w: r.width, h: r.height, radius };
+    // A one-line pill is a capsule (999px token): its real corner is half its height. A pill with
+    // a question has a card-like radius, so its computed radius is the real start.
+    const capsule = kind === 'working' && el.querySelector('.genie-pill-question') === null;
+    prev.current = { kind, w: r.width, h: r.height, radius, capsule };
     if (!was || was.kind === kind || reducedMotion() || typeof el.animate !== 'function') return;
-    const from = was.kind === 'working' ? `${was.h / 2}px` : was.radius;
+    const from = was.capsule ? `${was.h / 2}px` : was.radius;
     const anim = el.animate(
       [
         { width: `${was.w}px`, height: `${was.h}px`, borderRadius: from, overflow: 'hidden' },
@@ -521,7 +580,6 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
     }).catch(() => undefined);
     if (!working) end(DISMISS_FADE_MS);
   };
-  const question = questionOf(card);
   const [line1 = '', ...rest] = text.split('\n');
 
   const toggleExpanded = (e: ReactMouseEvent) => {
@@ -613,48 +671,53 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
           />
           {ready ? <span className="genie-ready-dot" aria-hidden="true" /> : <Timer />}
           {question !== undefined && (
-            <p className="genie-pill-question" data-genie-pill-question>
+            <p
+              ref={pillQuestionRef}
+              className="genie-pill-question"
+              data-genie-pill-question
+              data-overflow={questionOverflows ? '' : undefined}
+            >
               {question}
             </p>
           )}
-          {ready && databricksUrl !== undefined && (
-            <a
-              className="genie-toggle genie-databricks genie-pill-link"
-              data-action="open-in-databricks"
-              href={databricksUrl}
-              rel="noopener noreferrer"
-              title={databricksUrl}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (e.detail > 1) return;
-                openLink(databricksUrl);
-              }}
-            >
-              {OPEN_IN_DATABRICKS_LABEL}
-              <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
-            </a>
+          {/* The link row has its height from the first frame, so "Answer ready" never changes the
+              size of the pill (the window would move near the screen bottom). */}
+          {(question !== undefined || (ready && databricksUrl !== undefined)) && (
+            <div className="genie-pill-linkrow">
+              {ready && databricksUrl !== undefined ? (
+                <DatabricksLink url={databricksUrl} onOpen={openLink} className="genie-pill-link" />
+              ) : (
+                <span
+                  className="genie-toggle genie-databricks genie-pill-link genie-pill-link-ph"
+                  data-pill-link-placeholder
+                  aria-hidden="true"
+                >
+                  {OPEN_IN_DATABRICKS_LABEL}
+                  <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+                </span>
+              )}
+            </div>
           )}
         </>
       )}
-      {kind !== 'working' && (
-        <button
-          type="button"
-          className="popup-dismiss genie-dismiss"
-          data-action="dismiss"
-          aria-label={CLOSE_LABEL}
-          onDoubleClick={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!workingRef.current && visRef.current !== 'gone') end(DISMISS_FADE_MS);
-          }}
-        >
-          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
-            <path d="M2 2l6 6M8 2l-6 6" />
-          </svg>
-        </button>
-      )}
+      <button
+        type="button"
+        className="popup-dismiss genie-dismiss"
+        data-action="dismiss"
+        aria-label={CLOSE_LABEL}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (visRef.current === 'gone') return;
+          // The user may close the working pill: it hides the card and cancels nothing.
+          if (workingRef.current) closedWhileWorking.current = true;
+          end(DISMISS_FADE_MS);
+        }}
+      >
+        <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+          <path d="M2 2l6 6M8 2l-6 6" />
+        </svg>
+      </button>
       {kind !== 'working' && (
         <div className="genie-body" key="body">
           {question !== undefined && (
@@ -741,23 +804,7 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
                   {OPEN_IN_BOTTLE_LABEL}
                 </button>
                 {kind === 'answer' && databricksUrl !== undefined && (
-                  <a
-                    className="genie-toggle genie-databricks"
-                    data-action="open-in-databricks"
-                    href={databricksUrl}
-                    rel="noopener noreferrer"
-                    title={databricksUrl}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (e.detail > 1) return;
-                      openLink(databricksUrl);
-                    }}
-                  >
-                    {OPEN_IN_DATABRICKS_LABEL}
-                    <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
-                  </a>
+                  <DatabricksLink url={databricksUrl} onOpen={openLink} />
                 )}
                 {kind === 'answer' && askOthers && (
                   <button

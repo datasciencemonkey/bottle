@@ -228,9 +228,13 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // happened, the sections it left behind are orphaned: never treat them as the panel's answer
   // (no clamp, no close, no fade, no refit on that path), so the card never falls back to a raw,
   // unbounded legacy panel for a Genie answer with no Genie blurb backing it any more.
-  const liveGenieBlurbId = card?.blurbs.find((b) => isGenieBlurbId(b.id))?.id;
+  const liveGenieBlurb = card?.blurbs.find((b) => isGenieBlurbId(b.id));
+  const liveGenieBlurbId = liveGenieBlurb?.id;
+  // The sections never count as an answer while the live Genie blurb still works. A pill that
+  // says "Answer ready" in a talk-key hold already has the sections (the link reads the deep
+  // link from them), but no answer shows before the key-up (UX slice 1, the arrival gate).
   const hasAnswer =
-    liveGenieBlurbId !== undefined &&
+    liveGenieBlurb?.completed === true &&
     (card?.sections !== undefined || card?.answerMd !== undefined);
   const panel =
     card !== undefined &&
