@@ -1835,6 +1835,15 @@ fn markers_outside_the_sources_are_removed_from_the_answer() {
     assert!(cut.chars().count() <= host::ANSWER_MAX_CHARS);
     assert!(!cut.contains("[link]"));
     assert!(cut.ends_with('x'));
+    // An early line break (one leading newline, then one long paragraph) must not throw away
+    // almost the whole answer: the cut falls back to the limit, not the early break.
+    let early = format!("line one\n{}", "y".repeat(host::ANSWER_MAX_CHARS * 2));
+    let cut = host::cut_answer(&early);
+    assert_eq!(cut.chars().count(), host::ANSWER_MAX_CHARS);
+    assert!(!cut.is_empty());
+    // A leading newline alone must never cut the answer to nothing.
+    let leading = format!("\n{}", "z".repeat(host::ANSWER_MAX_CHARS * 2));
+    assert!(!host::cut_answer(&leading).is_empty());
     assert_eq!(
         host::strip_bad_markers("Ukraine [3]; Wednesday [4]. End [5]", 0),
         "Ukraine; Wednesday. End"

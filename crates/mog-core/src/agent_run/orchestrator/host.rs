@@ -1350,8 +1350,10 @@ pub(super) fn cut_answer(answer: &str) -> String {
     }
     let cut: String = answer.chars().take(ANSWER_MAX_CHARS).collect();
     match cut.rfind('\n') {
-        Some(i) => cut[..i].trim_end().to_owned(),
-        None => cut,
+        // Only a break past the halfway point counts: an early break (one leading newline,
+        // then a long paragraph) must not throw away almost the whole answer.
+        Some(i) if i > ANSWER_MAX_CHARS / 2 => cut[..i].trim_end().to_owned(),
+        _ => cut,
     }
 }
 

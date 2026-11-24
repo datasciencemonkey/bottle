@@ -30,7 +30,7 @@ import {
   type AgentThreadPart,
   type AgentThreadTurn,
 } from '../../shared/hub-conversations';
-import { isLoneAnswer, summaryFooterLinks, WITHHELD_TEXT } from '../../shared/agent-answer-rule';
+import { isLoneAnswer, summaryFooterLinks } from '../../shared/agent-answer-rule';
 import type { AgentTurnView, OrchestratorState } from '../../shared/ipc';
 import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
@@ -428,13 +428,15 @@ function StoredTurn({
     if (part) openPartLink(url, part.requestId);
   };
   const listId = `agent-parts-${turn.turnUuid}`;
-  // The same rule as the live card (`isLoneAnswer`): one answered call shows as it is.
+  // The same rule as the live card (`isLoneAnswer`): one answered call shows as it is. A stored
+  // withheld part already arrives as `status: 'failed'` (`record()` saves it as `GENIE_FAILED`),
+  // so `answered` alone is enough: there is no separate withheld flag to carry here.
   const hasNote =
     turn.summaryMd !== '' &&
     !isLoneAnswer(
       turn.parts.map((p) => ({
         answered: p.status === 'answered',
-        withheld: p.answerMd === WITHHELD_TEXT,
+        withheld: false,
         fromEarlier: false,
       })),
     );
