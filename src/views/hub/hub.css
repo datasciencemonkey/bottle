@@ -679,59 +679,6 @@
     font-weight: var(--mog-weight-semibold);
   }
 
-  /* Home (the launch screen): a centred lamp and wordmark, the punchline at the bottom edge. It
-   fills the content column so the stage centres in the free space at any window size; the
-   header's hairline and title are dropped here so nothing competes with the landing. */
-  .hub [data-hub-view='home'] {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: center;
-    min-height: 20rem;
-    padding-right: var(--mog-space-6);
-  }
-
-  .hub [data-hub-view='home'][hidden] {
-    display: none;
-  }
-
-  .hub-home-stage {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--mog-space-2);
-    padding-bottom: var(--mog-space-5);
-  }
-
-  .hub-home-lamp {
-    display: block;
-    width: clamp(160px, 28vh, 240px);
-    height: auto;
-    user-select: none;
-  }
-
-  .hub-home-wordmark {
-    margin: 0;
-    font-size: 2.75rem;
-    font-weight: var(--mog-weight-semibold);
-    line-height: var(--mog-leading-tight);
-    letter-spacing: -0.02em;
-    color: var(--mog-text);
-    cursor: default;
-    user-select: none;
-  }
-
-  .hub-home-punchline {
-    margin: 0;
-    padding-bottom: var(--mog-space-2);
-    font-size: var(--mog-text-md);
-    color: var(--mog-text-muted);
-    opacity: 0.8;
-    letter-spacing: 0.02em;
-  }
-
   .hub:has([data-hub-view='home']:not([hidden])) .hub-area-header {
     border-bottom-color: transparent;
     margin-bottom: 0;
