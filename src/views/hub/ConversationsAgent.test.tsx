@@ -659,6 +659,8 @@ describe('Delete, Clear failed and Undo', () => {
     expect([...(deletes()[0]?.['threads'] as string[])].sort()).toEqual(
       ['c:conv-5', `a:${THREAD_B}`, `a:${THREAD_C}`].sort(),
     );
+    // Only Clear failed carries the flag; a plain Delete (tests above) sends none.
+    expect(deletes()[0]?.['onlyFailed']).toBe(true);
   });
 
   it('[AC-C15] Clear failed never counts a thread in progress, and an in-progress thread has no Delete', async () => {

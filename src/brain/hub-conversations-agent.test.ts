@@ -342,6 +342,19 @@ describe('Delete and Clear failed', () => {
     expect(r.rows[MOG_A]).toEqual([]);
   });
 
+  it('[AC-C14] the bus skips a now-answered thread only when onlyFailed is set', async () => {
+    const r = rig(threadRows());
+    await r.w.refresh();
+    // Plain Delete removes the answered thread; the same key with onlyFailed (below) stays.
+    input({ action: 'conversations.delete', threads: [`a:${ROOT}`], onlyFailed: true });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(r.rows[MOG_A]).toHaveLength(5);
+    expect(r.forgotten).toEqual([]);
+    input({ action: 'conversations.delete', threads: [`a:${ROOT}`] });
+    await vi.waitFor(() => expect(r.forgotten).toEqual([ROOT]));
+    expect(r.rows[MOG_A]?.map((x) => x['requestId'])).not.toContain(TURN1);
+  });
+
   it('[AC-C15] Clear failed never deletes a thread in progress', async () => {
     const root = id(800);
     const r = rig({ [MOG_A]: [turnRow(root, root, T0, { status: 'failed', finalAnswerMd: '' })] }, [

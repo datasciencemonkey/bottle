@@ -41,7 +41,7 @@ import {
 } from '../shared/hub-conversations';
 import type { AgentWsChip } from '../shared/ipc';
 import { onViewInput, type BrainBus } from './bus';
-import type { LocalMemoryStore, LocalStmtId } from './components/memory-store';
+import type { LocalMemoryStore } from './components/memory-store';
 
 /** One defined MOG: its id, name and accent colour. */
 export interface ConversationMog {
@@ -427,7 +427,7 @@ export function wireHubConversations(
         const all = [...ids];
         for (let i = 0; i < all.length; i += CONVERSATIONS_DELETE_MAX) {
           await deps.store
-            .exec('mem.exchange.delete' as LocalStmtId, {
+            .exec('mem.exchange.delete', {
               mogId,
               requestIds: all.slice(i, i + CONVERSATIONS_DELETE_MAX),
             })
@@ -451,8 +451,7 @@ export function wireHubConversations(
     }
     if (action.action === 'conversations.delete') {
       // Clear failed sends `onlyFailed` with the same keys: the brain checks each again.
-      const p = input.payload as Record<string, unknown>;
-      void remove(action.threads, { onlyFailed: p['onlyFailed'] === true });
+      void remove(action.threads, { onlyFailed: action.onlyFailed === true });
       return;
     }
     void (async () => {

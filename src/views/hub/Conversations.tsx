@@ -497,6 +497,8 @@ function Message({ title, line, action }: { title: string; line?: string; action
 /** One thread waiting for its 8 s: the keys to delete and the timer. */
 interface Pending {
   keys: string[];
+  /** Clear failed: the brain skips a thread that was answered since. */
+  onlyFailed?: true;
   timer: ReturnType<typeof setTimeout>;
   /** The thread to select again on Undo. */
   restore: string | undefined;
@@ -662,6 +664,7 @@ export function Conversations({
       void emitView(CONVERSATIONS_VIEW_ID, 'click', {
         action: 'conversations.delete',
         threads: p.keys.slice(i, i + CONVERSATIONS_DELETE_MAX),
+        ...(p.onlyFailed ? { onlyFailed: true } : {}),
       }).catch(() => undefined);
     }
     setToast(undefined);
@@ -675,12 +678,22 @@ export function Conversations({
     };
   }, [flush]);
 
-  const startDelete = (keys: string[], text: string, next: ListEntry | undefined) => {
+  const startDelete = (
+    keys: string[],
+    text: string,
+    next: ListEntry | undefined,
+    onlyFailed?: true,
+  ) => {
     if (keys.length === 0) return;
     // A new delete sends the one before it at once; one toast at a time.
     flush();
     const restore = selected?.id;
-    pendingRef.current = { keys, restore, timer: setTimeout(flush, MEMORY_UNDO_MS) };
+    pendingRef.current = {
+      keys,
+      ...(onlyFailed ? { onlyFailed } : {}),
+      restore,
+      timer: setTimeout(flush, MEMORY_UNDO_MS),
+    };
     setHidden((h) => new Set([...h, ...keys]));
     toastKey += 1;
     setToast({ key: toastKey, text });
@@ -715,6 +728,7 @@ export function Conversations({
       n === 1 ? '1 failed conversation cleared' : `${n} failed conversations cleared`,
       entries.find((e) => !gone.has(e.deleteKey) && e.id === selected?.id) ??
         entries.find((e) => !gone.has(e.deleteKey)),
+      true,
     );
   };
 

@@ -38,6 +38,20 @@ describe('conversations.delete', () => {
     expect(asConversationsAction({ action: 'conversations.delete', threads: max })).toBeDefined();
   });
 
+  it('keeps onlyFailed:true and drops any other value', () => {
+    const threads = ['c:conv-1'];
+    const d = (extra: Record<string, unknown>) =>
+      asConversationsAction({ action: 'conversations.delete', threads, ...extra });
+    expect(d({ onlyFailed: true })).toEqual({
+      action: 'conversations.delete',
+      threads,
+      onlyFailed: true,
+    });
+    for (const v of [false, 'true', 1, null]) {
+      expect(d({ onlyFailed: v })).toEqual({ action: 'conversations.delete', threads });
+    }
+  });
+
   it('refuses a bad batch', () => {
     const d = (threads: unknown) =>
       asConversationsAction({ action: 'conversations.delete', threads });
