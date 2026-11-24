@@ -39,6 +39,7 @@ pub mod link_open;
 pub mod local_store;
 pub mod loopback;
 pub mod mcp_transport;
+pub mod model_gateway;
 pub mod model_request_guard;
 pub mod mog_config;
 pub mod mog_look;
