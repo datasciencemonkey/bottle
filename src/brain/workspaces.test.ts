@@ -387,7 +387,19 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.failed });
   });
 
-  it('profile_invalid from a sign-in tells the user to use the command below', async () => {
+  it('a sign-in click for a row that is no longer expired runs nothing; a cancel for an unknown row says so', async () => {
+    const r = rig(
+      workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]),
+    );
+    await r.ws.refresh();
+    await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    expect(r.calls.some((c) => c[0] === 'reauth')).toBe(false);
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'nope' });
+    expect(r.calls.some((c) => c[0] === 'cancel_login')).toBe(false);
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.not_listed });
+  });
+
+  it('profile_invalid from a sign-in says Bottle cannot sign it in again', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
     await r.ws.refresh();
     r.deps.reauth = async () => Promise.reject({ error: 'profile_invalid' });

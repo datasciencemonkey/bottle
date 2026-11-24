@@ -22,6 +22,7 @@ import {
   type HubWorkspaceRow,
   type WorkspaceAction,
 } from '../../shared/hub-workspaces';
+import { SIGN_IN_NOT_BROWSER, SIGN_IN_WAITING, signInCommand } from '../../shared/sign-in-text';
 import { Button } from '../ui/button';
 import {
   DropdownMenu,
@@ -40,8 +41,6 @@ import { SettingsGroup } from './SettingsGroup';
 import { ColorDot, WorkspaceColor } from './WorkspaceColor';
 
 const NAME_MAX = 64;
-/** The brain's waiting text (`WORKSPACE_TEXT.waiting`): a Cancel shows while it is up. */
-const SIGN_IN_WAITING = 'Waiting for you to sign in in your browser…';
 
 function send(action: WorkspaceAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
@@ -213,10 +212,6 @@ function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void 
   );
 }
 
-/** The CLI sign-in for a profile, with a quote only when the name needs one. */
-const signInCommand = (profile: string): string =>
-  `databricks auth login --profile ${/^[\w.-]+$/.test(profile) ? profile : `'${profile.replace(/'/g, `'\\''`)}'`}`;
-
 /** The CLI command of an expired row, with a Copy button: the way out when the browser sign-in fails. */
 function SignInCommand({ profile }: { profile: string }) {
   const [copied, setCopied] = useState<'yes' | 'no' | undefined>(undefined);
@@ -256,11 +251,14 @@ function WorkspaceRow({
   row,
   busy,
   waiting,
+  noCommand,
 }: {
   row: HubWorkspaceRow;
   busy: boolean;
   /** The brain waits for the browser sign-in of this row. */
   waiting: boolean;
+  /** The brain said Bottle cannot sign this workspace in again: no CLI command to copy. */
+  noCommand: boolean;
 }) {
   const [panel, setPanel] = useState<Panel>(undefined);
   const reduce = useReducedMotion();
@@ -366,7 +364,7 @@ function WorkspaceRow({
               {STATUS_TEXT[row.signIn]}
             </span>
           </span>
-          {row.signIn === 'expired' && <SignInCommand profile={row.profile} />}
+          {row.signIn === 'expired' && !noCommand && <SignInCommand profile={row.profile} />}
           {reason !== undefined && (
             <span data-workspace-reason className="text-[var(--mog-text-xs)] text-muted-foreground">
               {reason}
@@ -613,6 +611,7 @@ export function WorkspaceSettings({
                 row={r}
                 busy={list.busyProfile === r.profile}
                 waiting={list.busyProfile === r.profile && list.notice?.text === SIGN_IN_WAITING}
+                noCommand={list.notice?.text === SIGN_IN_NOT_BROWSER}
               />
             ))}
           </ul>
