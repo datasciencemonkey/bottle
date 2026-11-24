@@ -306,6 +306,41 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     expect(r.card.shown(MOG)).toBeUndefined();
   });
 
+  it('[N1] a fallback dismisses its own turn only; the live turn stays', () => {
+    const r = rig();
+    const a = 'a'.repeat(32);
+    const b = 'b'.repeat(32);
+    r.card.show(MOG, view({ turnId: a, state: 'running' }));
+    r.card.show(MOG, view({ turnId: b, state: 'queued' }));
+    r.card.takeover(MOG, b);
+    expect(r.card.shown(MOG)).toBe(a);
+    r.card.show(MOG, view({ turnId: a, state: 'done' }));
+    expect(r.s.turns.at(-1)).toMatchObject({ turnId: a, state: 'done' });
+  });
+
+  it('[N1] a note is one line in the open agent card, and takes nobody off it', () => {
+    const r = rig();
+    expect(r.card.note(MOG, 'Too many.')).toBe(false);
+    r.card.show(MOG, view({ state: 'running' }));
+    expect(r.card.note(MOG, 'Too many.')).toBe(true);
+    expect(r.s.turns.at(-1)?.notice).toBe('Too many.');
+    // The next update of the turn carries no note, and the turn is still the owner.
+    r.card.show(MOG, view({ state: 'done' }));
+    expect(r.s.turns.at(-1)).toMatchObject({ state: 'done' });
+    expect(r.s.turns.at(-1)?.notice).toBeUndefined();
+  });
+
+  it('[N3] closing the card dismisses the turns that still run or wait', () => {
+    const r = rig();
+    const a = 'a'.repeat(32);
+    const b = 'b'.repeat(32);
+    r.card.show(MOG, view({ turnId: a, state: 'running' }));
+    r.card.show(MOG, view({ turnId: b, state: 'queued' }));
+    r.card.close(MOG);
+    r.card.show(MOG, view({ turnId: b, state: 'planning' }));
+    expect(r.card.shown(MOG)).toBeUndefined();
+  });
+
   it('a dropped turn leaves the card', () => {
     const r = rig();
     r.card.show(MOG, view({ state: 'queued' }));

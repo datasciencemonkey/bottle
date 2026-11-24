@@ -26,6 +26,7 @@ vi.mock('../utterance-wiring', async (orig) => {
 const MOG = '00000000-0000-4000-8000-0000000005a4';
 const HOME = 'fake-home';
 const T1 = 'a'.repeat(32);
+const TN = 'e'.repeat(32);
 const Q = 'Compare churn in fake-home and fake-fin';
 
 let deps: UtteranceHandlerDeps | undefined;
@@ -34,7 +35,7 @@ let brain: Brain | undefined;
 type CardPayload = {
   blurbs: { id: string; text: string }[];
   chips: { id: string; label: string }[];
-  agentTurn?: { turnId: string; state: string };
+  agentTurn?: { turnId: string; state: string; notice?: string };
 };
 const cards = () =>
   core.emitTo.mock.calls
@@ -190,5 +191,43 @@ describe('startBrain: the agent, the card and the direct fallback (slice 2a)', (
     expect(fresh()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(fresh()).toHaveLength(1);
+  });
+
+  it('[N1] a queue-full note on a live turn leaves the turn on the card, and its answer shows', async () => {
+    let n = 0;
+    host({
+      agent_turn_submit: () => {
+        if (++n === 1)
+          return {
+            turnId: TN,
+            sessionId: 'd'.repeat(32),
+            position: 0,
+            newSession: true,
+            budget: 10,
+            crossWorkspace: false,
+            catalog: [
+              {
+                workspaceId: 'ws-a',
+                profile: HOME,
+                name: HOME,
+                isHome: true,
+                isAgentWorkspace: true,
+              },
+            ],
+          };
+        return Promise.reject({ error: 'agent_queue_full' });
+      },
+    });
+    await prime();
+    await ask(Q, 'u-agent-6');
+    await settle();
+    await ask(`${Q} again`, 'u-agent-7');
+    await settle();
+    // The note is one line inside the agent card, and the live turn is still on it.
+    expect(cards().at(-1)?.agentTurn).toMatchObject({ turnId: TN });
+    expect(cards().some((c) => c.agentTurn?.notice?.includes('3 questions waiting'))).toBe(true);
+    turnEvent({ kind: 'ended', turnId: TN, outcome: 'answered', calls: 0 });
+    await settle();
+    expect(cards().at(-1)?.agentTurn).toMatchObject({ turnId: TN, state: 'done' });
   });
 });

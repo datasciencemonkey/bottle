@@ -89,7 +89,7 @@ export interface AgentClientDeps {
   /** One history row for each Genie call (`genie-history.ts`). Never rejects. */
   recordCall?(x: GenieEnd): void;
   /** The fallback: one direct home call, with the notice line. */
-  direct(turn: AgentTurn, notice: string): Promise<void>;
+  direct(turn: AgentTurn, notice: string, turnId?: string): Promise<void>;
   /** The card of `mogId` shows this turn (`agent-card.ts`). */
   showTurn(mogId: MogId, turn: AgentTurnView): void;
   /** The card of a turn that left (a removed turn, a cleared session). */
@@ -454,10 +454,10 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     r.view = {
       ...r.view,
       calls,
-      used: e.used,
-      budget: e.budget,
       // A call that ends after its turn ended (offline, timeout) changes its row only.
-      ...(r.ended ? {} : { state: r.view.state === 'slow' ? 'slow' : 'running' }),
+      ...(r.ended
+        ? {}
+        : { used: e.used, budget: e.budget, state: r.view.state === 'slow' ? 'slow' : 'running' }),
     } as AgentTurnView;
     update(r);
     // The question comes with the first sight of the call; the reply when it ends.
@@ -515,7 +515,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       const notice = fallbackNotice(why, names);
       r.view = { ...r.view, notice };
       update(r);
-      await deps.direct(r.origin, notice).catch(fault);
+      await deps.direct(r.origin, notice, id).catch(fault);
       if (recs.get(id) !== r) return;
     } else {
       update(r);

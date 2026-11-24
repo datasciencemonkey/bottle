@@ -809,4 +809,25 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     await r.client.newSession();
     expect(r.client.panel().earlier).toEqual([]);
   });
+
+  it('[N4] a late call keeps used and budget of the ended turn', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'asking'));
+    r.ev(callEv(T1, C1, SALES, 'asking', 2));
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'offline', calls: 1 });
+    await r.settle();
+    r.ev({
+      kind: 'call',
+      turnId: T1,
+      callId: C1,
+      workspaceId: 'ws-a',
+      state: 'answered',
+      used: 9,
+      budget: 20,
+    });
+    await r.settle();
+    expect(r.client.panel().earlier[0]).toMatchObject({ used: 2, budget: 10 });
+  });
 });

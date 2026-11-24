@@ -291,8 +291,16 @@ export interface AgentCard {
   drop(mogId: MogId, turnId: string): void;
   /** The user closed the card: the turn on it never opens it again. */
   close(mogId: MogId): void;
-  /** A direct ask or a note takes the card: no turn of this MOG opens it again. */
-  takeover(mogId: MogId): void;
+  /**
+   * A direct answer takes the card. With `turnId` only that turn (a fallback) stays off it; with
+   * none, every turn of this MOG does (a plain direct ask).
+   */
+  takeover(mogId: MogId, turnId?: string): void;
+  /**
+   * A one-line note (queue full, "Not sent.") on the open agent card. False when no agent card
+   * is open: the caller then draws the note itself.
+   */
+  note(mogId: MogId, text: string): boolean;
   /** The turn on the card of `mogId`, if any. */
   shown(mogId: MogId): string | undefined;
 }
@@ -308,6 +316,8 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
   /** The last turn that owned the card, so a finished answer stays until the user closes it. */
   const lastOwner = new Map<MogId, string>();
   const dismissed = new Set<string>();
+  /** A note that waits for the next publish of the card of a MOG. */
+  const notes = new Map<MogId, string>();
   const dismiss = (id: string) => {
     dismissed.add(id);
     if (dismissed.size > DISMISSED_MAX) dismissed.delete(dismissed.values().next().value as string);
@@ -334,6 +344,9 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
   }
   const anyOpen = () => [...owner.values()].length > 0;
   function publish(mogId: MogId) {
+    // A turn that was dismissed and has ended needs no place in memory.
+    for (const [id, t] of turns.get(mogId) ?? [])
+      if (dismissed.has(id) && !isOpenTurn(t)) turns.get(mogId)?.delete(id);
     const stack = deps.stackFor(mogId);
     const t = pick(mogId);
     const before = owner.get(mogId);
@@ -351,7 +364,9 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
     const waiting = [...(turns.get(mogId)?.values() ?? [])].filter(
       (w) => w.state === 'queued' && w.turnId !== t.turnId && !dismissed.has(w.turnId),
     );
-    stack.setAgentTurn(t);
+    const note = notes.get(mogId);
+    notes.delete(mogId);
+    stack.setAgentTurn(note === undefined ? t : { ...t, notice: note });
     stack.setControls('agent', [
       ...cardChips(t),
       ...waiting.map((w) => ({ id: `${CHIP.queued}${w.turnId}`, label: w.question })),
@@ -368,7 +383,10 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
   const later = (mogId: MogId) => run(() => publish(mogId));
   return {
     show(mogId, turn) {
-      if (dismissed.has(turn.turnId)) return;
+      if (dismissed.has(turn.turnId)) {
+        if (!isOpenTurn(turn)) turns.get(mogId)?.delete(turn.turnId);
+        return;
+      }
       const m = turns.get(mogId) ?? new Map<string, AgentTurnView>();
       m.set(turn.turnId, turn);
       turns.set(mogId, m);
@@ -382,6 +400,8 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
     close(mogId) {
       const id = owner.get(mogId);
       if (id === undefined) return;
+      // The card does not reopen at once for a turn that still runs or waits.
+      for (const t of turns.get(mogId)?.values() ?? []) if (isOpenTurn(t)) dismiss(t.turnId);
       dismiss(id);
       // Taking a card away is no arrival: it does not wait for the gate.
       try {
@@ -390,10 +410,17 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
         deps.onFault?.();
       }
     },
-    takeover(mogId) {
-      for (const id of turns.get(mogId)?.keys() ?? []) dismiss(id);
+    note(mogId, text) {
+      if (!owner.has(mogId)) return false;
+      notes.set(mogId, text);
+      later(mogId);
+      return true;
+    },
+    takeover(mogId, turnId) {
+      if (turnId !== undefined) dismiss(turnId);
+      else for (const id of turns.get(mogId)?.keys() ?? []) dismiss(id);
       const had = owner.has(mogId);
-      lastOwner.delete(mogId);
+      if (turnId === undefined || lastOwner.get(mogId) === turnId) lastOwner.delete(mogId);
       if (!had) return;
       try {
         publish(mogId);

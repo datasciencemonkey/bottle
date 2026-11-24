@@ -355,6 +355,8 @@ export function TurnBody({
   footerOutside = false,
 }: TurnBodyProps) {
   const queued = turn.state === 'queued';
+  // On an ended turn the answer comes before the process.
+  const answerFirst = !isOpenState(turn.state) && turn.state !== 'needs_you';
   return (
     <div className="agent-turn" data-agent-turn={turn.turnId} data-state={turn.state}>
       {showQuestion && (
@@ -376,7 +378,7 @@ export function TurnBody({
           {turn.notice}
         </p>
       )}
-      <CallsOf turn={turn} now={now} />
+      {!answerFirst && <CallsOf turn={turn} now={now} />}
       {turn.summary && (
         <div className="agent-note" data-agent-note>
           <p className="agent-note-label">{NOTE_LABEL}</p>
@@ -390,6 +392,7 @@ export function TurnBody({
         </div>
       )}
       <TurnParts turn={turn} onOpenLink={onOpenLink} />
+      {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
     </div>
   );
@@ -559,33 +562,35 @@ export function AgentTurnCard({
         <TurnBody turn={turn} now={now} onOpenLink={openLink} live footerOutside />
       </div>
       {queued.length > 0 && (
-        <ul className="agent-queued" aria-label="Waiting questions">
-          {queued.map((q) => {
-            const turnId = q.id.slice('agent-queued:'.length);
-            return (
-              <li key={q.id} className="agent-queued-row" data-agent-queued={turnId}>
-                <span className="agent-pill">{QUEUED_LABEL}</span>
-                <span className="agent-waiting-q" title={q.label}>
-                  {q.label}
-                </span>
-                <span className="agent-sub">{WAITING_COPY}</span>
-                <button
-                  type="button"
-                  className="genie-toggle agent-x"
-                  data-chip={`agent-stop:${turnId}`}
-                  aria-label={`Remove from the queue: ${q.label}`}
-                  onClick={() =>
-                    void emitView(mogId, 'chip_click', { chipId: `agent-stop:${turnId}` }).catch(
-                      () => undefined,
-                    )
-                  }
-                >
-                  ×
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <p className="agent-sub agent-queued-copy">{WAITING_COPY}</p>
+          <ul className="agent-queued" aria-label="Waiting questions">
+            {queued.map((q) => {
+              const turnId = q.id.slice('agent-queued:'.length);
+              return (
+                <li key={q.id} className="agent-queued-row" data-agent-queued={turnId}>
+                  <span className="agent-pill">{QUEUED_LABEL}</span>
+                  <span className="agent-waiting-q" title={q.label}>
+                    {q.label}
+                  </span>
+                  <button
+                    type="button"
+                    className="genie-toggle agent-x"
+                    data-chip={`agent-stop:${turnId}`}
+                    aria-label={`Remove from the queue: ${q.label}`}
+                    onClick={() =>
+                      void emitView(mogId, 'chip_click', { chipId: `agent-stop:${turnId}` }).catch(
+                        () => undefined,
+                      )
+                    }
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
       <div className="agent-card-foot">
         <TurnFooter turn={turn} actions={chipButtons} />

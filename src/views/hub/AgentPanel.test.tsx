@@ -234,6 +234,53 @@ describe('AgentPanel', () => {
   });
 });
 
+describe('review 2 fixes', () => {
+  it('[R2] an open needs_you or timed-out row shows its reason, and the meta has no headline', async () => {
+    const t = turn('t', { state: 'timed_out', notice: 'The agent timed out. Asked Sales only.' });
+    const n = turn('n', { state: 'needs_you', notice: 'Your sign-in expired.' });
+    const { el } = await render(
+      <AgentPanel view={view({ session: busy.session, earlier: [t, n] })} active />,
+    );
+    const timed = el.querySelector(`[data-agent-earlier="${T('t')}"] .agent-earlier-head`);
+    expect(timed?.textContent).toContain('The agent timed out. Asked Sales only.');
+    expect(timed?.textContent).toContain('Timed out');
+    const open = el.querySelector(`[data-agent-earlier="${T('n')}"] .agent-earlier-head`);
+    expect(open?.getAttribute('aria-expanded')).toBe('true');
+    expect(open?.textContent).not.toContain('Needs you');
+  });
+
+  it('[N2] with no status read yet the empty state says it is checking, with no Settings button', async () => {
+    const v = view({
+      genieCode: {
+        binary: 'not_installed',
+        pinned: '',
+        agentProfile: null,
+        agentProfileState: 'no_home',
+      },
+    });
+    const { el } = await render(<AgentPanel view={v} active />);
+    expect(el.querySelector('[data-agent-empty]')?.textContent).toBe('Checking Genie Code…');
+  });
+
+  it('[R3] the empty state has the title and the short line', async () => {
+    expect(NO_SESSION_COPY).toBe('Ask with ⌥G. Questions that name another workspace come here.');
+  });
+
+  it('the New session confirm names the live question only when one is live', async () => {
+    const waitingOnly = view({ session: busy.session, waiting: busy.waiting });
+    const a = await render(<AgentPanel view={waitingOnly} active />);
+    await click(a.el.querySelector('[data-agent-new-session]'));
+    expect(a.el.querySelector('[data-agent-new-session-confirm]')?.textContent).not.toContain(
+      'live question',
+    );
+    const b = await render(<AgentPanel view={busy} active />);
+    await click(b.el.querySelector('[data-agent-new-session]'));
+    expect(b.el.querySelector('[data-agent-new-session-confirm]')?.textContent).toContain(
+      'live question stops',
+    );
+  });
+});
+
 describe('the hub with the Agent area', () => {
   function Host() {
     return <AgentPanel view={useHubAgent()} active />;

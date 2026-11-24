@@ -239,7 +239,12 @@ describe('AgentTurnCard', () => {
     );
     const row = el.querySelector(`[data-agent-queued="${'b'.repeat(32)}"]`);
     expect(row?.textContent).toContain('Queued');
-    expect(row?.textContent).toContain('Sends when the answer above lands');
+    // The waiting copy shows once above the list, not in each row.
+    expect(row?.textContent).not.toContain('Sends when the answer above lands');
+    expect(el.querySelectorAll('.agent-queued-copy')).toHaveLength(1);
+    expect(el.querySelector('.agent-queued-copy')?.textContent).toBe(
+      'Sends when the answer above lands',
+    );
     await click(row?.querySelector('button') ?? null);
     expect(inputEmits()).toContainEqual({
       mogId: MOG,
@@ -303,6 +308,24 @@ describe('AgentTurnCard', () => {
   it('the scroll body can take the keyboard focus', async () => {
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
     expect(el.querySelector('.agent-card-body')?.getAttribute('tabindex')).toBe('0');
+  });
+});
+
+describe('answer first', () => {
+  it('an ended turn shows its answer before its call rows; a running turn the other way', async () => {
+    const part = {
+      callId: 'c-00000001',
+      workspace: sales,
+      sections: [{ id: 'answer' as const, md: 'Answer one' }],
+    };
+    const done = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'done', parts: [part] })} chips={chips} />,
+    );
+    const html = done.el.innerHTML;
+    expect(html.indexOf('data-agent-part')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-agent-part')).toBeLessThan(html.indexOf('data-action="calls"'));
+    const run = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
+    expect(run.el.innerHTML.indexOf('data-agent-call')).toBeGreaterThan(-1);
   });
 });
 

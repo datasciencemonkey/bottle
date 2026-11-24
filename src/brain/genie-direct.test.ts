@@ -659,8 +659,10 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(c.expanded.at(-1)?.answerMd).toBe(
         '*Genie Code is not installed. Asked sales only.*\n\nChurn was 4.2%.',
       );
-      // History keeps the answer as Genie wrote it.
+      // History keeps the answer as Genie wrote it. "Remember this" reads the saved exchange
+      // (`remember-flow.ts`, `finalAnswerMd`), so neither one ever holds the notice.
       expect(ends[0]?.end).toMatchObject({ t: 'answer', md: 'Churn was 4.2%.' });
+      expect(JSON.stringify(ends)).not.toContain('Genie Code is not installed');
     });
 
     it('[R-8] an answered request offers the chip, with the request id in the chip id', async () => {

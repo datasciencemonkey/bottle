@@ -45,6 +45,18 @@
   font-size: var(--mog-text-xs);
 }
 
+.agent-queued-row .agent-x {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  font-size: var(--mog-text-md);
+}
+
+.agent-queued-copy {
+  margin: var(--mog-space-2) 0 0;
+}
+
 .agent-queued-row .agent-waiting-q {
   flex: 1 1 auto;
   min-width: 0;

@@ -446,7 +446,8 @@ export function startBrain(): Brain {
     };
     /** A one-line pop-up (queue full, "Not sent."): it takes the card and waits for the hold gate. */
     const showNote = (mogId: MogId, text: string) => {
-      agentCard.takeover(mogId);
+      // With an agent card open the note is one line inside it; the live and waiting turns stay.
+      if (agentCard.note(mogId, text)) return;
       arrivalGate.whenClear(() => {
         stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true });
         void call('window_card_show', { mogId }).catch(() => undefined);
@@ -468,8 +469,10 @@ export function startBrain(): Brain {
       wallNow: () => Date.now(),
       ...(recordGenieExchange ? { recordCall: recordGenieExchange } : {}),
       // The direct answer takes the card: the agent card must not cover it.
-      direct: (turn, notice) => {
-        agentCard.takeover(turn.mogId);
+      // A fallback takes the card for its own turn only; a refused submit has no turn: the
+      // direct ask takes the card from every agent turn of this MOG.
+      direct: (turn, notice, turnId) => {
+        agentCard.takeover(turn.mogId, turnId);
         return directSend(turn, { notice });
       },
       showTurn: (mogId, view) => agentCard.show(mogId, view),

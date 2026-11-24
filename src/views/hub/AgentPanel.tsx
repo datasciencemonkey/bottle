@@ -32,8 +32,7 @@ function send(action: AgentAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
 }
 
-export const NO_SESSION_COPY =
-  'No session. Ask with ⌥G. Questions that name another workspace come here.';
+export const NO_SESSION_COPY = 'Ask with ⌥G. Questions that name another workspace come here.';
 
 /**
  * The panel the brain sends to this window, or undefined before the brain answers. Sends
@@ -87,6 +86,8 @@ function sessionText(v: HubAgentView): string {
 
 /** Why the agent cannot run, in one sentence, with where the question goes instead. */
 export function notReadyText(g: HubAgentView['genieCode']): string {
+  // The brain sends a status with no pinned version while it has not read the real one yet.
+  if (g.pinned === '') return 'Checking Genie Code…';
   const home = 'your home workspace';
   const tail = `Questions that name another workspace go to ${home} only.`;
   switch (g.binary) {
@@ -161,10 +162,14 @@ function EarlierRow({ turn, now }: { turn: AgentTurnView; now: number }) {
   // A turn that needs the user stays open, with its action.
   const [open, setOpen] = useState(turn.state === 'needs_you');
   const bodyId = `agent-earlier-${turn.turnId}`;
-  const meta = [turnHeadline(turn), turn.tokens !== undefined ? tokensText(turn.tokens) : '']
+  // While the row is open its body has the headline: the meta keeps the tokens only.
+  const meta = [
+    open ? '' : turnHeadline(turn),
+    turn.tokens !== undefined ? tokensText(turn.tokens) : '',
+  ]
     .filter((m) => m !== '')
     .join(' · ');
-  const line = oneLine(turn);
+  const line = oneLine(turn) || (turn.notice ?? '');
   return (
     <li data-agent-earlier={turn.turnId} data-state={turn.state} className="agent-earlier-row">
       <button
@@ -247,7 +252,13 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
           </Button>
         </div>
       )}
-      {confirm && <NewSessionConfirm onConfirm={newSession} onCancel={() => setConfirm(false)} />}
+      {confirm && (
+        <NewSessionConfirm
+          live={view?.live !== undefined}
+          onConfirm={newSession}
+          onCancel={() => setConfirm(false)}
+        />
+      )}
       <p
         role="status"
         aria-live="polite"
@@ -276,16 +287,18 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
           ) : (
             <>
               <p className="hub-muted m-0">{notReadyText(view.genieCode)}</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-[var(--mog-space-2)]"
-                data-agent-open-settings
-                onClick={() => send({ action: 'agent.open_settings' })}
-              >
-                Open Settings
-              </Button>
+              {view.genieCode.pinned !== '' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-[var(--mog-space-2)]"
+                  data-agent-open-settings
+                  onClick={() => send({ action: 'agent.open_settings' })}
+                >
+                  Open Settings
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -344,9 +357,11 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
 }
 
 function NewSessionConfirm({
+  live,
   onConfirm,
   onCancel,
 }: {
+  live: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -368,7 +383,9 @@ function NewSessionConfirm({
       }}
     >
       <p id={id} className="m-0">
-        Start a new session? The live question stops and this list clears.
+        {live
+          ? 'Start a new session? The live question stops and this list clears.'
+          : 'Start a new session? The waiting questions are removed and this list clears.'}
       </p>
       <div className="flex gap-[var(--mog-space-2)]">
         <Button type="button" size="sm" data-confirm-new-session onClick={onConfirm}>
