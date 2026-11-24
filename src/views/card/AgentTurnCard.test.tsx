@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /** Slice 2a: the card of an agent turn, and its body (shared with the hub panel). Fake values. */
 import { act } from 'react';
+import { WITHHELD_TEXT } from '../../shared/agent-answer-rule';
 import type { AgentTurnView } from '../../shared/ipc';
 import { inputEmits, render, tauri } from '../test-tauri';
 import {
@@ -274,6 +275,87 @@ describe('AgentTurnCard', () => {
     expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
     expect(el.textContent).toContain('Answer c-00000001');
     expect(el.querySelector('[data-action="fold"]')).toBeNull();
+  });
+
+  it('[owner rule] one answered call plus one withheld call still shows the answered one as it is', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'combined', workspaces: [fin, sales] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', {
+          workspace: sales,
+          notShownToAgent: true,
+          sections: [{ id: 'answer' as const, md: WITHHELD_TEXT }],
+        }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(el.textContent).toContain('Answer c-00000001');
+  });
+
+  it('[owner rule] an earlier-turn part does not count: one new answered call shows as it is', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'note', workspaces: [fin] },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { fromEarlier: true })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+  });
+
+  it('[owner rule] with no answered call the text of the model stays the answer', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-TEXT', kind: 'note', workspaces: [] },
+      parts: [],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
+  });
+
+  it('[owner rule] with D1 off a receipt part stays in view next to the text of the model', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-TEXT', kind: 'note', workspaces: [fin, sales] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', { workspace: sales, notShownToAgent: true }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
+    const rec = el.querySelector('[data-agent-part="c-00000002"]') as HTMLElement;
+    expect(rec.closest('[hidden]')).toBeNull();
+  });
+
+  it('the footer links of the summary are one for each URL, and none that the text carries', async () => {
+    const host = 'sales.cloud.databricks.test';
+    const a = `https://${host}/one/chat/threads/a`;
+    const b = `https://${host}/one/chat/threads/b`;
+    const cite = (n: number, callId: string, deepLink: string) => ({
+      n,
+      callId,
+      workspace: sales,
+      deepLink,
+      workspaceHost: host,
+    });
+    const t = view({
+      state: 'done',
+      summary: {
+        md: `Text with [link](${a}).`,
+        kind: 'combined',
+        workspaces: [sales, fin],
+        citations: [cite(1, 'c-00000001', a), cite(2, 'c-00000002', b), cite(3, 'c-00000003', b)],
+      },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const links = [
+      ...el.querySelectorAll('[data-agent-summary] [data-action="open-in-databricks"]'),
+    ];
+    expect(links.map((l) => l.getAttribute('href'))).toEqual([b]);
   });
 
   it('[owner rule] two answered calls show the combined answer first and fold both answers', async () => {

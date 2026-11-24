@@ -1331,7 +1331,7 @@ fn build_result(
     }
     let answer = strip_bad_markers(answer, out.len());
     AgentTurnResult {
-        answer: Some(answer.chars().take(ANSWER_MAX_CHARS).collect()),
+        answer: Some(cut_answer(&answer)),
         answer_kind: if d1 && cites_many_workspaces(&out) {
             AgentAnswerKind::Combined
         } else {
@@ -1342,7 +1342,21 @@ fn build_result(
     }
 }
 
-/// Remove each `[n]` marker where n is not in `1..=n_sources`. With no source, all go.
+/// Cut an answer that is too long back to its last line break before the limit, so a link or a
+/// table row is not split. A text with no line break is cut at the limit.
+pub(super) fn cut_answer(answer: &str) -> String {
+    if answer.chars().count() <= ANSWER_MAX_CHARS {
+        return answer.to_owned();
+    }
+    let cut: String = answer.chars().take(ANSWER_MAX_CHARS).collect();
+    match cut.rfind('\n') {
+        Some(i) => cut[..i].trim_end().to_owned(),
+        None => cut,
+    }
+}
+
+/// Remove each `[n]` marker where n is not in `1..=n_sources`. With no source, all go. A `[n](url)`
+/// link is not a marker and stays.
 pub(super) fn strip_bad_markers(answer: &str, n_sources: usize) -> String {
     static MARK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = MARK.get_or_init(|| regex::Regex::new(r"( *)\[(\d+)\]( *)").expect("a fixed pattern"));
@@ -1352,12 +1366,13 @@ pub(super) fn strip_bad_markers(answer: &str, n_sources: usize) -> String {
         let m = c.get(0).expect("group 0");
         out.push_str(&answer[last..m.start()]);
         last = m.end();
-        if matches!(c[2].parse::<usize>(), Ok(n) if (1..=n_sources).contains(&n)) {
+        let next = answer[m.end()..].chars().next();
+        let link = next == Some('(') && c[3].is_empty();
+        if link || matches!(c[2].parse::<usize>(), Ok(n) if (1..=n_sources).contains(&n)) {
             out.push_str(m.as_str());
             continue;
         }
         // A removed marker leaves one space between words, and none before punctuation or the end.
-        let next = answer[m.end()..].chars().next();
         let tight = next.is_none_or(|ch| matches!(ch, ',' | '.' | ';' | ':' | '!' | '?' | ')'));
         if !tight && !c[1].is_empty() {
             out.push(' ');

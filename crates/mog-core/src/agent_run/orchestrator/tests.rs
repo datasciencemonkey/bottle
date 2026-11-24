@@ -1823,6 +1823,18 @@ fn markers_outside_the_sources_are_removed_from_the_answer() {
         "a [1] b [2] c [x]"
     );
     assert_eq!(host::strip_bad_markers("a [1] b", 0), "a b");
+    // A markdown link whose text is a number is not a marker.
+    assert_eq!(
+        host::strip_bad_markers("see [7](https://h/x) and [8]", 0),
+        "see [7](https://h/x) and"
+    );
+    // A long answer is cut back to the last line break, not inside a link.
+    let line = format!("{}\n", "x".repeat(99));
+    let long = format!("{}[link](https://h/very/long/url)", line.repeat(100));
+    let cut = host::cut_answer(&long);
+    assert!(cut.chars().count() <= host::ANSWER_MAX_CHARS);
+    assert!(!cut.contains("[link]"));
+    assert!(cut.ends_with('x'));
     assert_eq!(
         host::strip_bad_markers("Ukraine [3]; Wednesday [4]. End [5]", 0),
         "Ukraine; Wednesday. End"

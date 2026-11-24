@@ -321,6 +321,35 @@ describe('the agent thread detail', () => {
     expect((d.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
   });
 
+  it('[owner rule] one answered plus one failed stored call shows the answered one as it is', async () => {
+    const { el } = await mount();
+    const parts = [part(1), part(2, { status: 'failed', answerMd: '' })];
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: 'MODEL-PARAPHRASE', parts })])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(d.textContent).toContain('Answer 1 from a workspace.');
+  });
+
+  it('[owner rule] no answered stored call keeps the text of the model, as the live card does', async () => {
+    const { el } = await mount();
+    const parts = [part(1, { status: 'failed', answerMd: '' })];
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: 'MODEL-TEXT', parts })])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
+  });
+
+  it('[owner rule] a stored combined answer has one Open in Databricks link for each workspace', async () => {
+    const { el } = await mount();
+    const dl = (n: number) => `https://example.cloud.databricks.test/one/chat/threads/t${n}`;
+    const parts = [part(1, { deepLink: dl(1) }), part(2, { deepLink: dl(2) })];
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: `Both. [x](${dl(1)})`, parts })])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    const hrefs = [
+      ...d.querySelectorAll('[data-agent-summary] [data-action="open-in-databricks"]'),
+    ].map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual([dl(2)]);
+  });
+
   it('[owner rule] a stored turn with two answered calls shows the combined text first', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a', { summaryMd: 'COMBINED-TEXT' })])]);
@@ -1018,7 +1047,11 @@ describe('the note of a stored turn (ADR 0122)', () => {
   };
 
   it('[L2] two parts share a host: the part that did not fail speaks for it', async () => {
-    const parts = [part(1, { status: 'failed' }), part(2)];
+    const parts = [
+      part(1, { status: 'failed' }),
+      part(2),
+      part(3, { workspaceHost: 'other.cloud.databricks.test' }),
+    ];
     const url = 'https://example.cloud.databricks.test/x';
     const opens = await noteLink({ parts }, url);
     expect(opens).toEqual([{ target: 'link_open', url, requestId: parts[1]?.requestId }]);

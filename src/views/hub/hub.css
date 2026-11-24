@@ -955,11 +955,10 @@
 
   /* The agent turn reads at the same measure as the question and the composer. */
   .conv-detail .agent-turn,
-  .conv-detail .agent-note,
+  .conv-detail .agent-summary,
   .conv-detail .agent-parts,
   .conv-detail .conv-queued,
-  .conv-detail .agent-session-row,
-  .conv-detail .agent-confirm {
+  .conv-detail .agent-session-row {
     max-width: 616px;
   }
 

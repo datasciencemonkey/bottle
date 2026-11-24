@@ -157,7 +157,7 @@
 }
 
 /* Needs you is the one amber state (UX proposal 2.1): it asks the user for something. The gold
-   spark token is amber; the note tokens (blue-grey) belong to "Note from your MOG". */
+   spark token is amber. */
 .agent-call[data-state='needs_you'] {
   border-left-color: var(--mog-spark);
   background: rgb(246 196 99 / 10%);
@@ -199,23 +199,6 @@
   background: var(--agent-ws-stripe, var(--mog-text-muted));
 }
 
-.agent-note {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mog-space-1);
-  padding: var(--mog-space-2) var(--mog-space-3);
-  border: 1px solid var(--mog-note-border);
-  border-radius: var(--mog-radius-sm);
-  background: var(--mog-note-bg);
-  color: var(--mog-note-text);
-}
-
-.agent-note-label {
-  margin: 0;
-  font-size: var(--mog-text-xs);
-  font-weight: var(--mog-weight-semibold);
-}
-
 /* The answer of the MOG: the main answer of a turn, in the answer colours, not a muted note. */
 .agent-summary {
   display: flex;
@@ -237,15 +220,6 @@
   margin: 0;
 }
 
-.agent-note-body {
-  min-width: 0;
-  font-size: var(--mog-text-sm);
-}
-
-.agent-note-body p,
-.agent-note-body ul,
-.agent-note-body ol,
-.agent-note-body pre,
 .agent-part-body p,
 .agent-part-body ul,
 .agent-part-body ol,
@@ -253,13 +227,10 @@
   margin: 0 0 6px;
 }
 
-.agent-note-body > :last-child,
 .agent-part-body > :last-child {
   margin-bottom: 0;
 }
 
-.agent-note-body ul,
-.agent-note-body ol,
 .agent-part-body ul,
 .agent-part-body ol {
   padding-left: 18px;
@@ -313,18 +284,6 @@
   margin: 0;
   font-size: var(--mog-text-sm);
   font-weight: var(--mog-weight-semibold);
-}
-
-/* The note of the MOG after the answers: one small muted block, not the answer itself. */
-.agent-note--after {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--mog-text-muted);
-}
-
-.agent-note--after .agent-note-body {
-  font-size: var(--mog-text-xs);
 }
 
 .agent-keys {
@@ -410,7 +369,8 @@
   }
 }
 
-.conv-exchange .agent-parts + .agent-note {
+.conv-exchange .agent-summary + .agent-fold,
+.conv-exchange .agent-summary + .agent-parts {
   margin-top: var(--mog-space-3);
 }
 
@@ -503,20 +463,8 @@
   box-shadow: var(--mog-focus-ring);
 }
 
-.agent-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mog-space-3);
-  margin-bottom: var(--mog-space-4);
-  padding: var(--mog-space-3) var(--mog-space-4);
-  border: 1px solid var(--mog-edge);
-  border-radius: var(--mog-radius-md);
-  background: var(--mog-surface-raised);
-}
-
 /* A wide table in an answer scrolls sideways inside its part. */
-.agent-part-body .md-table-block,
-.agent-note-body .md-table-block {
+.agent-part-body .md-table-block {
   overflow-x: auto;
 }
 

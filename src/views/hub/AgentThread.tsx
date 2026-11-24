@@ -6,8 +6,9 @@
  *
  * - Header: "MOG agent in sales · started 10:42 · 3 questions · 124k tokens" (no New session button),
  *   or "This session ended. A reply starts a new session." when no session is open at all.
- * - Turns, oldest first: the question, a meta line, the answer of each workspace ("Answer from
- *   sales", open) and then "Note from your MOG" as one small muted block.
+ * - Turns, oldest first: the question, a meta line, then the answer: the text of the MOG with the
+ *   workspace answers folded under it, or the one Genie answer ("Answer from sales", open) when
+ *   exactly one call answered.
  * - The live turn is the card's `TurnBody` with [Stop]. Waiting turns show a muted row with [×].
  * - The in-memory turn wins over the stored turn with the same turn id.
  */
@@ -29,12 +30,14 @@ import {
   type AgentThreadPart,
   type AgentThreadTurn,
 } from '../../shared/hub-conversations';
+import { isLoneAnswer, summaryFooterLinks, WITHHELD_TEXT } from '../../shared/agent-answer-rule';
 import type { AgentTurnView, OrchestratorState } from '../../shared/ipc';
 import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
   OPEN_IN_DATABRICKS,
   QUEUED_LABEL,
   SLOW_COPY,
+  SummaryFooter,
   TurnBody,
   WAITING_COPY,
   WsChip,
@@ -393,10 +396,9 @@ function StoredPart({
 }
 
 /**
- * A turn read from the store: the question, the meta line, the answer of each workspace (open,
- * first) and the note of the MOG after them. The stored turn does not say whether the agent saw
- * every answer, so the answers are always first: a note that only refers to them is one small
- * muted block, never the only thing the user can read.
+ * A turn read from the store: the question, the meta line, and the answer. The answer is the text
+ * of the MOG with the workspace answers folded under it, or, when exactly one answered call
+ * exists (`isLoneAnswer`, the same rule as the live card), that Genie answer shown open as it is.
  */
 function StoredTurn({
   turn,
@@ -426,8 +428,26 @@ function StoredTurn({
     if (part) openPartLink(url, part.requestId);
   };
   const listId = `agent-parts-${turn.turnUuid}`;
-  // One answered call: that Genie answer is shown as it is, never the text of the model.
-  const hasNote = turn.summaryMd !== '' && turn.parts.length !== 1;
+  // The same rule as the live card (`isLoneAnswer`): one answered call shows as it is.
+  const hasNote =
+    turn.summaryMd !== '' &&
+    !isLoneAnswer(
+      turn.parts.map((p) => ({
+        answered: p.status === 'answered',
+        withheld: p.answerMd === WITHHELD_TEXT,
+        fromEarlier: false,
+      })),
+    );
+  const footerLinks = summaryFooterLinks(
+    turn.summaryMd,
+    turn.parts
+      .filter((p) => p.status === 'answered')
+      .map((p) => ({
+        name: p.workspace.name,
+        deepLink: p.deepLink,
+        workspaceHost: p.workspaceHost,
+      })),
+  );
   const shown = !hasNote || open;
   const names = [...new Map(turn.parts.map((p) => [p.workspace.name, p.workspace])).values()];
   const word =
@@ -468,6 +488,7 @@ function StoredTurn({
           <div className="agent-part-body" data-answer>
             <SafeMarkdown text={turn.summaryMd} trust={trust} onOpenLink={openNoteLink} />
           </div>
+          <SummaryFooter links={footerLinks} onOpenLink={openNoteLink} />
         </div>
       )}
       {turn.parts.length > 0 && (

@@ -21,6 +21,7 @@ import type {
   AgentWsChip,
   OrchestratorStatus,
 } from '../shared/ipc';
+import { WITHHELD_TEXT } from '../shared/agent-answer-rule';
 import { CARD_DONE } from '../shared/genie-status';
 import type { ArrivalGate } from './arrival-gate';
 import { onViewInput, type BrainBus } from './bus';
@@ -35,7 +36,7 @@ export const STOP_LABEL = 'Stop';
 export const REMOVE_LABEL = 'Remove';
 export const SETTINGS_LABEL = 'Open Settings';
 /** The text of a part whose answer the core withheld (a quarantine hit). */
-export const WITHHELD_TEXT = 'This answer was held back. It looked like it held instructions.';
+export { WITHHELD_TEXT };
 /** The "Where your data goes" line is not part of a part: the card shows it once. */
 const NO_FLOW = '';
 
