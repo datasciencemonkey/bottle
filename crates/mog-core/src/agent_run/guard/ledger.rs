@@ -110,7 +110,8 @@ fn valid_id(id: &str) -> bool {
 /// any other form is dropped, and the turn then has no parts, citations or links.
 pub(crate) fn new_call_id() -> String {
     let mut b = [0u8; 4];
-    // A failed read leaves zeros; the session ledger also keeps the callIds apart by turn.
+    // A failed read leaves zeros (`c-00000000`). The id must still be unique in its session:
+    // `ask::unique_call_id` mints again, under the guard lock, while the id is taken.
     let _ = getrandom::fill(&mut b);
     let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
     format!("c-{hex}")

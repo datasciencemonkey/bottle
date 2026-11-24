@@ -210,7 +210,7 @@ function rowOf(x: Stored): ConversationRow {
 const NO_CHIP = (profile: string): AgentWsChip => ({ name: profile, colorVariant: '' });
 
 /** The `citations` column of a turn row (ADR 0122): `[{n, profile}]`, one entry for each n. */
-function storedCitationsOf(raw: unknown): { n: number; profile: string }[] {
+function storedCitationsOf(raw: unknown): { n: number; profile: string; requestId?: string }[] {
   let v: unknown;
   try {
     v = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -221,12 +221,34 @@ function storedCitationsOf(raw: unknown): { n: number; profile: string }[] {
   const seen = new Set<number>();
   return v.flatMap((c: unknown) => {
     if (typeof c !== 'object' || c === null) return [];
-    const { n, profile } = c as Record<string, unknown>;
+    const { n, profile, requestId } = c as Record<string, unknown>;
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || seen.has(n)) return [];
     if (typeof profile !== 'string' || profile === '') return [];
     seen.add(n);
-    return [{ n, profile }];
+    return [{ n, profile, ...(typeof requestId === 'string' ? { requestId } : {}) }];
   });
+}
+
+/**
+ * The answer text of a turn row without the sources footer that a 0.1.8 model wrote itself: the
+ * last lines "[n] Source: …, call-<hex>" (with a "Sources" heading, a rule and blank lines above
+ * them). Bottle draws the sources itself. Any other text stays as it is.
+ */
+export function withoutOldFooter(md: string): string {
+  const lines = md.split('\n');
+  const old =
+    /^\s*(?:[-*+]\s+)?\[\d{1,3}\]\s*[*_]{0,2}sources?[*_]{0,2}\s*:.*\bcall-[0-9a-f]{6,}\b/i;
+  const filler = /^\s*(?:[*_#\s]*sources?[*_]{0,2}\s*:?\s*[*_]{0,2}|-{3,}|\*{3,}|_{3,})?\s*$/i;
+  // From the end: the topmost old footer line under which there are only such lines or blanks.
+  let cut = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const l = lines[i] ?? '';
+    if (old.test(l)) cut = i;
+    else if (l.trim() !== '') break;
+  }
+  if (cut < 0) return md;
+  while (cut > 0 && filler.test(lines[cut - 1] ?? '')) cut -= 1;
+  return lines.slice(0, cut).join('\n').trimEnd();
 }
 
 function partOf(x: Stored, chipOf: (profile: string) => AgentWsChip): AgentThreadPart {
@@ -328,11 +350,13 @@ function agentThreadsOf(
     const sorted = [...ps].sort(byAsked);
     const status = x.o['status'];
     const answeredPart = sorted.some((p) => p.o['status'] === 'completed');
-    const citations = storedCitationsOf(x.o['citations']).map(({ n, profile }) => {
-      // The marker reaches the last answer of its workspace in this turn.
-      const part = sorted
-        .filter((p) => p.o['status'] === 'completed' && str(p.o['profileName']) === profile)
-        .at(-1);
+    const citations = storedCitationsOf(x.o['citations']).map(({ n, profile, requestId }) => {
+      // The marker reaches the part row saved with it (the part the live chip reaches), else the
+      // last answer of its workspace in this turn.
+      const answered = sorted.filter(
+        (p) => p.o['status'] === 'completed' && str(p.o['profileName']) === profile,
+      );
+      const part = answered.find((p) => p.requestId === requestId) ?? answered.at(-1);
       return { n, workspace: chipOf(profile), ...(part ? { requestId: part.requestId } : {}) };
     });
     return {
@@ -346,7 +370,7 @@ function agentThreadsOf(
           : status === 'cancelled'
             ? 'stopped'
             : 'failed',
-      summaryMd: str(x.o['finalAnswerMd']),
+      summaryMd: withoutOldFooter(str(x.o['finalAnswerMd'])),
       parts: sorted.map((p) => partOf(p, chipOf)),
       ...(citations.length > 0 ? { citations } : {}),
     };

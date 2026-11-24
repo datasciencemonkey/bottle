@@ -108,6 +108,24 @@ fn live_turn(st: &State, sid: &str) -> Result<String, &'static str> {
     }
 }
 
+/// A call id that no call of the session has. The session looks calls up by id alone, so a repeat
+/// would mix two calls. A few fresh ids are tried; if random bytes fail (every id is
+/// `c-00000000`), a counter gives the next free id.
+pub(super) fn unique_call_id(sess: &SessionRec) -> String {
+    unique_call_id_with(sess, new_call_id)
+}
+
+pub(super) fn unique_call_id_with(sess: &SessionRec, mut mint: impl FnMut() -> String) -> String {
+    let taken = |id: &str| sess.calls.iter().any(|c| c.call_id == id);
+    let mut id = mint();
+    let mut k: u32 = 0;
+    while taken(&id) {
+        k += 1;
+        id = if k <= 4 { mint() } else { format!("c-{k:08x}") };
+    }
+    id
+}
+
 fn call_mut<'a>(sess: &'a mut SessionRec, call_id: &str) -> Option<&'a mut CallRec> {
     sess.calls.iter_mut().find(|c| c.call_id == call_id)
 }
@@ -221,13 +239,13 @@ impl AgentGuard {
             }
             return Err(self.refuse(sid, &turn_id, AgentRefusal::WorkspaceNotAvailable));
         }
-        let call_id = new_call_id();
         let cancel = Arc::new(AtomicBool::new(false));
-        let event = {
+        let (event, call_id) = {
             let mut st = self.lock();
             let Some(sess) = st.sessions.get_mut(sid).filter(|s| s.is_open()) else {
                 return Err(ToolOut::refusal(RUN_STOPPED));
             };
+            let call_id = unique_call_id(sess);
             let (used, budget) = sess
                 .turns
                 .get(&turn_id)
@@ -246,14 +264,15 @@ impl AgentGuard {
                 cancel: Arc::clone(&cancel),
                 cancel_sent: false,
             });
-            call_event(
+            let event = call_event(
                 &turn_id,
                 &call_id,
                 &alias,
                 AgentCallState::Queued,
                 used,
                 budget,
-            )
+            );
+            (event, call_id)
         };
         self.emit(vec![event]);
         Ok(Admitted {

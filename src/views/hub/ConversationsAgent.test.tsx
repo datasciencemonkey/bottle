@@ -409,6 +409,21 @@ describe('the agent thread detail', () => {
     });
   });
 
+  it('a stored chip with no part to reach is not a control', async () => {
+    const { el } = await mount();
+    const t = stored('a', {
+      summaryMd: 'Earlier data [1].',
+      citations: [{ n: 1, workspace: fin }],
+    });
+    await feed([thread(THREAD_A, [t])]);
+    const chip = el.querySelector('[data-agent-note] [data-agent-cite="1"]') as HTMLElement;
+    expect(chip.tagName).toBe('SPAN');
+    expect(chip.getAttribute('aria-disabled')).toBe('true');
+    expect(chip.getAttribute('aria-label')).toBe(`Source 1: ${fin.name}`);
+    await click(chip);
+    expect(payloads(CONVERSATIONS_VIEW_ID).filter((p) => p['target'] === 'link_open')).toEqual([]);
+  });
+
   it('[owner bug] two stored calls to one workspace show the last answer as it is, the first folds', async () => {
     const { el } = await mount();
     const parts = [

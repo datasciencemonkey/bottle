@@ -44,6 +44,7 @@ import {
   WAITING_COPY,
   WsChip,
   answerFromText,
+  citeLabel,
   firstAnswerLine,
   stripe,
   tokensText,
@@ -480,7 +481,6 @@ function StoredTurn({
     if (l) openPartLink(url, l.source.requestId);
   };
   const reach = (id: string) => {
-    if (id === '') return;
     if (rest.some((p) => p.requestId === id)) setOpen(true);
     setReveal({ id, seq: ++seq.current });
   };
@@ -509,17 +509,31 @@ function StoredTurn({
     const c = cites.get(n);
     if (!c) return undefined;
     const part = turn.parts.find((p) => p.requestId === c.requestId);
+    // No part of this turn to reach: the chip only names its workspace.
+    if (!part)
+      return (
+        <span
+          className="agent-cite"
+          data-agent-cite={n}
+          aria-disabled="true"
+          aria-label={citeLabel(n, c.workspace.name)}
+          title={c.workspace.name}
+          style={stripe(c.workspace)}
+        >
+          {n}
+        </span>
+      );
     const cite = {
       n,
-      callId: c.requestId ?? '',
+      callId: part.requestId,
       workspace: c.workspace,
-      ...(part?.deepLink ? { deepLink: part.deepLink, workspaceHost: part.workspaceHost } : {}),
+      ...(part.deepLink ? { deepLink: part.deepLink, workspaceHost: part.workspaceHost } : {}),
     };
     return (
       <CiteChip
         cite={cite}
         onReveal={reach}
-        onOpenLink={part ? (u: string) => openPartLink(u, part.requestId) : undefined}
+        onOpenLink={(u: string) => openPartLink(u, part.requestId)}
       />
     );
   };

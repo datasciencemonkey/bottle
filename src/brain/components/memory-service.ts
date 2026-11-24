@@ -134,8 +134,30 @@ const STATUS: Record<OperationState, [string, boolean]> = {
  */
 export type ExchangeWrite = GenieExchange & {
   noSummary?: true;
-  citations?: { n: number; profile: string }[];
+  citations?: { n: number; profile: string; requestId?: string }[];
+  /**
+   * Epoch ms: when the question was asked, if the caller knows it (an agent call: its start).
+   * Conversations orders the parts of a turn by it, as the live card does. Default: now.
+   */
+  askedAt?: number;
 };
+
+/** The most bytes of the `citations` JSON of a turn row (`mem.exchange.upsert`). */
+export const CITATIONS_MAX_BYTES = 4096;
+
+/** The citations that fit the column: the last entries go first, so the row is never refused. */
+export function fitCitations(
+  c: ExchangeWrite['citations'],
+): ExchangeWrite['citations'] | undefined {
+  if (c === undefined) return undefined;
+  const out = [...c];
+  while (
+    out.length > 0 &&
+    new TextEncoder().encode(JSON.stringify(out)).length > CITATIONS_MAX_BYTES
+  )
+    out.pop();
+  return out.length > 0 ? out : undefined;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The most key numbers kept for one exchange. */
@@ -537,11 +559,12 @@ export class LocalMemoryService implements MemoryService {
         finalAnswerMd: fitAnswer(x.answerMd),
         deepLink: x.deepLink || undefined,
         splitGroupId: x.splitGroupId,
-        askedAt: now,
+        askedAt:
+          x.askedAt !== undefined && Number.isInteger(x.askedAt) && x.askedAt > 0 ? x.askedAt : now,
         completedAt: terminal ? now : undefined,
         rowHlc: this.#hlc(now),
         deviceId: this.#deviceId(),
-        citations: x.citations,
+        citations: fitCitations(x.citations),
       }),
     );
   }

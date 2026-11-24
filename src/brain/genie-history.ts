@@ -67,8 +67,13 @@ export interface GenieEnd {
   isStale?: () => boolean;
   /** Slice 2a: false for a call to a workspace that is not home (the table keeps no question text). */
   homeWorkspace?: boolean;
-  /** With `backend: 'genie_agent'`: the workspace (profile) that each `[n]` of the answer names. */
-  citations?: { n: number; profile: ProfileName }[];
+  /**
+   * With `backend: 'genie_agent'`: the workspace (profile) that each `[n]` of the answer names,
+   * and the request id of the part row it reaches, when that row is known.
+   */
+  citations?: { n: number; profile: ProfileName; requestId?: string }[];
+  /** Epoch ms: when the call was asked (an agent call), so Conversations orders parts as the card. */
+  askedAt?: number;
 }
 
 /** The part of T10 that the history uses. */
@@ -146,6 +151,7 @@ function exchangeOf(x: GenieEnd, host: string, mogId: MogId): ExchangeWrite {
     ...(agent && x.citations !== undefined && x.citations.length > 0
       ? { citations: x.citations }
       : {}),
+    ...(x.askedAt !== undefined ? { askedAt: x.askedAt } : {}),
     ...((agent ? x.threadId : x.splitGroupId) !== undefined
       ? { splitGroupId: agent ? x.threadId : x.splitGroupId }
       : {}),

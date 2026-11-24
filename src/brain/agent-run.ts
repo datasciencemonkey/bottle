@@ -142,8 +142,10 @@ interface TurnRec {
   ran?: boolean;
   /** `finish` is over: the turn row is asked for, and a Delete may take the turn. */
   settled: boolean;
-  /** The workspace (profile) of each `[n]` of the summary, saved with the turn row. */
-  citations?: { n: number; profile: ProfileName }[];
+  /** The workspace (profile) of each `[n]` of the summary and its part row, saved with the turn row. */
+  citations?: { n: number; profile: ProfileName; requestId?: string }[];
+  /** The history row id of each call of this turn, by call id. */
+  rowIds: Map<string, string>;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -391,8 +393,24 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     return ws ? deps.chipOf(ws.profile) : { name: alias, colorVariant: '' };
   };
 
+  /**
+   * The parts in the order their calls were asked (the start of the call, else its end), as
+   * Conversations orders the stored parts (`askedAt`, see `record`). A part with no call row of
+   * this turn (an earlier turn's source) keeps its place at the end.
+   */
+  const orderedParts = (r: TurnRec): AgentPartView[] => {
+    const at = (id: string) => {
+      const c = r.view.calls.find((x) => x.callId === id);
+      return c?.startedAt ?? c?.endedAt ?? Number.MAX_SAFE_INTEGER;
+    };
+    return [...r.parts.values()]
+      .map((p, i) => ({ p, i, t: at(p.callId) }))
+      .sort((a, b) => a.t - b.t || a.i - b.i)
+      .map((x) => x.p);
+  };
+
   const syncParts = (r: TurnRec) => {
-    r.view = { ...r.view, parts: [...r.parts.values()] };
+    r.view = { ...r.view, parts: orderedParts(r) };
   };
 
   /** Pull the question (and, when it ended, the reply) of one call. */
@@ -478,14 +496,20 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       default:
         end = { t: 'failed', code: 'GENIE_FAILED', userText: '', retry: 'user' };
     }
+    // One row id for each call, kept so the turn row can say which part each [n] reaches.
+    const opId = r.rowIds.get(d.callId) ?? deps.newId();
+    r.rowIds.set(d.callId, opId);
+    const row = r.view.calls.find((c) => c.callId === d.callId);
+    const askedAt = row?.startedAt ?? row?.endedAt;
     try {
       deps.recordCall({
-        opId: deps.newId(),
+        opId,
         mogId: r.origin.mogId,
         profile: d.profile,
         question: d.question,
         end,
         splitGroupId: uuidOfTurn(r.view.turnId),
+        ...(askedAt !== undefined ? { askedAt } : {}),
         isStale: staleOrDefer(r, gen, cg, () => deferCall(r, d)),
         homeWorkspace: home === undefined || d.profile === home,
         ...(refs.conversationId !== undefined ? { conversationId: refs.conversationId } : {}),
@@ -721,13 +745,26 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       .map((s) => r.parts.get(s.callId)?.workspace)
       .filter((c): c is AgentWsChip => c !== undefined);
     const workspaces = chips.filter((c, i) => chips.findIndex((x) => x.name === c.name) === i);
-    const { md, citations, workspaceIds } = citationsByWorkspace(res.answer, res.sources, r.parts);
-    // The turn row keeps which workspace (profile) each number names, for Conversations.
+    // The turn row keeps which workspace (profile) each number names and which part row it
+    // reaches, for Conversations. A workspace with no profile cannot be named: its markers go.
+    const all = [r, ...recs.values()];
     const profileOf = (alias: string) =>
-      [r, ...recs.values()].map((x) => x.catalog.get(alias)?.profile).find((p) => p !== undefined);
+      all.map((x) => x.catalog.get(alias)?.profile).find((p) => p !== undefined);
+    const rowOf = (callId: string) =>
+      all.map((x) => x.rowIds.get(callId)).find((id) => id !== undefined);
+    const { md, citations, workspaceIds } = citationsByWorkspace(
+      res.answer,
+      res.sources,
+      new Map(orderedParts(r).map((p) => [p.callId, p])),
+      (alias) => profileOf(alias) !== undefined,
+    );
     r.citations = workspaceIds.flatMap((alias, i) => {
       const profile = profileOf(alias);
-      return profile === undefined ? [] : [{ n: i + 1, profile }];
+      const callId = citations.find((c) => c.n === i + 1)?.callId;
+      const requestId = callId === undefined ? undefined : rowOf(callId);
+      return profile === undefined
+        ? []
+        : [{ n: i + 1, profile, ...(requestId !== undefined ? { requestId } : {}) }];
     });
     const summary: NonNullable<AgentTurnView['summary']> = {
       md,
@@ -827,6 +864,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         threadId:
           threadId ?? (mode === 'follow_up' ? lastAnswered : undefined) ?? uuidOfTurn(a.turnId),
         recorded: false,
+        rowIds: new Map(),
         noRecord: false,
         settled: false,
       };

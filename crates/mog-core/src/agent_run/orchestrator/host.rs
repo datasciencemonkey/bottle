@@ -1330,7 +1330,8 @@ fn build_result(
         });
     }
     let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
-    let answer = strip_bad_markers(&strip_source_footer(answer, &ids), out.len());
+    let aliases: Vec<&str> = out.iter().map(|s| s.workspace_id.as_str()).collect();
+    let answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
     AgentTurnResult {
         answer: Some(cut_answer(&answer)),
         answer_kind: if d1 && cites_many_workspaces(&out) {
@@ -1385,54 +1386,88 @@ pub(super) fn strip_bad_markers(answer: &str, n_sources: usize) -> String {
     out
 }
 
+/// True when `alias` stands in `text` as a word of its own. A dot, `_` or `-` next to it makes it
+/// part of a longer name (`main.sales.orders` does not name `sales`).
+fn names_alias(text: &str, alias: &str) -> bool {
+    if alias.is_empty() {
+        return false;
+    }
+    let (t, a) = (text.to_lowercase(), alias.to_lowercase());
+    let part =
+        |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    t.match_indices(&a)
+        .any(|(i, m)| !part(t[..i].chars().next_back()) && !part(t[i + m.len()..].chars().next()))
+}
+
 /// Bottle draws the sources of an answer itself (ADR 0122), so a sources footer that the model
-/// wrote goes. The footer is the last lines of the answer, from the first "Sources" heading,
-/// "Source: …" or "[n] Source: …" line, or list item that names a call id, when every line under it
-/// is one of those, a "[n] …" item, or blank. A rule (`---`) and blank lines right above it go
-/// too. A line in the middle of the answer stays. Then every call id of `call_ids` that is still
-/// in the text goes (with brackets that hold only the id): a call id is internal.
-pub(super) fn strip_source_footer(answer: &str, call_ids: &[&str]) -> String {
-    static FOOT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+/// wrote goes. A footer line is a "Source: …" line (also as a list item or after `[n]`) that
+/// starts with a `[n]` marker or names a call id of `call_ids` or a cited workspace of
+/// `aliases`, or a list item that names a call id of `call_ids`. The footer is the last lines of
+/// the answer, from the topmost footer line, when every line under it is a footer line, a "[n] …"
+/// item, a "Sources" heading or blank. A "Sources" heading, a rule (`---`) and blank lines right
+/// above it go too. Any other line stays, so a "Source: main.sales.orders" that Genie wrote, or a
+/// list of ids that look like call ids, is kept. Then every call id of `call_ids` that is still in
+/// the text goes (with brackets that hold only the id): a call id is internal.
+pub(super) fn strip_source_footer(answer: &str, call_ids: &[&str], aliases: &[&str]) -> String {
+    static SRC: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static HEAD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static RULE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static ITEM: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let item = ITEM.get_or_init(|| {
         regex::Regex::new(r"^\s*(?:[-*+]\s+)?\[\d{1,3}\](?:[^(]|$)").expect("a fixed pattern")
     });
-    let foot = FOOT.get_or_init(|| {
+    let src = SRC.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)^\s*(?:[-*+]\s+)?(?:\[\d{1,3}\]\s*)?[*_#\s]*sources?[*_]{0,2}\s*(?::.*)?$",
+            r"(?i)^\s*(?:[-*+]\s+)?(\[\d{1,3}\]\s*)?[*_]{0,2}\s*sources?[*_]{0,2}\s*:(.*)$",
         )
         .expect("a fixed pattern")
     });
-    let call = CALL.get_or_init(|| {
-        regex::Regex::new(r"(?i)\b(?:call-[0-9a-f]{6,}|c-[0-9a-f]{8})\b").expect("a fixed pattern")
+    let head = HEAD.get_or_init(|| {
+        regex::Regex::new(r"(?i)^\s*[*_#\s]*sources?[*_]{0,2}\s*:?\s*[*_]{0,2}\s*$")
+            .expect("a fixed pattern")
     });
     let rule = RULE.get_or_init(|| {
         regex::Regex::new(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$").expect("a fixed pattern")
     });
+    let ids: Vec<&str> = call_ids
+        .iter()
+        .copied()
+        .filter(|id| !id.is_empty())
+        .collect();
+    let has_id = |l: &str| ids.iter().any(|id| l.contains(id));
+    let footer_line = |l: &str| {
+        if let Some(c) = src.captures(l) {
+            let rest = c.get(2).map_or("", |m| m.as_str());
+            if c.get(1).is_some() || has_id(rest) || aliases.iter().any(|a| names_alias(rest, a)) {
+                return true;
+            }
+        }
+        let listed = item.is_match(l) || l.trim_start().starts_with(['-', '*', '+']);
+        listed && has_id(l)
+    };
     let lines: Vec<&str> = answer.lines().collect();
-    // From the end: the run of footer-like lines, and the topmost strong footer line in it.
+    // From the end: the run of footer-like lines, and the topmost footer line in it.
     let mut top: Option<usize> = None;
     for (i, l) in lines.iter().enumerate().rev() {
-        // A call id alone is not a footer: only a list item or a `[n]` line with one is.
-        let listed = item.is_match(l) || l.trim_start().starts_with(['-', '*', '+']);
-        if foot.is_match(l) || (listed && call.is_match(l)) {
+        if footer_line(l) {
             top = Some(i);
-        } else if !(l.trim().is_empty() || item.is_match(l)) {
+        } else if !(l.trim().is_empty() || item.is_match(l) || head.is_match(l)) {
             break;
         }
     }
     let mut text = match top {
         Some(mut end) => {
-            while end > 0 && (lines[end - 1].trim().is_empty() || rule.is_match(lines[end - 1])) {
+            while end > 0 && {
+                let l = lines[end - 1];
+                l.trim().is_empty() || rule.is_match(l) || head.is_match(l)
+            } {
                 end -= 1;
             }
             lines[..end].join("\n").trim_end().to_owned()
         }
         None => answer.to_owned(),
     };
-    for id in call_ids.iter().filter(|id| !id.is_empty()) {
+    for id in ids {
         let re = regex::Regex::new(&format!(
             r"\s*[(\[]\s*(?:callId:?\s*)?{0}\s*[)\]]|\s*\b(?:callId:?\s*)?{0}\b",
             regex::escape(id)
