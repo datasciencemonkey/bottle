@@ -20,7 +20,6 @@ function rig() {
         threads: [{ turnId: T1, threadId: THREAD }],
       }),
       stop: async (id) => void log.push(`stop:${id}`),
-      newSession: async () => void log.push('new'),
       refreshSession: async () => void log.push('refresh'),
     },
     send: async (v) => void sent.push(v),
@@ -43,25 +42,24 @@ describe('hub Agent panel wiring', () => {
     expect(r.sent[0]?.notice).toBeUndefined();
   });
 
-  it('runs Stop, a queued remove, New session and Open Settings, each once', async () => {
+  it('runs Stop, a queued remove and Open Settings, each once', async () => {
     const r = rig();
     r.click({ action: 'agent.stop', turnId: T1 });
     r.click({ action: 'agent.remove_queued', turnId: T1 });
-    r.click({ action: 'agent.new_session' });
     r.click({ action: 'agent.open_settings' });
     await flush();
-    expect(r.log).toEqual([`stop:${T1}`, `stop:${T1}`, 'new', 'settings']);
+    expect(r.log).toEqual([`stop:${T1}`, `stop:${T1}`, 'settings']);
     // The panel is sent again after each change.
-    expect(r.sent).toHaveLength(3);
+    expect(r.sent).toHaveLength(2);
   });
 
   it('drops a bad action, another window, another scope and a non-click', async () => {
     const r = rig();
     r.click({ action: 'agent.stop', turnId: 'short' });
     r.click({ action: 'agent.nope' });
-    r.click({ action: 'agent.new_session' }, `card-${HUB_SCOPE}`);
-    r.click({ action: 'agent.new_session' }, 'hub', 'some-mog');
-    r.click({ action: 'agent.new_session' }, 'hub', HUB_SCOPE, 'hover');
+    r.click({ action: 'agent.open_settings' }, `card-${HUB_SCOPE}`);
+    r.click({ action: 'agent.open_settings' }, 'hub', 'some-mog');
+    r.click({ action: 'agent.open_settings' }, 'hub', HUB_SCOPE, 'hover');
     await flush();
     expect(r.log).toEqual([]);
     expect(r.sent).toEqual([]);
@@ -250,7 +248,6 @@ describe('hub Agent panel wiring', () => {
           threads: [],
         }),
         stop: async () => undefined,
-        newSession: async () => undefined,
         refreshSession: async () => undefined,
       },
       send: () => Promise.reject(new Error('no hub')),

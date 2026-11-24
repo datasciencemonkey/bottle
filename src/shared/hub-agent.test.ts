@@ -37,7 +37,7 @@ const view = {
 describe('hub-agent shape checks (slice 2a)', () => {
   it('accepts each documented action and drops unknown fields', () => {
     expect(asAgentAction({ action: 'agent.ready', x: 1 })).toEqual({ action: 'agent.ready' });
-    expect(asAgentAction({ action: 'agent.new_session' })).toEqual({ action: 'agent.new_session' });
+    expect(asAgentAction({ action: 'agent.new_session' })).toBeUndefined();
     expect(asAgentAction({ action: 'agent.open_settings' })).toBeDefined();
     expect(asAgentAction({ action: 'agent.stop', turnId: T1, y: 2 })).toEqual({
       action: 'agent.stop',

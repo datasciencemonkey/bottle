@@ -309,6 +309,26 @@ describe('the agent thread detail', () => {
     expect(note.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('[owner rule] a stored turn with one answered call shows that answer, not the text of the model', async () => {
+    const { el } = await mount();
+    await feed([
+      thread(THREAD_A, [stored('a', { summaryMd: 'MODEL-PARAPHRASE', parts: [part(1)] })]),
+    ]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(d.querySelector('[data-agent-summary]')).toBeNull();
+    expect(d.textContent).toContain('Answer 1 from a workspace.');
+    expect((d.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
+  });
+
+  it('[owner rule] a stored turn with two answered calls shows the combined text first', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: 'COMBINED-TEXT' })])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.querySelector('[data-agent-summary]')?.textContent).toContain('COMBINED-TEXT');
+    expect((d.querySelector('.agent-parts') as HTMLElement).hidden).toBe(true);
+  });
+
   it('[P2-8] the answers have a toggle with a chevron and a label that says what it does', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a')])]);
@@ -459,7 +479,7 @@ describe('the agent thread detail', () => {
     ).toEqual(['1', '2']);
   });
 
-  it('a thread of the live session shows the session line and New session', async () => {
+  it('a thread of the live session shows the session line and no New session button', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a')])], [], {
       ...view({ session: SESSION }),
@@ -471,21 +491,7 @@ describe('the agent thread detail', () => {
     expect(line?.textContent).toMatch(
       /^MOG agent in Sales · started .+ · 3 questions · 124k tokens$/,
     );
-    // No turn runs: New session sends its action at once and the focus goes to the line.
-    await click(q(el, '[data-agent-new-session]'));
-    expect(payloads(HUB_SCOPE)).toContainEqual({ action: 'agent.new_session' });
-  });
-
-  it('[AC-C10] New session asks first while a turn is live, and Cancel has the focus', async () => {
-    const { el } = await mount();
-    await feed([], [], running);
-    await click(q(el, '[data-agent-new-session]'));
-    const confirm = q(el, '[data-agent-new-session-confirm]') as HTMLElement;
-    expect(confirm.textContent).toContain('The live question stops');
-    expect(document.activeElement?.textContent).toBe('Cancel');
-    expect(payloads(HUB_SCOPE)).not.toContainEqual({ action: 'agent.new_session' });
-    await click(q(el, '[data-confirm-new-session]'));
-    expect(payloads(HUB_SCOPE)).toContainEqual({ action: 'agent.new_session' });
+    expect(q(el, '[data-agent-new-session]')).toBeNull();
   });
 
   it('the live turn shows its calls, "n of N" and a Stop button with a full name', async () => {

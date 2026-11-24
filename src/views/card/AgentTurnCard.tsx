@@ -486,7 +486,8 @@ export const answersFirstOf = (turn: AgentTurnView): boolean =>
 
 /** The orchestrator wrote an answer: it is the main answer, the parts fold under it. */
 export const hasSummaryText = (turn: AgentTurnView): boolean =>
-  turn.summary !== undefined && turn.summary.md.trim() !== '';
+  // One answered call: that Genie answer is shown as it is, never the text of the model.
+  turn.parts.length !== 1 && turn.summary !== undefined && turn.summary.md.trim() !== '';
 
 /** The first line of the first answer of a turn, for a list: never the note of the agent. */
 export function firstAnswerLine(turn: AgentTurnView): string {

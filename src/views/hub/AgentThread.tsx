@@ -4,7 +4,7 @@
  * (`agentThreads`) and the in-memory turns of `hub:agent` (`HubAgentView`) as one thread, and sends
  * one `AgentAction` for each click with `view_emit`.
  *
- * - Header: "MOG agent in sales · started 10:42 · 3 questions · 124k tokens" and [New session],
+ * - Header: "MOG agent in sales · started 10:42 · 3 questions · 124k tokens" (no New session button),
  *   or "This session ended. A reply starts a new session." when no session is open at all.
  * - Turns, oldest first: the question, a meta line, the answer of each workspace ("Answer from
  *   sales", open) and then "Note from your MOG" as one small muted block.
@@ -16,7 +16,6 @@ import { motion } from 'motion/react';
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -274,49 +273,6 @@ export function notReadyText(
   return `${notReadyReason(state, homeName)} ${DIRECT_TAIL}`;
 }
 
-export function NewSessionConfirm({
-  live,
-  onConfirm,
-  onCancel,
-}: {
-  live: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const id = useId();
-  const cancel = useRef<HTMLButtonElement>(null);
-  // The safe choice has the focus when the question opens.
-  useEffect(() => cancel.current?.focus(), []);
-  return (
-    <div
-      role="group"
-      aria-labelledby={id}
-      data-agent-new-session-confirm
-      className="agent-confirm"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
-          onCancel();
-        }
-      }}
-    >
-      <p id={id} className="m-0">
-        {live
-          ? 'Start a new session? The live question stops. Your conversations stay.'
-          : 'Start a new session? The waiting questions are removed. Your conversations stay.'}
-      </p>
-      <div className="flex gap-[var(--mog-space-2)]">
-        <Button type="button" size="sm" data-confirm-new-session onClick={onConfirm}>
-          New session
-        </Button>
-        <Button ref={cancel} type="button" size="sm" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /** The copy of a waiting turn: "Sends when the answer above lands" only with an answer above. */
 export const SENDS_NEXT_COPY = 'Sends after the current question';
 
@@ -470,7 +426,8 @@ function StoredTurn({
     if (part) openPartLink(url, part.requestId);
   };
   const listId = `agent-parts-${turn.turnUuid}`;
-  const hasNote = turn.summaryMd !== '';
+  // One answered call: that Genie answer is shown as it is, never the text of the model.
+  const hasNote = turn.summaryMd !== '' && turn.parts.length !== 1;
   const shown = !hasNote || open;
   const names = [...new Map(turn.parts.map((p) => [p.workspace.name, p.workspace])).values()];
   const word =
@@ -600,20 +557,12 @@ export function AgentDetail({
   composer: ReactNode;
 }) {
   const sessionLine = useRef<HTMLParagraphElement>(null);
-  const [confirm, setConfirm] = useState(false);
   const counting = entry.live?.calls.some((c) => c.state === 'asking') ?? false;
   const now = useNow(active && counting);
   const toSession = useCallback(
     () => requestAnimationFrame(() => sessionLine.current?.focus()),
     [],
   );
-  // New session stops a live question and clears the queue: it asks first.
-  const needsConfirm = agent?.live !== undefined || (agent?.waiting.length ?? 0) > 0;
-  const newSession = () => {
-    send({ action: 'agent.new_session' });
-    setConfirm(false);
-    toSession();
-  };
   const first = `agent-q-${entry.threadId}`;
 
   // A new turn lands below the fold: scroll the pane to its end (not on first show).
@@ -634,19 +583,7 @@ export function AgentDetail({
   // A session is open (for this thread or another one): nothing says "ended" then. A reply joins
   // the open session, so the line would be false.
   const noSession = agent !== undefined && agent.session.state === 'none' && !entry.inSession;
-  const newSessionButton = agent !== undefined && entry.inSession && (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      data-agent-new-session
-      aria-expanded={confirm}
-      onClick={() => (needsConfirm ? setConfirm(true) : newSession())}
-    >
-      New session
-    </Button>
-  );
-  const hasActions = Boolean(newSessionButton) || Boolean(toolbar);
+  const hasActions = Boolean(toolbar);
   return (
     <motion.article
       ref={focusRef}
@@ -673,20 +610,8 @@ export function AgentDetail({
             ) : (
               <span />
             )}
-            {hasActions && (
-              <span className="agent-session-actions">
-                {newSessionButton}
-                {toolbar}
-              </span>
-            )}
+            {hasActions && <span className="agent-session-actions">{toolbar}</span>}
           </div>
-        )}
-        {confirm && (
-          <NewSessionConfirm
-            live={agent?.live !== undefined}
-            onConfirm={newSession}
-            onCancel={() => setConfirm(false)}
-          />
         )}
         {entry.turns.map((t, i) =>
           t.kind === 'stored' ? (

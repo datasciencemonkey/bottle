@@ -219,7 +219,7 @@ describe('AgentTurnCard', () => {
     const t = view({
       state: 'done',
       summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin, sales] },
-      parts: [partOf('c-00000001')],
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     expect(el.querySelector('[data-agent-note-chips]')?.getAttribute('role')).toBe('group');
@@ -241,7 +241,7 @@ describe('AgentTurnCard', () => {
           { n: 1, callId: 'c-00000001', workspace: sales, deepLink: link, workspaceHost: host },
         ],
       },
-      parts: [partOf('c-00000001', { workspace: sales })],
+      parts: [partOf('c-00000001', { workspace: sales }), partOf('c-00000002')],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     const main = el.querySelector('[data-agent-summary]') as HTMLElement;
@@ -258,8 +258,33 @@ describe('AgentTurnCard', () => {
     expect(open?.textContent).toBe('Open in Databricks');
     // The answer comes first; the part folds under it.
     expect(el.querySelector('.agent-part-title')).toBeNull();
-    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('1 workspace answer');
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('2 workspace answers');
     expect(el.querySelector('.agent-note-label')).toBeNull();
+  });
+
+  it('[owner rule] exactly one answered call shows that Genie answer as it is, not the text of the model', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'note', workspaces: [sales] },
+      parts: [partOf('c-00000001', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(el.querySelector('[data-agent-summary]')).toBeNull();
+    expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
+    expect(el.textContent).toContain('Answer c-00000001');
+    expect(el.querySelector('[data-action="fold"]')).toBeNull();
+  });
+
+  it('[owner rule] two answered calls show the combined answer first and fold both answers', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'COMBINED-TEXT', kind: 'combined', workspaces: [fin, sales] },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('COMBINED-TEXT');
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('2 workspace answers');
   });
 
   it('[owner bug] with no summary text the workspace answers come first, open, each under "Answer from <workspace>"', async () => {
