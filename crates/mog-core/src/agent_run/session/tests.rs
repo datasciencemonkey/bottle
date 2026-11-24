@@ -353,6 +353,9 @@ impl SessionGuard for FakeGuard {
     fn call_detail(&self, _: &str, _: &str) -> Option<AgentTurnCall> {
         None
     }
+    fn wipe_all(&self) {
+        self.log.lock().unwrap().push("wipe_all".to_owned());
+    }
     fn close_session(&self, session_id: &str, wipe: bool) {
         self.log
             .lock()

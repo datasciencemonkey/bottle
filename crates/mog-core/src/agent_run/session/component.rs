@@ -1258,6 +1258,8 @@ impl Engine {
             let _ = genie_home::delete_home(&self.cfg.home);
             genie_home::sweep_cwds(&self.cfg.tmp_root);
             if reason == AgentSessionEndReason::Wipe {
+                // Earlier ended sessions keep a ledger for ten minutes: Wipe drops them all.
+                self.d.guard.wipe_all();
                 self.results.clear();
                 self.result_order.clear();
             }
@@ -1384,6 +1386,7 @@ impl Engine {
         let wipe = reason == AgentSessionEndReason::Wipe;
         self.d.guard.close_session(&s.id, wipe);
         if wipe {
+            self.d.guard.wipe_all();
             self.results.clear();
             self.result_order.clear();
         } else {

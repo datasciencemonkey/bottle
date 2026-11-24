@@ -97,6 +97,7 @@ impl SessionGuard for UnwiredGuard {
         None
     }
     fn close_session(&self, _: &str, _: bool) {}
+    fn wipe_all(&self) {}
 }
 
 /// The shim command when the guard lane gives none: this executable with the shim argument.

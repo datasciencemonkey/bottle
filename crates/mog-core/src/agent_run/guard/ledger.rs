@@ -383,6 +383,13 @@ impl SessionGuard for AgentGuard {
         })
     }
 
+    fn wipe_all(&self) {
+        let ids: Vec<String> = self.lock().sessions.keys().cloned().collect();
+        for id in ids {
+            self.close_session(&id, true);
+        }
+    }
+
     fn close_session(&self, session_id: &str, wipe: bool) {
         let mut cancels = Vec::new();
         {

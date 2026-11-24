@@ -924,3 +924,42 @@ fn the_session_end_deletes_genie_home_kills_the_server_and_drops_the_ledger() {
     );
     assert_eq!(late, 1);
 }
+
+#[test]
+fn wipe_drops_the_ledger_of_an_earlier_ended_session_too() {
+    let r = Rig::new(10);
+    let (s, turn_a) = r.first_turn();
+    let mut shim = ShimRun::start(&s);
+    let (err, text) = shim.ask("sales");
+    assert!(!err);
+    let call_a = call_id(&text);
+    s.complete(
+        "st-1",
+        &json!({ "answer": "x", "sources": [{ "workspace": "sales", "callId": call_a }] })
+            .to_string(),
+    );
+    r.events.ended(&turn_a);
+    assert_eq!(shim.finish(), 0);
+    assert!(r.host.turn_call(&turn_a, &call_a).is_some());
+
+    // A tainted session ends for a new question, and session B starts.
+    let _turn_b = r.submit("another question");
+    let b = r.spawner.next();
+    b.handshake();
+    r.events.wait("session A ended as tainted", |e| {
+        matches!(
+            e,
+            AgentEvent::Session(AgentSessionEvent::Ended {
+                reason: AgentSessionEndReason::Tainted,
+                ..
+            })
+        )
+    });
+    // The ledger of the ended session A is still readable (ten minutes) ...
+    assert!(r.host.turn_call(&turn_a, &call_a).is_some());
+
+    r.host.end_blocking(AgentSessionEndReason::Wipe);
+
+    // ... until Wipe: then it is gone, with the question and answer text of A.
+    assert!(r.host.turn_call(&turn_a, &call_a).is_none());
+}
