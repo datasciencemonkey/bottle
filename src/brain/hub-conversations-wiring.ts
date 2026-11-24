@@ -418,6 +418,11 @@ export function wireHubConversations(
       known = new Map(
         list.rows.map((r) => [r.requestId, { profile: r.profile, host: r.workspaceHost }]),
       );
+      // The saved parts of an agent thread are not plain rows, and their links must open too.
+      for (const t of list.agentThreads ?? [])
+        for (const turn of t.turns)
+          for (const part of turn.parts)
+            known.set(part.requestId, { profile: part.profile, host: part.workspaceHost });
       await deps.send(list);
     } catch {
       // No hub is open. The hub asks again with conversations.ready when it opens.

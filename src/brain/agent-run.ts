@@ -89,7 +89,13 @@ export interface AgentClientDeps {
   /** One history row for each Genie call (`genie-history.ts`). Never rejects. */
   recordCall?(x: GenieEnd): void;
   /** The fallback: one direct home call, with the notice line. */
-  direct(turn: AgentTurn, notice: string, turnId?: string): Promise<void>;
+  direct(
+    turn: AgentTurn,
+    notice: string,
+    turnId?: string,
+    /** The Wipe fence of the fallback row: true once a Wipe ran since the fallback began. */
+    isStale?: () => boolean,
+  ): Promise<void>;
   /** The card of `mogId` shows this turn (`agent-card.ts`). */
   showTurn(mogId: MogId, turn: AgentTurnView): void;
   /** The card of a turn that left (a removed turn, a cleared session). */
@@ -638,7 +644,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       const notice = fallbackNotice(why, names);
       r.view = { ...r.view, notice };
       update(r);
-      await deps.direct(r.origin, notice, id).catch(fault);
+      // The fallback row is a part of this turn: a Wipe since now (a client fence or a clear)
+      // stops it, as it stops the other parts.
+      const gen = wipeGen;
+      const cg = clearGen;
+      const isStale = () => r.noRecord || cg !== clearGen || gen !== wipeGen;
+      await deps.direct(r.origin, notice, id, isStale).catch(fault);
       if (recs.get(id) !== r) return;
     } else {
       update(r);

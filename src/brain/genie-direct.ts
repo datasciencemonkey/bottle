@@ -98,6 +98,8 @@ export interface DirectSendOptions {
   notice?: string | undefined;
   /** The fallback of an agent turn: its row joins the turn (`split_group_id` = the turn UUID). */
   splitGroupId?: string | undefined;
+  /** With `splitGroupId`: the Wipe fence of the part row (`GenieEnd.isStale`). */
+  isStale?: (() => boolean) | undefined;
 }
 
 /** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
@@ -200,6 +202,7 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
           question: turn.question,
           end: outcome,
           ...(opts.splitGroupId !== undefined ? { splitGroupId: opts.splitGroupId } : {}),
+          ...(opts.splitGroupId !== undefined && opts.isStale ? { isStale: opts.isStale } : {}),
           ...accepted,
         });
       } catch {

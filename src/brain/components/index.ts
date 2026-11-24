@@ -505,12 +505,13 @@ export function startBrain(): Brain {
       // The direct answer takes the card: the agent card must not cover it.
       // A fallback takes the card for its own turn only; a refused submit has no turn: the
       // direct ask takes the card from every agent turn of this MOG.
-      direct: (turn, notice, turnId) => {
+      direct: (turn, notice, turnId, isStale) => {
         agentCard.takeover(turn.mogId, turnId);
         // The fallback row joins its turn (ADR 0121): it is the home part of the turn.
         return directSend(turn, {
           notice,
           ...(turnId !== undefined ? { splitGroupId: uuidOfTurn(turnId) } : {}),
+          ...(turnId !== undefined && isStale ? { isStale } : {}),
         });
       },
       showTurn: (mogId, view) => agentCard.show(mogId, view),

@@ -751,6 +751,28 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(ends[1]?.splitGroupId).toBeUndefined();
     });
 
+    it('[Wipe] a fallback part row carries the fence, and a plain ask never does', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      let wiped = false;
+      await send(turn(), {
+        notice: 'n',
+        splitGroupId: '51111111-2222-4333-8444-555555555540',
+        isStale: () => wiped,
+      });
+      await send(turn(), { isStale: () => true });
+      expect(ends[0]?.isStale?.()).toBe(false);
+      wiped = true;
+      expect(ends[0]?.isStale?.()).toBe(true);
+      expect(ends[1]?.isStale).toBeUndefined();
+    });
+
     it('[R-8] an answered request offers the chip, with the request id in the chip id', async () => {
       const c = fakeCard();
       const offered: string[] = [];

@@ -121,7 +121,7 @@ function rig(opts: { real?: boolean } = {}) {
   const shown: AgentTurnView[] = [];
   const dropped: string[] = [];
   const notes: string[] = [];
-  const directs: { turn: AgentTurn; notice: string }[] = [];
+  const directs: { turn: AgentTurn; notice: string; isStale?: () => boolean }[] = [];
   const history: GenieEnd[] = [];
   const phases: string[] = [];
   const logLines: string[] = [];
@@ -191,7 +191,8 @@ function rig(opts: { real?: boolean } = {}) {
     newId: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`,
     wallNow: () => clock.now(),
     recordCall: opts.real ? (x) => void writer(x) : (x) => void history.push(x),
-    direct: async (t, notice) => void directs.push({ turn: t, notice }),
+    direct: async (t, notice, _id, isStale) =>
+      void directs.push({ turn: t, notice, ...(isStale ? { isStale } : {}) }),
     showTurn: (_m, v) => void shown.push(v),
     dropTurn: (_m, id) => void dropped.push(id),
     note: (_m, t) => void notes.push(t),
@@ -586,6 +587,18 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
       expect(r.client.panel().earlier[0]).toMatchObject({ state, notice });
     },
   );
+
+  it('[Wipe] the fallback row is fenced: a clear() after it began makes it stale', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Compare a and b'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'timeout', calls: 0 });
+    await r.settle();
+    const isStale = r.directs[0]?.isStale;
+    expect(isStale?.()).toBe(false);
+    r.client.clear();
+    expect(isStale?.()).toBe(true);
+  });
 
   it('a turn that already made a call does not fall back', async () => {
     const r = rig();
