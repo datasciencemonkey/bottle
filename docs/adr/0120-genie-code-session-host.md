@@ -24,11 +24,11 @@ lockdown holds. `exec-server` ignores the sandbox. `exec resume` writes plaintex
 - Lockdown tripwires end the session with `agent_lockdown_violation`: a `thread/start` reply that
   is not ephemeral, not the pinned version, not the `databricks` provider, not `never` or not
   read-only; any server-to-client request (it gets a refusal first); a
-  `remoteControl/status/changed` other than `disabled`; a `commandExecution`, `fileChange` or
-  `webSearch` item; a tool call to a server other than `bottle` (the three `codex` resource
+  `remoteControl/status/changed` other than `disabled`; an item whose type is not on the allow-list of genie 0.5.0 (`userMessage`,
+  `agentMessage`, `reasoning`, `mcpToolCall`); a tool call to a server other than `bottle` (the three `codex` resource
   tools are allowed).
 - Deadlines per turn: "Still working…" at 4 min, `turn/interrupt` at 10 min, a kill of the
-  process group 5 s after any interrupt that gets no `turn/completed`. An offline turn, or a
+  process group (the app-server and its children in that group; NOT the MCP shim, which runs in its own group and ends on EOF or when its parent changes, ADR 0119) 5 s after any interrupt that gets no `turn/completed`. An offline turn, or a
   "waiting for network" error, interrupts at once. The session ends after 30 min with no turn.
 - A crash fails the live turn. The next waiting turn gets one new session. A second crash in a
   row ends the waiting turns with `failed` and 0 calls, so the brain uses the direct path.

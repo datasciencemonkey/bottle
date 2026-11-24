@@ -1,7 +1,8 @@
 //! The prompt of one turn (plan Amendment 2, A3.3). Rust builds it from a fixed template.
 //!
 //! Compaction can drop the instructions of earlier turns, so each turn repeats the catalog, the
-//! budget, the D1 rules and the data rule. The catalog shows aliases and names, never a profile.
+//! budget, the D1 rules and the data rule. The catalog shows aliases and names. In the app the name IS the profile name
+//! (`workspaces.rs` fills both from it), so the model sees profile names but no host, id or token.
 //! The user question sits between random boundary markers.
 
 use crate::agent_run::seam::CatalogEntry;
@@ -131,7 +132,7 @@ mod tests {
         assert!(p.contains("Data rule"));
         assert!(
             !p.contains("SECRET-PROFILE"),
-            "a profile name must not reach the model"
+            "the `profile` field is never printed itself: only the name is (the app sets name = profile)"
         );
     }
 

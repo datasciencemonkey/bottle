@@ -662,6 +662,9 @@ impl Engine {
             let _ = genie_home::delete_home(&this.cfg.home);
             code
         };
+        if !shim.command.is_absolute() {
+            return Err(fail(self, "agent_failed"));
+        }
         let home_spec = HomeSpec {
             host,
             cli_path: cli.clone(),
@@ -1258,6 +1261,8 @@ impl Engine {
             let _ = genie_home::delete_home(&self.cfg.home);
             genie_home::sweep_cwds(&self.cfg.tmp_root);
             if reason == AgentSessionEndReason::Wipe {
+                // Earlier ended sessions keep a ledger for ten minutes: Wipe drops them all.
+                self.d.guard.wipe_all();
                 self.results.clear();
                 self.result_order.clear();
             }
@@ -1384,6 +1389,7 @@ impl Engine {
         let wipe = reason == AgentSessionEndReason::Wipe;
         self.d.guard.close_session(&s.id, wipe);
         if wipe {
+            self.d.guard.wipe_all();
             self.results.clear();
             self.result_order.clear();
         } else {
@@ -1474,27 +1480,22 @@ fn thread_start_ok(result: &Value) -> bool {
     let provider = result["modelProvider"]
         .as_str()
         .or(t["modelProvider"].as_str());
-    let sandbox_ok = match result["sandbox"]["type"].as_str() {
-        Some(s) => s == "readOnly",
-        None => true,
-    };
+    // The sandbox and the approval policy must be named, and be the locked ones (L2).
     t["ephemeral"].as_bool() == Some(true)
         && t["cliVersion"].as_str() == Some(GENIE_PINNED)
         && provider == Some("databricks")
-        && result["approvalPolicy"]
-            .as_str()
-            .is_none_or(|p| p == "never")
-        && sandbox_ok
+        && result["approvalPolicy"].as_str() == Some("never")
+        && result["sandbox"]["type"].as_str() == Some("readOnly")
 }
 
-/// AC-2a.13: an item that must never appear.
+/// AC-2a.13: an item that must not appear. This is an allow-list of the item types that genie
+/// 0.5.0 emits (`tests/fixtures/genie-0.5.0` and the lockdown run: `userMessage`, `agentMessage`,
+/// `mcpToolCall`; `reasoning` is the model's own thought and is no tool). Any other type is a
+/// violation, and so is an item with no type.
 fn item_violation(item: &Value) -> bool {
     match item["type"].as_str() {
-        Some(
-            "commandExecution" | "command_execution" | "fileChange" | "file_change" | "webSearch"
-            | "web_search",
-        ) => true,
-        Some("mcpToolCall" | "mcp_tool_call") => {
+        Some("userMessage" | "agentMessage" | "reasoning") => false,
+        Some("mcpToolCall") => {
             let server = item["server"].as_str().unwrap_or("");
             let tool = item["tool"].as_str().unwrap_or("");
             let builtin = server == "codex"
@@ -1504,7 +1505,7 @@ fn item_violation(item: &Value) -> bool {
                 );
             !(server == "bottle" || builtin)
         }
-        _ => false,
+        _ => true,
     }
 }
 
@@ -1943,5 +1944,52 @@ impl crate::ipc_gateway::GatewayComponents for SessionHost {
             }
             _ => Err(refused("not_implemented")),
         }
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_the_item_types_of_genie_0_5_0_pass_the_tripwire() {
+        for ok in ["userMessage", "agentMessage", "reasoning"] {
+            assert!(!item_violation(&json!({ "type": ok })), "{ok}");
+        }
+        for bad in [
+            "commandExecution",
+            "fileChange",
+            "webSearch",
+            "imageView",
+            "collabToolCall",
+            "somethingNew",
+        ] {
+            assert!(item_violation(&json!({ "type": bad })), "{bad}");
+        }
+        assert!(item_violation(&json!({})), "no type");
+        assert!(!item_violation(
+            &json!({ "type": "mcpToolCall", "server": "bottle", "tool": "ask_genie" })
+        ));
+        assert!(item_violation(
+            &json!({ "type": "mcpToolCall", "server": "other", "tool": "x" })
+        ));
+    }
+
+    #[test]
+    fn thread_start_needs_the_read_only_sandbox_and_the_never_policy_by_name() {
+        let ok = json!({
+            "thread": { "ephemeral": true, "cliVersion": "0.5.0", "modelProvider": "databricks" },
+            "approvalPolicy": "never", "sandbox": { "type": "readOnly" }
+        });
+        assert!(thread_start_ok(&ok));
+        for key in ["approvalPolicy", "sandbox"] {
+            let mut v = ok.clone();
+            v.as_object_mut().unwrap().remove(key);
+            assert!(!thread_start_ok(&v), "{key} missing");
+        }
+        let mut v = ok.clone();
+        v["sandbox"]["type"] = json!("workspaceWrite");
+        assert!(!thread_start_ok(&v));
     }
 }

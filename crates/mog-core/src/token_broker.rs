@@ -252,7 +252,7 @@ impl fmt::Debug for CliTokenBroker {
 
 /// A Databricks CLI profile name: a letter, digit or `_` first (so never a flag), then letters,
 /// digits, `_`, `.` or `-`, at most 64 characters.
-fn valid_profile(p: &str) -> bool {
+pub(crate) fn valid_profile(p: &str) -> bool {
     let b = p.as_bytes();
     !b.is_empty()
         && b.len() <= 64

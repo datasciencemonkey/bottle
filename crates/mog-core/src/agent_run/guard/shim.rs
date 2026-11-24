@@ -7,6 +7,10 @@
 //! The tool schema comes from the guard in the `hello` reply. It has no enum of aliases.
 //! `main.rs` calls [`run`] when its first argument is [`super::super::seam::SHIM_ARG`].
 //!
+//! The shim runs in its own process group (Genie Code starts it so), so the group kill of the
+//! session host does not reach it. It ends on stdin EOF, on socket EOF, and when its parent
+//! changes ([`watch_parent`]). It removes `BOTTLE_AGENT_SECRET` from its environment at once.
+//!
 //! The shim uses std only (and `libc` for the parent signal). It prints nothing to stderr: the
 //! exit code tells why it ended (2 not configured, 1 no channel or `hello` refused, 0 stdin ended).
 
@@ -69,6 +73,10 @@ pub fn run() -> i32 {
         // No print: the exit code says it (2: not configured).
         return 2;
     };
+    // The secret is read once. Take it out of the environment, so a later child or a dump of the
+    // environment of this process does not show it.
+    std::env::remove_var(ENV_SECRET);
+    watch_parent();
     let Ok(stream) = UnixStream::connect(&sock) else {
         // 1: no channel.
         return 1;
@@ -87,6 +95,23 @@ pub fn run() -> i32 {
             drain: Duration::ZERO,
         },
     )
+}
+
+/// Exit when the parent changes. Genie Code starts the shim in its own process group, so the
+/// group kill of the session host does not reach it. When the app-server ends, the shim gets a
+/// new parent (init), and this thread ends it. EOF on stdin or on the socket ends it too.
+fn watch_parent() {
+    // SAFETY: `getppid` has no argument and cannot fail.
+    let parent = unsafe { libc::getppid() };
+    let _ = std::thread::Builder::new()
+        .name("bottle-shim-parent".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            // SAFETY: as above.
+            if unsafe { libc::getppid() } != parent {
+                std::process::exit(0);
+            }
+        });
 }
 
 /// A private handle on the process stdin (0) or stdout (1). The shim speaks the MCP protocol on

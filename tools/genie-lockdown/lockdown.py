@@ -285,10 +285,13 @@ def main() -> int:
     check(not srv_reqs, "no server-to-client request (no approval, no elicitation)", str([m["method"] for m in srv_reqs]))
     rc = [m for m in c.msgs if m.get("method") == "remoteControl/status/changed"]
     check(all(m["params"].get("status") == "disabled" for m in rc), "remote control is disabled", str(len(rc)))
+    seen_items = sorted({m["params"]["item"]["type"] for m in c.msgs
+                         if m.get("method", "").startswith("item/") and "type" in m.get("params", {}).get("item", {})})
+    print("info: item types seen:", seen_items)
     bad_items = [m["params"]["item"]["type"] for m in c.msgs
                  if m.get("method", "").startswith("item/") and m["params"].get("item", {}).get("type") in
-                 ("commandExecution", "webSearch")]
-    check(not bad_items, "no command or web search item", str(bad_items))
+                 ("commandExecution", "webSearch", "fileChange")]
+    check(not bad_items, "no command, file change or web search item", str(bad_items))
     for it in (model.requests[1].get("input", []) if len(model.requests) > 1 else []):
         if it.get("call_id") == "call_patch" and it.get("type", "").endswith("_output"):
             print("info: apply_patch result seen by the model:", json.dumps(it.get("output"))[:160])

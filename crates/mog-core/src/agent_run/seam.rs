@@ -114,6 +114,9 @@ pub trait SessionGuard: Send + Sync {
     fn call_detail(&self, turn_id: &str, call_id: &str) -> Option<AgentTurnCall>;
     /// `wipe` drops the records at once; otherwise they stay for 10 minutes.
     fn close_session(&self, session_id: &str, wipe: bool);
+    /// Wipe: drop every session ledger at once (open or ended), with its question and answer
+    /// text. Called on every `mem_wipe`, also when no session is live.
+    fn wipe_all(&self);
 }
 
 /// The network state from ARC-F7 `NetStatus`.

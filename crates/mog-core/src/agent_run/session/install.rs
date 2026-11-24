@@ -12,6 +12,11 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 /// The pinned download URL. `None` until the owner names the official source.
+///
+/// TODO(INSTALL_SOURCE): this installer is dead code until the source is set. When it is, the
+/// source must unpack the archive into a private temp folder, check the SHA-256 of BOTH `genie`
+/// and `genie-code-mode-host` against the pins, keep every file at 0600 until both are verified,
+/// and only then move them (0700) to the bin folder. Never place a file that is not verified.
 pub const INSTALL_SOURCE: Option<&str> = None;
 /// The most bytes that one download may have.
 pub const MAX_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
