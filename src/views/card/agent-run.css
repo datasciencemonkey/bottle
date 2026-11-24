@@ -378,6 +378,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--mog-space-1);
+  /* The 4px cancels the -4px margin-block of the 24px hit area (.agent-fold). */
   margin-bottom: calc(var(--mog-space-2) - 4px);
 }
 

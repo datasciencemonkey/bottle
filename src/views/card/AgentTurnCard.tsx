@@ -317,20 +317,11 @@ export function TurnParts({
               size={12}
               aria-hidden="true"
             />
-            {combined
-              ? open
-                ? 'Hide workspace answers'
-                : plural(folded.length, 'workspace answer', 'workspace answers')
-              : open
-                ? 'Hide more answers'
-                : plural(folded.length, 'more answer', 'more answers')}
+            {open
+              ? 'Hide workspace answers'
+              : plural(folded.length, 'workspace answer', 'workspace answers')}
           </button>
-          <ul
-            id={foldId}
-            className="agent-parts"
-            aria-label={combined ? 'Workspace answers' : 'More answers'}
-            hidden={!open}
-          >
+          <ul id={foldId} className="agent-parts" aria-label="Workspace answers" hidden={!open}>
             {folded.map((p) => (
               <Part key={p.callId} part={p} onOpenLink={onOpenLink} />
             ))}

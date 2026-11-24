@@ -1019,7 +1019,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     deferredTurns.clear();
     deferredCalls.clear();
     deferredRows.clear();
-    for (const [again, r] of rows) if (!r.noRecord) again();
+    for (const [again, r] of rows) {
+      if (r.noRecord) continue;
+      try {
+        again();
+      } catch {
+        fault();
+      }
+    }
     for (const [d, r] of calls) if (!r.noRecord) void record(r, d).catch(fault);
     for (const [r, out] of turns) if (!r.noRecord) void recordTurn(r, out).catch(fault);
   }
