@@ -2,11 +2,14 @@
  * #162: the brain side of "Connect a workspace" (W-07a, W-07b, W-07c, W-07f, W-07g, W-07h,
  * W-07i, W-15). Fake hosts and fake profiles only; no CLI runs and no token exists here.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
 import { BrainBus } from './bus';
 import {
   CONNECT_TEXT,
   CONNECTED_CLOSE_MS,
+  DATABRICKS_DOMAINS,
   proposedProfileName,
   wireConnectWorkspace,
   workspaceHost,
@@ -69,6 +72,19 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
     expect(workspaceHost('https://adb-1234567890123456.7.azuredatabricks.net/?o=1')).toBe(
       'https://adb-1234567890123456.7.azuredatabricks.net',
     );
+  });
+
+  it('[owner review 2026-11-24] this domain list matches the Rust allowlist exactly', () => {
+    const rs = readFileSync(
+      resolve(import.meta.dirname, '../../crates/mog-core/src/http_transport/host_policy.rs'),
+      'utf8',
+    );
+    const m = /pub const DATABRICKS_DOMAINS: \[&str; \d+\] = \[([^\]]*)\]/.exec(rs);
+    expect(m).not.toBeNull();
+    const rustDomains = [...((m as RegExpExecArray)[1] ?? '').matchAll(/"([^"]+)"/g)].map(
+      (x) => x[1],
+    );
+    expect([...DATABRICKS_DOMAINS]).toEqual(rustDomains);
   });
 
   it('[owner review 2026-11-24] a staging, dev, Azure or GCP workspace host is accepted', () => {

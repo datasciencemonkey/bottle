@@ -392,7 +392,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 ### 4.6 Token isolation rules
 
 1. No command takes a URL. The only exception is the `custom_agent` app URL, which must match `https://*.databricksapps.com` (or the Azure and GCP forms), and its workspace must equal the profile's workspace (v1).
-2. Rust sends a token only to the exact host of its profile, over HTTPS on port 443, in the Databricks domain list (`cloud.databricks.com`, `gcp.databricks.com`, `azuredatabricks.net`, `cloud.databricks.us`, `databricks.azure.us`). It rejects `accounts.*` hosts.
+2. Rust sends a token only to the exact host of its profile, over HTTPS on port 443, in the Databricks domain list (`cloud.databricks.com`, `gcp.databricks.com`, `azuredatabricks.net`, `cloud.databricks.us`, `databricks.azure.us`, `staging.databricks.com`, `dev.databricks.com`). It rejects `accounts.*` hosts.
 3. Rust never follows a 3xx to another host with the `Authorization` header.
 4. The WebView CSP blocks all external `connect-src`. Rive runs with `enableRiveAssetCDN=false`.
 5. `mcp_call` strips any `profile` key from tool arguments before it forwards them.

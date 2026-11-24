@@ -105,7 +105,23 @@ impl SignInSource for FakeR6 {
 }
 
 fn store(s: &Scratch, t7: Vec<Profile>) -> WorkspaceStore {
-    WorkspaceStore::new(&s.0, s.configs(), Arc::new(FakeT7(t7)))
+    store_with(s, Arc::new(FakeT7(t7)))
+}
+
+fn store_with(s: &Scratch, profiles: Arc<dyn ProfileSource>) -> WorkspaceStore {
+    WorkspaceStore::new(&s.0, s.configs(), profiles)
+}
+
+/// A T7 that always fails to read (a CLI or filesystem error, never an empty list).
+struct FailingT7;
+
+impl ProfileSource for FailingT7 {
+    fn profiles(&self, _refresh: bool) -> CoreResult<Vec<Profile>> {
+        Err(CoreError::Unavailable {
+            component: "T7",
+            reason: "boom",
+        })
+    }
 }
 
 fn row<'a>(l: &'a WorkspaceList, p: &str) -> &'a WorkspaceRow {
@@ -267,12 +283,14 @@ fn sign_in_comes_from_the_cached_r6_state_and_t7() {
     assert_eq!(row(&l, "pat").sign_in, WorkspaceSignIn::Unsupported);
 }
 
-// ---------- a vanished CLI profile (owner review 2026-11-24) ----------
+// ---------- a vanished CLI profile is cosmetic only (owner review 2026-11-24) ----------
 
-/// A profile the user removed from the CLI config (`databricks auth logout --delete`) drops its
-/// row on the next list, but its MOG config (and so its local conversations) is left alone.
+/// A profile the user removed from the CLI config (`databricks auth logout --delete`) has no row
+/// this time, but the file on disk (its entry, `mog_ids` and `available` switch, and so its MOG
+/// config and local conversations) is never touched. The row returns with its old links the
+/// moment the profile answers in T7 again.
 #[test]
-fn a_vanished_profile_drops_its_row_but_keeps_its_mog_config() {
+fn a_vanished_profile_has_no_row_but_its_links_stay_on_disk_and_return() {
     let s = Scratch::new();
     let cfg = s.configs();
     put_config(&cfg, "a", "A", "p1");
@@ -281,30 +299,89 @@ fn a_vanished_profile_drops_its_row_but_keeps_its_mog_config() {
     store(&s, vec![profile("p1", true), profile("gone", true)])
         .list(false)
         .unwrap();
+    let before = fs::read(s.file()).unwrap();
+
     // The CLI profile is deleted: T7 no longer lists "gone" at all.
-    let w = store(&s, vec![profile("p1", true)]);
-    let l = w.list(false).unwrap();
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
     assert!(l.workspaces.iter().all(|r| r.profile != "gone"));
     assert!(row(&l, "p1").available);
-    // The vanished profile's own MOG config is untouched: no conversation is deleted.
+    // Nothing was written: the row, its mog_ids and its MOG config are all untouched.
+    assert_eq!(fs::read(s.file()).unwrap(), before);
     assert!(cfg.read("b").is_ok());
+
+    // The profile answers again: its row is back with the same mog_ids and switch.
+    let l = store(&s, vec![profile("p1", true), profile("gone", true)])
+        .list(false)
+        .unwrap();
+    let gone = row(&l, "gone");
+    assert!(gone.available);
+    assert_eq!(gone.mog_ids, ["b"]);
 }
 
-/// A vanished home profile clears `home` (so the hub falls back to "Choose a home workspace")
-/// instead of leaving a dead home row that nothing can act on.
+/// A vanished home profile renders as `home: None` (so the hub falls back to "Choose a home
+/// workspace") instead of a dead home row, but the stored `home` is never cleared: the workspace
+/// is home again, with no action from the user, the moment its profile answers in T7 again.
 #[test]
-fn a_vanished_home_profile_clears_home_instead_of_a_dead_row() {
+fn a_vanished_home_profile_renders_as_no_home_but_the_stored_home_returns() {
     let s = Scratch::new();
     let cfg = s.configs();
     put_config(&cfg, "a", "A", "p1");
     // Exactly one profile: migration makes it home.
     let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
     assert_eq!(l.home.as_deref(), Some("p1"));
-    // The user deletes the CLI profile that is the home workspace.
+    let before = fs::read(s.file()).unwrap();
+
+    // The user's CLI profile for the home workspace is gone from the next read.
     let l = store(&s, vec![]).list(false).unwrap();
     assert_eq!(l.home, None);
     assert!(l.workspaces.is_empty());
+    assert_eq!(
+        fs::read(s.file()).unwrap(),
+        before,
+        "the stored home is never cleared on disk"
+    );
     assert!(cfg.read("a").is_ok());
+
+    // The profile answers again: home is back, unprompted.
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert_eq!(l.home.as_deref(), Some("p1"));
+}
+
+/// An empty T7 read (no `HOME`, no config file, or mid-rewrite of `~/.databrickscfg`) is never
+/// proof that every profile is gone: the stored rows and the file are left exactly as they were.
+#[test]
+fn an_empty_t7_read_keeps_the_stored_rows_and_the_file_unchanged() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    put_config(&cfg, "b", "B", "p2");
+    store(&s, vec![profile("p1", true), profile("p2", true)])
+        .list(false)
+        .unwrap();
+    let before = fs::read(s.file()).unwrap();
+
+    let l = store(&s, vec![]).list(false).unwrap();
+    assert!(l.workspaces.is_empty());
+    assert_eq!(l.home, None);
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+/// A failed T7 read answers `host_failed` and never touches the file.
+#[test]
+fn a_t7_error_is_host_failed_and_leaves_the_file_unchanged() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    let before = fs::read(s.file()).unwrap();
+
+    assert_eq!(
+        store_with(&s, Arc::new(FailingT7)).list(false).unwrap_err(),
+        CoreError::IpcRefused {
+            code: "host_failed"
+        }
+    );
+    assert_eq!(fs::read(s.file()).unwrap(), before);
 }
 
 #[test]

@@ -8,11 +8,14 @@
 //!   entry per `binding.home`, all available. The home is set only when exactly one profile
 //!   exists. Bottle never picks a home for the user (ADR 0117, FLAG 5).
 //! - A file that cannot be read or parsed is an error. It is never deleted or rewritten.
-//! - `workspace_list` drops a stored entry whose profile no longer answers in the CLI config
-//!   (owner review 2026-11-24: `databricks auth logout --delete` left a dead row behind). The
-//!   row just disappears; its MOG config, and so its local conversations, is never touched. A
-//!   vanished home instead clears `home`, so the hub falls back to its normal "Choose a home
-//!   workspace" flow rather than a dead home row.
+//! - `workspace_list` renders a stored entry whose profile does not answer in the current CLI
+//!   read as absent (owner review 2026-11-24: `databricks auth logout --delete` left a dead row
+//!   behind), and a vanished home as `home: None` (so the hub falls back to its normal "Choose
+//!   a home workspace" flow). This is cosmetic only, for one render: the file on disk, its
+//!   entries, `mog_ids`, `available` and the stored `home` (and so `lamp_mog_id`, which this
+//!   never touches) are left exactly as they were. A profile that comes back (or an empty or
+//!   failed CLI read that was only a transient glitch, never proof the profile is gone) shows
+//!   its row again with its old links, with nothing to restore.
 //! - [`WorkspaceGate`] is the allow-list of R8 (FLAG 7): `genie_ask` goes only to the home
 //!   profile and to an available profile.
 //!
@@ -249,26 +252,6 @@ impl Data {
 
     fn allows(&self, profile: &str) -> bool {
         self.home.as_deref() == Some(profile) || self.entry(profile).is_some_and(|e| e.available)
-    }
-
-    /// Drop every entry whose profile does not answer in `t7` (owner review 2026-11-24): the row
-    /// disappears from the next list, with no "Not in your CLI config" dead row. A vanished home
-    /// clears `home` instead, so the hub asks the user to choose a new one. Returns whether
-    /// anything changed, so the caller only writes the file when it must. Never touches a MOG
-    /// config: the entry's `mog_ids` (and so its local conversations) are simply forgotten here,
-    /// not deleted.
-    fn drop_vanished(&mut self, t7: &[Profile]) -> bool {
-        let known = |name: &str| t7.iter().any(|p| p.name == name);
-        let before = self.workspaces.len();
-        self.workspaces.retain(|e| known(&e.profile));
-        let mut changed = self.workspaces.len() != before;
-        if let Some(home) = self.home.clone() {
-            if !known(&home) {
-                self.home = None;
-                changed = true;
-            }
-        }
-        changed
     }
 }
 
@@ -566,48 +549,46 @@ impl WorkspaceStore {
         self.cloud_dictation_flag.load(Ordering::SeqCst)
     }
 
-    /// `workspace_list`.
-    pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
-        let data = {
-            let _g = self.guard();
-            let mut data = self.load()?;
-            let t7 = self
-                .profiles
-                .profiles(refresh)
-                .map_err(|_| refused("host_failed"))?;
-            if data.drop_vanished(&t7) {
-                self.save(&data)?;
-            }
-            data
-        };
-        self.render(&data, refresh)
+    /// The current T7 read, for a render. A transient failure (or an empty read: no `HOME`, no
+    /// config file, mid-rewrite) must never look like proof that every profile is gone, so this
+    /// is read before the store guard and is never allowed to drive a write of the file.
+    fn t7(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
+        self.profiles
+            .profiles(refresh)
+            .map_err(|_| refused("host_failed"))
     }
 
-    fn render(&self, data: &Data, refresh: bool) -> CoreResult<WorkspaceList> {
-        let t7 = self
-            .profiles
-            .profiles(refresh)
-            .map_err(|_| refused("host_failed"))?;
-        let mut names: Vec<&str> = t7.iter().map(|p| p.name.as_str()).collect();
-        for e in &data.workspaces {
-            if !names.contains(&e.profile.as_str()) {
-                names.push(&e.profile);
-            }
-        }
-        let mut rows: Vec<WorkspaceRow> = names
-            .into_iter()
-            .map(|name| {
-                let p = t7.iter().find(|p| p.name == name);
-                let entry = data.entry(name);
-                let is_home = data.home.as_deref() == Some(name);
-                let (host, sign_in) = match p {
-                    None => (String::new(), WorkspaceSignIn::Missing),
-                    Some(p) if !p.supported => (p.host.clone(), WorkspaceSignIn::Unsupported),
-                    Some(p) => (p.host.clone(), self.cached_state(name)),
+    /// `workspace_list`.
+    pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(refresh)?;
+        let data = {
+            let _g = self.guard();
+            self.load()?
+        };
+        self.render(&data, &t7, refresh)
+    }
+
+    /// The rows and settings `data` and the current T7 read `t7` give. A stored entry whose
+    /// profile is not in `t7` (owner review 2026-11-24: `databricks auth logout --delete` left a
+    /// dead row behind) has no row this time; a vanished home renders as `home: None`, so the
+    /// hub falls back to its normal "Choose a home workspace" flow instead of a dead home row.
+    /// This never writes anything: `data.workspaces`, `data.home` and `data.lamp_mog_id` on disk
+    /// stay exactly as they were, `mog_ids` included, so the workspace returns with its old
+    /// links the moment its profile answers in `t7` again.
+    fn render(&self, data: &Data, t7: &[Profile], refresh: bool) -> CoreResult<WorkspaceList> {
+        let mut rows: Vec<WorkspaceRow> = t7
+            .iter()
+            .map(|p| {
+                let entry = data.entry(&p.name);
+                let is_home = data.home.as_deref() == Some(p.name.as_str());
+                let sign_in = if !p.supported {
+                    WorkspaceSignIn::Unsupported
+                } else {
+                    self.cached_state(&p.name)
                 };
                 WorkspaceRow {
-                    profile: name.to_owned(),
-                    host,
+                    profile: p.name.clone(),
+                    host: p.host.clone(),
                     mog_ids: entry.map(|e| e.mog_ids.clone()).unwrap_or_default(),
                     available: is_home || entry.is_some_and(|e| e.available),
                     is_home,
@@ -620,8 +601,12 @@ impl WorkspaceStore {
         }
         rows.sort_by(|a, b| b.is_home.cmp(&a.is_home).then(a.profile.cmp(&b.profile)));
         let locked = d1_locked();
+        let home = data
+            .home
+            .clone()
+            .filter(|h| t7.iter().any(|p| &p.name == h));
         Ok(WorkspaceList {
-            home: data.home.clone(),
+            home,
             lamp_mog_id: data.lamp_mog_id.clone(),
             workspaces: rows,
             agent: AgentSettings {
@@ -694,13 +679,14 @@ impl WorkspaceStore {
         available: bool,
         mog_id: Option<&str>,
     ) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
             if data.home.as_deref() == Some(profile) {
                 if available {
                     // Home is on already.
-                    return self.render(&data, false);
+                    return self.render(&data, &t7, false);
                 }
                 return Err(refused("home_always_available"));
             }
@@ -719,11 +705,12 @@ impl WorkspaceStore {
             self.save(&data)?;
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 
     /// `workspace_make_home`.
     pub fn make_home(&self, profile: &str, mog_id: Option<&str>) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -744,7 +731,7 @@ impl WorkspaceStore {
             self.save(&data)?;
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 
     /// The agent session snapshot: the catalog with model aliases, D1, D2, the home profile and
@@ -753,14 +740,11 @@ impl WorkspaceStore {
     /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
     /// the profile name itself in the prompt, only the alias and a display name.
     pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             self.load()?
         };
-        let t7 = self
-            .profiles
-            .profiles(false)
-            .map_err(|_| refused("host_failed"))?;
         // The model runs on the AI Gateway of the home profile (ADR 0122), so home is the agent
         // workspace.
         let home = data.home.clone();
@@ -811,6 +795,7 @@ impl WorkspaceStore {
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -837,7 +822,7 @@ impl WorkspaceStore {
             }
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 }
 
