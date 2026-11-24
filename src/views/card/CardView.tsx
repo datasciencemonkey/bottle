@@ -32,7 +32,7 @@ import { NO_LINKS, SafeMarkdown } from './safe-markdown';
 
 /**
  * The chips of the agent card: the turn's own (Stop or Remove, Open Settings, Open in Conversations) and
- * the waiting turns. An `agent-more:` chip of an older direct answer never shows here (M5).
+ * the waiting turns. A chip of an older direct answer never shows here (M5).
  */
 const isAgentCardChip = (c: { id: string }) =>
   ['agent-stop:', 'agent-open:', 'agent-settings:', 'agent-queued:'].some((p) =>

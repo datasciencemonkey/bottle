@@ -1,268 +1,91 @@
 /**
- * Settings → Workspace → "MOG agent" (slice 2a, plan Amendment 2 A2). Thin view (ARC-2, ARC-4): it
- * draws what the brain sends in `HubWorkspaceList.agent` and sends one `WorkspaceAction` for each
- * user action. The brain checks every value.
+ * Settings → Workspace → "MOG agent" (ADR 0122). Thin view (ARC-2, ARC-4): it draws what the
+ * brain sends in `HubWorkspaceList.agent` and in `HubOrchestratorView`, and it sends one action
+ * for each user action. The brain checks every value.
  *
- * - "Genie Code runs on [▾]": the workspace where the one live Genie Code session runs. The
- *   default is home. A profile that Bottle cannot use is disabled with its reason. While a turn
- *   runs, a change applies after the current question.
+ * - "Orchestrator model [▾]": the chat model that cleans dictation and answers ⌥G. It lists the
+ *   models of the home AI Gateway by their plain label. It shows no test label.
+ * - "Clean up dictation": a switch, on by default. It sends `orchestrator.clean_dictation`.
+ * - A quiet line with the reason when the orchestrator model is not ready.
  * - "Genie calls per question [5 | 10 | 20]": D2, the most Genie calls for one question.
- * - "Genie Code": the status of the pinned binary and of the agent profile, with Install… (after
- *   the user's consent), Check again and a busy state.
  * - "Combine across workspaces" (D1, slice 2b): off by default. It sends `workspace.cross`. When the
  *   admin locks it, it is off, disabled, and says "Set by your admin".
- * - The disclosure line: where a cross-workspace question goes, and what it costs.
+ * - The disclosure line: where a cross-workspace question goes.
  */
-import { ChevronDownIcon, Loader2Icon, LockIcon } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { LockIcon } from 'lucide-react';
+import { useId, useState } from 'react';
+import type { HubOrchestratorView, OrchestratorAction } from '../../shared/hub-orchestrator';
 import {
   HUB_SCOPE,
   type HubGenieCallBudget,
   type HubWorkspaceList,
-  type HubWorkspaceRow,
   type WorkspaceAction,
 } from '../../shared/hub-workspaces';
-import type { GenieCodeStatus } from '../../shared/ipc';
 import { Button } from '../ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '../ui/dropdown-menu';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 import { Switch } from '../ui/switch';
 import { emitView } from '../view-ipc';
+import { notReadyReason } from './orchestrator-text';
 import { SettingsGroup, SettingsRow } from './SettingsGroup';
 
-function send(action: WorkspaceAction): void {
+function send(action: WorkspaceAction | OrchestratorAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
 }
 
-export const APPLIES_AFTER = 'Applies after the current question';
+export const ORCHESTRATOR_LABEL = 'Orchestrator model';
+export const CLEAN_DICTATION_LABEL = 'Clean up dictation';
 export const COMBINE_LABEL = 'Combine across workspaces';
 export const COMBINE_LOCKED = 'Set by your admin';
 export const COMBINE_APPLIES = 'Applies to your next question.';
 export const COMBINE_OFF_HELP = 'When off, you see each answer. The agent sees only a receipt.';
+/** The help of the model row: where it runs and what it does. */
+export const orchestratorHelp = (homeName: string): string =>
+  `Runs on ${homeName}'s AI Gateway. Cleans up dictation and answers ⌥G by asking your workspaces' Genies.`;
 /** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
-export const combineHelp = (agentName: string): string =>
-  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. When on, Genie Code can read them, combine them, and use one in a question to another workspace.`;
+export const combineHelp = (homeName: string): string =>
+  `Answers from your other workspaces go to the orchestrator model in ${homeName}. When on, it can read them, combine them, and use one in a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 
-/** Why a profile cannot be the agent workspace, or undefined when it can. */
-export function unusableReason(r: HubWorkspaceRow): string | undefined {
-  if (r.signIn === 'unsupported') return 'Bottle cannot use this profile type.';
-  if (r.signIn === 'missing') return 'This profile is not in your CLI config.';
-  return undefined;
-}
-
-/** The Genie Code status line, and the action that goes with it. */
-export function genieCodeLine(
-  g: GenieCodeStatus | undefined,
-  agentName: string,
-): { text: string; action?: 'install' | 'install_copy' | 'recheck'; busy?: boolean } {
-  if (g === undefined) return { text: 'Checking Genie Code…', busy: true };
-  switch (g.binary) {
-    case 'not_installed':
-      return { text: 'Not installed', action: 'install' };
-    case 'wrong_version':
-      return {
-        text: `Bottle needs ${g.pinned} (found ${g.version ?? 'another version'})`,
-        action: 'install_copy',
-      };
-    case 'installing':
-      return { text: 'Installing Genie Code…', busy: true };
-    case 'unsupported_os':
-      return { text: 'Genie Code is not available on this Mac yet' };
-    case 'ready':
-      break;
-  }
-  switch (g.agentProfileState) {
-    case 'ready':
-      return { text: `Installed ${g.version ?? g.pinned}` };
-    case 'not_eligible':
-      return { text: 'Not available in this workspace', action: 'recheck' };
-    case 'signed_out':
-      return { text: `Sign in to ${agentName} to use Genie Code there` };
-    case 'not_u2m':
-      return { text: 'This profile type cannot run Genie Code' };
-    case 'missing':
-      return { text: 'This profile is not in your CLI config' };
-    case 'no_home':
-      return { text: 'Choose a home workspace first' };
-  }
-}
-
-/** The disclosure line of the plan (section 5): where the question goes and what it costs. */
-export const disclosureLines = (agentName: string): string[] => [
-  `When a question needs more than one workspace, Bottle sends it to Genie Code in ${agentName}.`,
-  "Genie Code uses that workspace's AI model.",
-  "It bills about 30,000 to 50,000 tokens per question to that workspace's Genie budget.",
+/** The disclosure line (section 5 of the plan): where the question goes. */
+export const disclosureLines = (homeName: string): string[] => [
+  `When you press ⌥G, Bottle sends your question to the orchestrator model in ${homeName}.`,
+  'The model decides which of your workspaces to ask. It asks only workspaces you turned on.',
   'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
 ];
 
-function AgentWorkspaceMenu({
-  list,
-  busy,
-  current,
-}: {
-  list: HubWorkspaceList;
-  busy: boolean;
-  current: HubWorkspaceRow | undefined;
-}) {
-  const home = list.rows.find((r) => r.isHome);
-  const rows = list.rows;
-  return (
-    <div className="flex flex-col items-end gap-[var(--mog-space-1)]">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-agent-profile
-            aria-label={`Genie Code runs on: ${current?.name ?? 'home'}`}
-            disabled={rows.length === 0}
-          >
-            <span className="max-w-48 truncate">{current?.name ?? 'Home'}</span>
-            {current?.isHome && <span className="text-muted-foreground">(home)</span>}
-            <ChevronDownIcon className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" aria-label="Genie Code runs on">
-          <DropdownMenuRadioGroup
-            value={current?.profile ?? ''}
-            onValueChange={(profile) =>
-              // The home workspace is the default: choosing it clears the setting.
-              send({
-                action: 'workspace.agent_profile',
-                profile: profile === home?.profile ? null : profile,
-              })
-            }
-          >
-            {rows.map((r) => {
-              const reason = unusableReason(r);
-              return (
-                <DropdownMenuRadioItem
-                  key={r.profile}
-                  value={r.profile}
-                  disabled={reason !== undefined}
-                  data-agent-profile-item={r.profile}
-                >
-                  <span className="flex flex-col">
-                    <span>
-                      {r.name}
-                      {r.isHome && <span className="text-muted-foreground"> (home)</span>}
-                    </span>
-                    {reason !== undefined && (
-                      <span className="text-[var(--mog-text-xs)] text-muted-foreground">
-                        {reason}
-                      </span>
-                    )}
-                  </span>
-                </DropdownMenuRadioItem>
-              );
-            })}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {busy && (
-        <span
-          role="status"
-          data-agent-applies
-          className="text-[var(--mog-text-xs)] text-muted-foreground"
-        >
-          {APPLIES_AFTER}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function InstallConfirm({
-  pinned,
-  copy,
-  onDone,
-}: {
-  pinned: string;
-  copy: boolean;
-  onDone: () => void;
-}) {
-  const id = useId();
-  const cancel = useRef<HTMLButtonElement>(null);
-  // The safe choice has the focus when the question opens.
-  useEffect(() => cancel.current?.focus(), []);
-  return (
-    <div
-      role="group"
-      aria-labelledby={id}
-      data-agent-install-confirm
-      className="flex flex-col gap-[var(--mog-space-3)] px-[var(--mog-space-4)] py-[var(--mog-space-3)]"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
-          onDone();
-        }
-      }}
-    >
-      <p id={id} className="m-0 text-[var(--mog-text-md)]">
-        {`Bottle downloads Genie Code ${pinned} and checks its SHA-256 before it runs it. Install it?`}
-      </p>
-      <div className="flex gap-[var(--mog-space-2)]">
-        <Button
-          type="button"
-          size="sm"
-          data-confirm-install
-          onClick={() => {
-            send({ action: 'genie_code.install', consent: true });
-            onDone();
-          }}
-        >
-          {copy ? "Install Bottle's copy" : 'Install'}
-        </Button>
-        <Button ref={cancel} type="button" size="sm" variant="outline" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
+/** A 24px hit area for a control that is smaller than that. */
+const HIT = "relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']";
 
 export function AgentSettings({
   list,
+  orchestrator,
   busy = false,
 }: {
   list: HubWorkspaceList | undefined;
-  /** A turn runs: a change of the agent workspace applies after it. */
+  /** The orchestrator view. Undefined until the brain sends it. */
+  orchestrator?: HubOrchestratorView | undefined;
+  /** A turn runs: a change of the combine switch applies after it. */
   busy?: boolean;
 }) {
-  const [confirm, setConfirm] = useState(false);
-  const [checkingFor, setCheckingFor] = useState<HubWorkspaceList | undefined>(undefined);
   // The user changed the switch while a turn ran: only then "Applies to your next question".
   const [changed, setChanged] = useState(false);
   // The turn ended: the note goes (a state reset during render, not in an effect).
   if (!busy && changed) setChanged(false);
   const budgetId = useId();
   const combineId = useId();
-  const install = useRef<HTMLButtonElement>(null);
+  const modelId = useId();
+  const cleanId = useId();
   if (!list) return null;
-  // A new list ends the "Check again" wait.
-  const checking = checkingFor === list;
-  const runProfile = list.agent.runProfile ?? null;
   const home = list.rows.find((r) => r.isHome);
-  const current =
-    (runProfile ? list.rows.find((r) => r.profile === runProfile) : undefined) ?? home;
-  const agentName = current?.name ?? 'your home workspace';
+  const homeName = home?.name ?? 'your home workspace';
   const locked = list.agent.crossWorkspaceLocked;
   const combineOn = list.agent.crossWorkspaceData && !locked;
-  const g = genieCodeLine(list.agent.genieCode, agentName);
-  const installing = list.agent.genieCode?.binary === 'installing';
-  const closeConfirm = () => {
-    setConfirm(false);
-    requestAnimationFrame(() => install.current?.focus());
-  };
+  const state = orchestrator?.state;
+  const reason =
+    state !== undefined && state !== 'ready'
+      ? notReadyReason(state, orchestrator?.homeName ?? home?.name ?? null)
+      : undefined;
   return (
     <section
       data-view="agent-settings"
@@ -276,11 +99,87 @@ export function AgentSettings({
         MOG agent
       </h3>
       <SettingsGroup>
-        <SettingsRow
-          label="Genie Code runs on"
-          description="Your MOG plans cross-workspace questions here."
-          control={<AgentWorkspaceMenu list={list} busy={busy} current={current} />}
-        />
+        {orchestrator && (
+          <>
+            <SettingsRow
+              className="items-start"
+              descriptionOutsideLabel
+              label={<span id={`${modelId}-label`}>{ORCHESTRATOR_LABEL}</span>}
+              htmlFor={modelId}
+              description={
+                <span id={`${modelId}-help`} data-orchestrator-help>
+                  {orchestratorHelp(orchestrator.homeName ?? homeName)}
+                </span>
+              }
+              control={
+                <select
+                  id={modelId}
+                  data-orchestrator-model
+                  aria-labelledby={`${modelId}-label`}
+                  aria-describedby={`${modelId}-help${reason ? ` ${modelId}-status` : ''}`}
+                  value={orchestrator.selected}
+                  className="min-h-6 max-w-64 rounded-[var(--radius-md)] border border-border bg-card px-[var(--mog-space-2)] text-[var(--mog-text-md)] text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none"
+                  onChange={(e) => send({ action: 'orchestrator.model', model: e.target.value })}
+                >
+                  {orchestrator.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <SettingsRow
+              className="items-start"
+              descriptionOutsideLabel
+              label={<span id={`${cleanId}-label`}>{CLEAN_DICTATION_LABEL}</span>}
+              htmlFor={cleanId}
+              description={
+                <span id={`${cleanId}-help`}>
+                  Bottle tidies your dictation with the orchestrator model before it pastes. If that
+                  takes too long, it pastes your words as they are.
+                </span>
+              }
+              control={
+                <Switch
+                  id={cleanId}
+                  data-orchestrator-clean
+                  checked={orchestrator.cleanDictation}
+                  aria-labelledby={`${cleanId}-label`}
+                  aria-describedby={`${cleanId}-help`}
+                  className={HIT}
+                  onCheckedChange={(on) => send({ action: 'orchestrator.clean_dictation', on })}
+                />
+              }
+            />
+            {reason !== undefined && (
+              <div
+                className="flex items-center justify-between gap-[var(--mog-space-3)] px-[var(--mog-space-4)] py-[var(--mog-space-2)]"
+                data-orchestrator-status
+              >
+                <span
+                  id={`${modelId}-status`}
+                  role="status"
+                  className="text-[var(--mog-text-xs)] text-muted-foreground"
+                >
+                  {reason}
+                </span>
+                {(state === 'unreachable' || state === 'no_model') && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="min-h-6"
+                    data-orchestrator-recheck
+                    onClick={() => send({ action: 'orchestrator.recheck' })}
+                  >
+                    Check again
+                  </Button>
+                )}
+              </div>
+            )}
+          </>
+        )}
         <SettingsRow
           label={<span id={budgetId}>Genie calls per question</span>}
           description={BUDGET_HELP}
@@ -321,7 +220,7 @@ export function AgentSettings({
               data-agent-combine-help
               className="flex flex-col gap-[var(--mog-space-1)]"
             >
-              <span>{combineHelp(agentName)}</span>
+              <span>{combineHelp(homeName)}</span>
               <span>{COMBINE_OFF_HELP}</span>
             </span>
           }
@@ -334,6 +233,7 @@ export function AgentSettings({
                 disabled={locked}
                 aria-labelledby={`${combineId}-label`}
                 aria-describedby={`${combineId}-help${locked ? ` ${combineId}-locked` : ''}`}
+                className={HIT}
                 onCheckedChange={(on) => {
                   if (busy) setChanged(true);
                   send({ action: 'workspace.cross', crossWorkspaceData: on });
@@ -360,68 +260,12 @@ export function AgentSettings({
             </span>
           }
         />
-        <SettingsRow
-          label="Genie Code"
-          description={
-            <span data-agent-genie-status aria-busy={g.busy === true}>
-              {g.text}
-            </span>
-          }
-          control={
-            <span className="flex items-center gap-[var(--mog-space-2)]">
-              {(g.busy || checking) && (
-                <span role="status" aria-label="Working" data-agent-busy>
-                  <Loader2Icon
-                    className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none"
-                    aria-hidden="true"
-                  />
-                </span>
-              )}
-              {(g.action === 'install' || g.action === 'install_copy') && (
-                <Button
-                  ref={install}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  data-agent-install
-                  disabled={installing || confirm}
-                  aria-expanded={confirm}
-                  onClick={() => setConfirm(true)}
-                >
-                  {g.action === 'install_copy' ? "Install Bottle's copy…" : 'Install…'}
-                </Button>
-              )}
-              {g.action === 'recheck' && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  data-agent-recheck
-                  disabled={checking}
-                  onClick={() => {
-                    setCheckingFor(list);
-                    send({ action: 'genie_code.recheck' });
-                  }}
-                >
-                  Check again
-                </Button>
-              )}
-            </span>
-          }
-        />
-        {confirm && (
-          <InstallConfirm
-            pinned={list.agent.genieCode?.pinned ?? ''}
-            copy={g.action === 'install_copy'}
-            onDone={closeConfirm}
-          />
-        )}
       </SettingsGroup>
       <p
         data-agent-disclosure
         className="mt-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
       >
-        {disclosureLines(agentName).join(' ')}
+        {disclosureLines(homeName).join(' ')}
       </p>
     </section>
   );
