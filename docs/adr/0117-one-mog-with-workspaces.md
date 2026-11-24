@@ -100,12 +100,12 @@ sign-in errors, `expired` means "the CLI could not give a token".
 
 ## Open items
 
-- **Re-sign-in (`profile_reauth`).** The contract has the command. It is not built. It would run
-  `databricks auth login --profile <p> --host <host>` for an existing profile. The CLI help only says that an
-  existing profile "is updated". From memory (not verified), the CLI's `SaveToProfile` clears the keys of the
-  section before it writes, so a custom key such as `warehouse_id` could be lost. W-08 says Bottle never changes
-  an existing profile. Until a safe and verified way exists, `profile_reauth` answers `not_implemented` from the
-  login component, and the hub shows the user how to sign in with the CLI.
+- **Re-sign-in (`profile_reauth`).** Built. It runs `databricks auth login --profile <p> --host <host>` (CLI 1.26)
+  for a profile with `auth_type = databricks-cli` only. Checked with a fake config and a local mock OAuth server:
+  a U2M profile keeps all its other keys (`warehouse_id`, `scopes`, `client_id`, custom keys). A PAT profile loses
+  `token`, and a service-principal profile loses `client_id` and `client_secret`; both gain `auth_type`. So any
+  other profile gets `profile_invalid` and the hub shows the CLI command with a Copy button. The CLI also adds
+  `[__settings__] auth_storage = secure` and realigns the file, as for any login.
 - **D5 to D7 of the director's plan** were not part of the S1-A brief. This ADR records the S1 decisions above.
   The owner or director must add any other D5 to D7 wording.
 
