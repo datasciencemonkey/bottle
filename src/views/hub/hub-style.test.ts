@@ -41,15 +41,23 @@ describe('hub and MOG chrome styling (#561)', () => {
   // instead of covering it", Hub.test.tsx) only ever checked the `--hub-sidebar-width` CSS
   // variable the panel writes, not the actual rule that positions `.conv` — which is exactly
   // where the round-3 bug was (blocker 1). These read the real, shipped CSS rule instead.
-  it('[blocker 1, review #602 round 3] `.conv` cancels only the base padding, like `.rec-area`', () => {
+  // Owner review 2026-11-24: `.conv`, `.rec-area` and `.mem` are now the content column itself,
+  // with no bleed on either side, so their hairlines line up with the area header's.
+  it('[blocker 1, review #602 round 3] the frames never cancel the sidebar width, and do not bleed', () => {
     const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
-    const conv = /(?:^|\n)\s*\.conv\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    // The bug: `calc((var(--mog-space-6) + var(--hub-sidebar-width, 0px)) * -1)` cancelled the
-    // pinned sidebar's own width too, landing `.conv` back under the panel instead of beside it.
-    expect(conv).not.toMatch(/--hub-sidebar-width/);
-    expect(conv).toMatch(/margin-left:\s*calc\(var\(--mog-space-6\)\s*\*\s*-1\)/);
-    const recArea = /(?:^|\n)\s*\.rec-area\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(recArea).not.toMatch(/--hub-sidebar-width/);
+    for (const sel of ['conv', 'rec-area', 'mem']) {
+      const body = new RegExp(`(?:^|\\n)\\s*\\.${sel}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
+      // The round-3 bug: `calc((var(--mog-space-6) + var(--hub-sidebar-width, 0px)) * -1)`
+      // cancelled the pinned sidebar's own width too, landing `.conv` under the panel.
+      expect(body, sel).not.toMatch(/--hub-sidebar-width/);
+      // No left bleed either: a pinned sidebar pushes the frame through `.hub-content`.
+      expect(body, sel).not.toMatch(/margin-left/);
+      expect(body, sel).toMatch(/margin:\s*0;/);
+    }
+    // The lists start on the header's left edge, like the Memory tree.
+    for (const sel of ['conv-list', 'rec-list'])
+      expect(css, sel).toMatch(new RegExp(`\\.${sel}\\s*\\{[^}]*padding:\\s*0 12px 24px 0;`));
+    expect(css).toMatch(/\.rec-bar\s*\{[^}]*padding:\s*14px 0;/);
   });
 
   // Owner review 2026-11-24: the Memory frame bled 32px under `.hub-content`'s clip on the right
@@ -91,8 +99,6 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(css).toMatch(
       /@container rec \(width < 640px\)\s*\{\s*\.rec-area \.rec-panes\s*\{\s*grid-template-columns:\s*clamp\(/,
     );
-    // The Record bar keeps its 32px start and no padding past the header's right edge.
-    expect(css).toMatch(/\.rec-bar\s*\{[^}]*padding:\s*14px 0 14px 32px/);
   });
 
   it('[memory layout] titles end in an ellipsis and paths never break inside a word', () => {
