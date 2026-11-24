@@ -122,6 +122,8 @@ struct FakeCli {
     mode: Cli,
     calls: Mutex<Vec<(Vec<String>, Duration)>>,
     started: AtomicBool,
+    /// The `auth describe` reply; `None` answers `NotImplemented` (storage unchecked).
+    describe: Option<Value>,
 }
 
 impl FakeCli {
@@ -130,6 +132,15 @@ impl FakeCli {
             mode,
             calls: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
+            describe: None,
+        })
+    }
+    fn with_describe(mode: Cli, describe: Value) -> Arc<Self> {
+        Arc::new(Self {
+            mode,
+            calls: Mutex::new(Vec::new()),
+            started: AtomicBool::new(false),
+            describe: Some(describe),
         })
     }
     fn calls(&self) -> Vec<(Vec<String>, Duration)> {
@@ -142,7 +153,9 @@ impl CliRunner for FakeCli {
         Ok(PathBuf::from("/usr/local/bin/databricks"))
     }
     fn run_json(&self, _args: &[&str]) -> CoreResult<Value> {
-        Err(CoreError::NotImplemented { component: "R5" })
+        self.describe
+            .clone()
+            .ok_or(CoreError::NotImplemented { component: "R5" })
     }
     fn run_login(&self, args: &[&str], timeout: Duration, cancel: &AtomicBool) -> CoreResult<()> {
         self.calls
@@ -852,5 +865,76 @@ fn adr_0117_reauth_timeout_cli_failed_and_check_failed() {
     assert_eq!(
         code(t.call("profile_reauth", reauth_args("work"))),
         "auth_expired"
+    );
+}
+
+/// [ADR 0117] same names in other cases: any non-U2M twin refuses, and the exact case must exist
+#[test]
+fn adr_0117_reauth_fails_closed_on_a_same_name_section_in_another_case() {
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![
+            profile("Work", HOST, "databricks-cli"),
+            profile("work", HOST, ""),
+        ],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    for name in ["work", "Work", "WORK"] {
+        assert_eq!(
+            code(t7.call("profile_reauth", reauth_args(name))),
+            "profile_invalid",
+            "{name}"
+        );
+    }
+    assert!(cli.calls().is_empty());
+    // A lone U2M section: only its exact case runs.
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![profile("Work", HOST, "databricks-cli")],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    assert_eq!(
+        code(t7.call("profile_reauth", reauth_args("work"))),
+        "profile_invalid"
+    );
+    assert!(cli.calls().is_empty());
+    t7.call("profile_reauth", reauth_args("Work")).unwrap();
+    assert_eq!(cli.calls().len(), 1);
+}
+
+/// [ADR 0117] plaintext or failed token storage is `profile_invalid`; secure storage runs
+#[test]
+fn adr_0117_reauth_needs_secure_token_storage() {
+    let cfg = || vec![profile("work", HOST, "databricks-cli")];
+    for describe in [
+        json!({ "details": { "token_storage": { "mode": "plaintext" } } }),
+        json!({}),
+    ] {
+        let cli = FakeCli::with_describe(Cli::Ok, describe);
+        let t7 = login(cfg(), cli.clone(), FakeVerifier::new(Ok(())));
+        assert_eq!(
+            code(t7.call("profile_reauth", reauth_args("work"))),
+            "profile_invalid"
+        );
+        assert!(cli.calls().is_empty());
+    }
+    let cli = FakeCli::with_describe(
+        Cli::Ok,
+        json!({ "details": { "token_storage": { "mode": "secure" } } }),
+    );
+    let t7 = login(cfg(), cli.clone(), FakeVerifier::new(Ok(())));
+    t7.call("profile_reauth", reauth_args("work")).unwrap();
+    assert_eq!(cli.calls().len(), 1);
+}
+
+/// [ADR 0117] a cancel with a bad name is `invalid_args`
+#[test]
+fn adr_0117_cancel_checks_the_name() {
+    let t7 = login(vec![], FakeCli::new(Cli::Ok), FakeVerifier::new(Ok(())));
+    assert_eq!(
+        code(t7.call("profile_login_cancel", json!({ "profile": "-x" }))),
+        "invalid_args"
     );
 }

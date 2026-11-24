@@ -252,9 +252,9 @@ impl LoginVerifier for OkVerifier {
 
 #[test]
 fn profile_reauth_routes_to_the_login_component() {
-    // The login component signs a U2M profile in again. The host of this fake profile is not a
-    // workspace host, so the call is refused before any CLI runs. `profile_invalid` (not U2M)
-    // is covered in `crates/mog-core/tests/profile_login.rs`.
+    // The login component signs a U2M profile in again. `NoCli` reports no secure token
+    // storage, so the call is refused before any CLI login runs. The other paths are in
+    // `crates/mog-core/tests/profile_login.rs`.
     let login = ProfileLoginHost(Arc::new(ProfileLogin::new(
         Arc::new(EmptyConfig),
         Arc::new(NoCli),
@@ -266,7 +266,7 @@ fn profile_reauth_routes_to_the_login_component() {
     };
     assert_eq!(
         route(c("brain"), "profile_reauth", json!({"profile": "home"})),
-        Err(json!({"error": "host_refused"}))
+        Err(json!({"error": "profile_invalid"}))
     );
     assert_eq!(
         route(c("hub"), "profile_reauth", json!({"profile": "home"})),

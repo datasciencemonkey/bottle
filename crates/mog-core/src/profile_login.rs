@@ -12,8 +12,15 @@
 //! - W-07h: `profile_login_cancel {profile}` kills the running child (`login_cancelled`). After
 //!   the sign-in, the [`LoginVerifier`] runs the W-06a check (the SCIM `workspace_id`) before
 //!   the profile connects. A failure answers one fixed Table W-ERR code, never upstream text.
-//! - W-07i, W-08: the CLI writes only the new `bottle-*` section. Bottle never writes the config
-//!   file, and an existing PAT or service-principal profile is never used or changed.
+//! - W-07i, W-08: `profile_login` writes only the new `bottle-*` section. Bottle never writes the
+//!   config file, and an existing PAT or service-principal profile is never used or changed.
+//! - ADR 0117: `profile_reauth {profile}` signs an existing profile in again with `auth login
+//!   --host <its host> --profile <p>`. The CLI keeps every other key of a U2M profile, but a
+//!   PAT or service-principal profile loses its token or secret. So it runs only for a profile
+//!   that is exactly `auth_type = databricks-cli` with secure token storage (the `supported`
+//!   decision of the profile list). Any section of the same name in another case (the CLI edits
+//!   the exact-case section) that is not U2M, a missing section, or plaintext or unchecked
+//!   storage answers `profile_invalid`, and the CLI never runs. `profile_login_cancel` stops it.
 //!
 //! No token, host, profile or CLI text goes into a reply, an error or a log: the CLI keeps its
 //! tokens in its own cache, and R6 gets them later with `databricks auth token` (ARC-6).
@@ -31,7 +38,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::http_transport::host_policy::is_workspace_host;
 use crate::ipc::{ProfileArgs, ProfileLoginArgs};
 use crate::ipc_gateway::GatewayComponents;
-use crate::profile_service::{ConfigSource, U2M_AUTH_TYPE};
+use crate::profile_service::{storage_of, ConfigSource, U2M_AUTH_TYPE};
 
 /// W-07c: `databricks auth login` times out after 5 min.
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -302,14 +309,22 @@ impl ProfileLogin {
             return Err(refused("invalid_args"));
         }
         let key = profile.to_ascii_lowercase();
-        let found = self
-            .config
-            .profiles()
-            .map_err(|_| refused("host_failed"))?
+        let all = self.config.profiles().map_err(|_| refused("host_failed"))?;
+        // The CLI edits the exact-case section. Fail closed: any same-name section (without
+        // case) that is not U2M refuses, then the exact-case section must exist.
+        if all
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(profile) && p.auth_type != U2M_AUTH_TYPE)
+        {
+            return Err(refused("profile_invalid"));
+        }
+        let found = all
             .into_iter()
-            .find(|p| p.name.eq_ignore_ascii_case(profile))
-            .filter(|p| p.auth_type == U2M_AUTH_TYPE)
+            .find(|p| p.name == profile)
             .ok_or(refused("profile_invalid"))?;
+        if !storage_of(self.cli.as_ref(), profile).usable() {
+            return Err(refused("profile_invalid"));
+        }
         let host = workspace_host(&found.host).ok_or(refused("host_refused"))?;
         let cancel = Arc::new(AtomicBool::new(false));
         {
@@ -344,6 +359,9 @@ impl ProfileLogin {
     /// A cancel for a name with no sign-in yet is kept for [`PENDING_CANCEL`], so a cancel that
     /// overtakes its `profile_login` on the way to the host still stops it.
     fn cancel(&self, a: ProfileArgs) -> CoreResult<Value> {
+        if !plain_value(a.profile.as_str()) {
+            return Err(refused("invalid_args"));
+        }
         let key = a.profile.as_str().to_ascii_lowercase();
         let running = self.running();
         match running.get(&key) {

@@ -256,6 +256,17 @@ describe('Settings → Workspace', () => {
     expect(row.querySelector('[data-copy-status]')?.textContent).toBe('Copied');
   });
 
+  it('no CLI command shows while the cannot-sign-in-again notice is up', async () => {
+    const { el } = await mount({
+      ...LIST,
+      notice: {
+        kind: 'error',
+        text: 'Bottle cannot sign this workspace in again. Check the profile in your Databricks CLI config, then reopen Settings.',
+      },
+    });
+    expect(el.querySelector('[data-sign-in-command]')).toBeNull();
+  });
+
   it('a failed copy says so instead of staying silent', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: () => Promise.reject(new Error('no')) },

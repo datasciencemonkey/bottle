@@ -104,7 +104,8 @@ sign-in errors, `expired` means "the CLI could not give a token".
   for a profile with `auth_type = databricks-cli` only. Checked with a fake config and a local mock OAuth server:
   a U2M profile keeps all its other keys (`warehouse_id`, `scopes`, `client_id`, custom keys). A PAT profile loses
   `token`, and a service-principal profile loses `client_id` and `client_secret`; both gain `auth_type`. So any
-  other profile gets `profile_invalid` and the hub shows the CLI command with a Copy button. The CLI also adds
+  other profile (also a same-name section in another case, or plaintext token storage) gets `profile_invalid`, the
+  CLI does not run, and the hub says Bottle cannot sign the workspace in again. The CLI also adds
   `[__settings__] auth_storage = secure` and realigns the file, as for any login.
 - **D5 to D7 of the director's plan** were not part of the S1-A brief. This ADR records the S1 decisions above.
   The owner or director must add any other D5 to D7 wording.

@@ -27,6 +27,7 @@ import {
 import type { MogId, ProfileName } from '../shared/interfaces';
 import { call, type WorkspaceList, type WorkspaceRow } from '../shared/ipc';
 import { MOG_PALETTE, nextVariant } from '../shared/mog-palette';
+import { SIGN_IN_NOT_BROWSER, SIGN_IN_WAITING, signInCommand } from '../shared/sign-in-text';
 import { onViewInput, type BrainBus } from './bus';
 import { MOG_CONFIG_DEFAULTS, type MogConfig } from './components/mog-config';
 import {
@@ -53,11 +54,11 @@ export const WORKSPACE_TEXT = {
   storage_failed: 'Bottle could not read your workspaces. Try again.',
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
-  waiting: 'Waiting for you to sign in in your browser…',
+  waiting: SIGN_IN_WAITING,
   login_cancelled: 'Sign-in cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
-  not_browser: 'This workspace does not use browser sign-in. Run the command below in Terminal.',
+  not_browser: SIGN_IN_NOT_BROWSER,
   auth_expired: 'Bottle could not use the new sign-in for this workspace.',
   no_grant: 'Your account has no access to this workspace. Ask your workspace admin for access.',
   offline: 'Bottle cannot reach this workspace. Check your network.',
@@ -65,7 +66,7 @@ export const WORKSPACE_TEXT = {
 
 /** The text of a sign-in that the app does not run itself. `profile` is a name, never a token. */
 export const signInByHand = (profile: string): string =>
-  `To sign in again, run "databricks auth login --profile ${profile}" in Terminal, then reopen Settings.`;
+  `To sign in again, run "${signInCommand(profile)}" in Terminal, then reopen Settings.`;
 
 const SIGN_IN_CODES: ReadonlySet<string> = new Set([
   'login_cancelled',
@@ -376,8 +377,11 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(l);
       }
       case 'workspace.sign_in': {
-        if (!rowOf(a.profile))
+        const row = rowOf(a.profile);
+        if (!row)
           return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
+        // A click queued behind another sign-in of this row: that one may have signed it in.
+        if (row.signIn !== 'expired') return publish(last);
         // `profile_reauth` blocks until the CLI ends (as `profile_login` does): say what it waits for.
         await publish(last, {
           busyProfile: a.profile,
@@ -411,7 +415,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.signed_in } });
       }
       case 'workspace.sign_in_cancel':
-        return; // `act` handles it outside the queue.
+        return; // `act` runs it outside the queue.
       case 'workspace.edit':
         return edit(a);
       case 'workspace.budget':
@@ -513,6 +517,9 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       }),
     act: (action) => {
       if (action.action === 'workspace.sign_in_cancel') {
+        if (!rowOf(action.profile)) {
+          return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
+        }
         // The sign-in holds the queue until it ends: the cancel must not wait behind it. The
         // waiting `workspace.sign_in` then ends with `login_cancelled`, which shows the notice.
         return deps.cancelLogin(action.profile).then(
