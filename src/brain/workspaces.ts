@@ -53,9 +53,11 @@ export const WORKSPACE_TEXT = {
   storage_failed: 'Bottle could not read your workspaces. Try again.',
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
-  login_cancelled: 'The sign-in was cancelled.',
+  waiting: 'Waiting for you to sign in in your browser…',
+  login_cancelled: 'Sign-in cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
+  not_browser: 'This workspace does not use browser sign-in. Run the command below in Terminal.',
   auth_expired: 'Bottle could not use the new sign-in for this workspace.',
   no_grant: 'Your account has no access to this workspace. Ask your workspace admin for access.',
   offline: 'Bottle cannot reach this workspace. Check your network.',
@@ -102,6 +104,8 @@ export interface WorkspacesDeps {
   genieCodeInstall?(): Promise<GenieCodeStatus>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
+  /** `profile_login_cancel`: stops the running sign-in of the profile. */
+  cancelLogin(profile: ProfileName): Promise<unknown>;
   configs: MogConfigClient;
   /** The local store, for the `mem.exchange.recent` statement of the home suggestion. */
   store: Pick<LocalMemoryStore, 'exec'>;
@@ -407,15 +411,28 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       case 'workspace.sign_in': {
         if (!rowOf(a.profile))
           return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_listed } });
-        await publish(last, { busyProfile: a.profile });
+        // `profile_reauth` blocks until the CLI ends (as `profile_login` does): say what it waits for.
+        await publish(last, {
+          busyProfile: a.profile,
+          notice: { kind: 'info', text: WORKSPACE_TEXT.waiting },
+        });
         try {
           await deps.reauth(a.profile);
         } catch (e) {
           const code = codeOf(e);
           if (code === 'not_implemented') {
-            // Slice 1 defers `profile_reauth`: a CLI re-login may drop other keys of the profile.
-            // The user signs in with the CLI; the next `workspaces.ready` reads the new state.
-            return publish(last, { notice: { kind: 'info', text: signInByHand(a.profile) } });
+            // The host has no re-sign-in (yet): show the CLI command as a visible error, not a
+            // quiet note. The hub row also has a Copy button. The next `workspaces.ready`
+            // reads the new state.
+            return publish(last, { notice: { kind: 'error', text: signInByHand(a.profile) } });
+          }
+          if (code === 'login_cancelled') {
+            const l = await fetchList().catch(() => last);
+            return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.login_cancelled } });
+          }
+          if (code === 'profile_invalid') {
+            // A PAT or service-principal profile: a CLI login would change it. The row has Copy.
+            return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_browser } });
           }
           const text = SIGN_IN_CODES.has(code)
             ? WORKSPACE_TEXT[code as keyof typeof WORKSPACE_TEXT]
@@ -426,6 +443,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         const l = await fetchList(true);
         return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.signed_in } });
       }
+      case 'workspace.sign_in_cancel':
+        return; // `act` handles it outside the queue.
       case 'workspace.edit':
         return edit(a);
       case 'workspace.budget':
@@ -568,8 +587,16 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         }
         await publish(last);
       }),
-    act: (action) =>
-      serial(async () => {
+    act: (action) => {
+      if (action.action === 'workspace.sign_in_cancel') {
+        // The sign-in holds the queue until it ends: the cancel must not wait behind it. The
+        // waiting `workspace.sign_in` then ends with `login_cancelled`, which shows the notice.
+        return deps.cancelLogin(action.profile).then(
+          () => undefined,
+          () => publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.failed } }),
+        );
+      }
+      return serial(async () => {
         try {
           await run(action);
         } catch (e) {
@@ -577,7 +604,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             notice: noticeOf(e),
           });
         }
-      }),
+      });
+    },
   };
 }
 
@@ -598,6 +626,7 @@ export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
     genieCodeStatus: (recheck) => call('genie_code_status', recheck ? { recheck } : {}),
     genieCodeInstall: () => call('genie_code_install', { consent: true }),
     reauth: (profile) => call('profile_reauth', { profile }),
+    cancelLogin: (profile) => call('profile_login_cancel', { profile }),
     configs,
     store: new IpcLocalMemoryStore(),
     send: (list) => emitTo('hub', HUB_WORKSPACES_EVENT, list),

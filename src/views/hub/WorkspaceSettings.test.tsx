@@ -270,6 +270,64 @@ describe('Settings → Workspace', () => {
     expect(hubClicks()).toEqual([{ action: 'workspace.sign_in', profile: 'old' }]);
   });
 
+  it('an expired row shows the CLI command with a Copy button; a signed-in row shows none', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    const { el } = await mount();
+    expect(li(el, 'ops').querySelector('[data-sign-in-command]')).toBeNull();
+    const row = li(el, 'old');
+    expect(row.querySelector('code')?.textContent).toBe('databricks auth login --profile old');
+    await click(row.querySelector('[data-copy-command]'));
+    expect(write).toHaveBeenCalledWith('databricks auth login --profile old');
+    expect(row.querySelector('[data-copy-status]')?.textContent).toBe('Copied');
+  });
+
+  it('a failed copy says so instead of staying silent', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('no')) },
+      configurable: true,
+    });
+    const { el } = await mount();
+    await click(li(el, 'old').querySelector('[data-copy-command]'));
+    expect(li(el, 'old').querySelector('[data-copy-status]')?.textContent).toContain(
+      'Could not copy',
+    );
+  });
+
+  it('the waiting notice shows with the spinner; an error notice is an alert', async () => {
+    const waiting = 'Waiting for you to sign in in your browser…';
+    const { el } = await mount({
+      ...LIST,
+      busyProfile: 'old',
+      notice: { kind: 'info', text: waiting },
+    });
+    expect(el.querySelector('[data-workspace-notice="info"]')?.textContent).toBe(waiting);
+    expect(li(el, 'old').querySelector('[data-busy-spinner]')).not.toBeNull();
+    await click(li(el, 'old').querySelector('[data-cancel-sign-in]'));
+    expect(hubClicks()).toEqual([{ action: 'workspace.sign_in_cancel', profile: 'old' }]);
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, {
+      ...LIST,
+      notice: { kind: 'error', text: 'The Databricks CLI could not finish the sign-in.' },
+    });
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(
+      'The Databricks CLI could not finish the sign-in.',
+    );
+  });
+
+  it('Cancel shows only while the waiting notice is up, not for other busy work', async () => {
+    const { el } = await mount({ ...LIST, busyProfile: 'old' });
+    expect(el.querySelector('[data-cancel-sign-in]')).toBeNull();
+    const w = await mount({
+      ...LIST,
+      busyProfile: 'old',
+      notice: { kind: 'info', text: 'Waiting for you to sign in in your browser…' },
+    });
+    expect(w.el.querySelectorAll('[data-cancel-sign-in]')).toHaveLength(1);
+  });
+
   it('busyProfile shows a spinner on that row only and disables its controls', async () => {
     const { el } = await mount({ ...LIST, busyProfile: 'old' });
     expect(el.querySelectorAll('[data-busy-spinner]')).toHaveLength(1);

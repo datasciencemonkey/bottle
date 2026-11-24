@@ -86,6 +86,9 @@ function rig(
       state = { ...state, agent: { ...state.agent, ...a } };
       return state;
     },
+    cancelLogin: async (profile) => {
+      calls.push(['cancel_login', profile]);
+    },
     reauth: async (profile) => {
       calls.push(['reauth', profile]);
     },
@@ -351,13 +354,67 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     const done = r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
     await flush();
     expect(r.last()?.busyProfile).toBe('home');
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.waiting });
     r.set(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]));
     release();
     await done;
     expect(r.last()?.busyProfile).toBeUndefined();
     expect(r.last()?.rows[0]?.signIn).toBe('signed_in');
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.signed_in });
     expect(r.calls.at(-1)).toEqual(['list', true]);
   });
+
+  it('Cancel during a waiting sign-in calls profile_login_cancel at once and shows Sign-in cancelled.', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    let reject: (e: unknown) => void = () => undefined;
+    r.deps.reauth = () => new Promise((_, no) => (reject = no));
+    const done = r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    await flush();
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.calls).toContainEqual(['cancel_login', 'home']);
+    reject({ error: 'login_cancelled' });
+    await done;
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: 'Sign-in cancelled.' });
+  });
+
+  it('a Cancel that the host refuses shows an error instead of staying silent', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.cancelLogin = async () => Promise.reject({ error: 'host_failed' });
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.failed });
+  });
+
+  it('profile_invalid from a sign-in tells the user to use the command below', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.reauth = async () => Promise.reject({ error: 'profile_invalid' });
+    await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.not_browser });
+  });
+
+  it.each([
+    ['timeout', WORKSPACE_TEXT.timeout],
+    ['cli_failed', WORKSPACE_TEXT.cli_failed],
+    ['auth_expired', WORKSPACE_TEXT.auth_expired],
+    ['offline', WORKSPACE_TEXT.offline],
+    ['something_else', WORKSPACE_TEXT.failed],
+  ])(
+    'a sign-in that ends with %s shows an error and clears the waiting state',
+    async (code, text) => {
+      const r = rig(
+        workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]),
+      );
+      await r.ws.refresh();
+      r.deps.reauth = async () => Promise.reject({ error: code });
+      await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+      expect(r.last()?.busyProfile).toBeUndefined();
+      expect(r.last()?.notice).toEqual({ kind: 'error', text });
+    },
+  );
 
   it('[S1-B change] a sign-in that answers not_implemented clears busyProfile and tells the user to use the CLI', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
@@ -367,7 +424,7 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
     expect(r.last()?.busyProfile).toBeUndefined();
     expect(r.last()?.notice).toEqual({
-      kind: 'info',
+      kind: 'error',
       text: 'To sign in again, run "databricks auth login --profile home" in Terminal, then reopen Settings.',
     });
     expect(signInByHand('home')).toBe(r.last()?.notice?.text);

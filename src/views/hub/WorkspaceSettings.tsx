@@ -40,6 +40,8 @@ import { SettingsGroup } from './SettingsGroup';
 import { ColorDot, WorkspaceColor } from './WorkspaceColor';
 
 const NAME_MAX = 64;
+/** The brain's waiting text (`WORKSPACE_TEXT.waiting`): a Cancel shows while it is up. */
+const SIGN_IN_WAITING = 'Waiting for you to sign in in your browser…';
 
 function send(action: WorkspaceAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
@@ -211,9 +213,55 @@ function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void 
   );
 }
 
+/** The CLI sign-in for a profile, with a quote only when the name needs one. */
+const signInCommand = (profile: string): string =>
+  `databricks auth login --profile ${/^[\w.-]+$/.test(profile) ? profile : `'${profile.replace(/'/g, `'\\''`)}'`}`;
+
+/** The CLI command of an expired row, with a Copy button: the way out when the browser sign-in fails. */
+function SignInCommand({ profile }: { profile: string }) {
+  const [copied, setCopied] = useState<'yes' | 'no' | undefined>(undefined);
+  const command = signInCommand(profile);
+  return (
+    <span
+      data-sign-in-command
+      className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+    >
+      <span>Or run in Terminal:</span>
+      <code className="select-all truncate">{command}</code>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-copy-command
+        aria-label={`Copy the sign-in command for ${profile}`}
+        onClick={() => {
+          navigator.clipboard
+            .writeText(command)
+            .then(() => setCopied('yes'))
+            .catch(() => setCopied('no'));
+        }}
+      >
+        Copy
+      </Button>
+      <span role="status" data-copy-status>
+        {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Could not copy. Select the command.' : ''}
+      </span>
+    </span>
+  );
+}
+
 type Panel = 'rename' | 'colour' | 'confirm' | undefined;
 
-function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
+function WorkspaceRow({
+  row,
+  busy,
+  waiting,
+}: {
+  row: HubWorkspaceRow;
+  busy: boolean;
+  /** The brain waits for the browser sign-in of this row. */
+  waiting: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>(undefined);
   const reduce = useReducedMotion();
   const li = useRef<HTMLLIElement>(null);
@@ -318,6 +366,7 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
               {STATUS_TEXT[row.signIn]}
             </span>
           </span>
+          {row.signIn === 'expired' && <SignInCommand profile={row.profile} />}
           {reason !== undefined && (
             <span data-workspace-reason className="text-[var(--mog-text-xs)] text-muted-foreground">
               {reason}
@@ -335,6 +384,18 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
                 aria-hidden="true"
               />
             </span>
+          )}
+          {busy && waiting && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Cancel sign-in to ${row.name}`}
+              data-cancel-sign-in
+              onClick={() => send({ action: 'workspace.sign_in_cancel', profile: row.profile })}
+            >
+              Cancel
+            </Button>
           )}
           {row.signIn === 'expired' && (
             <Button
@@ -547,7 +608,12 @@ export function WorkspaceSettings({
         <SettingsGroup className="mt-[var(--mog-space-3)]">
           <ul aria-label="Workspaces" className="m-0 list-none divide-y divide-border/60 p-0">
             {list.rows.map((r) => (
-              <WorkspaceRow key={r.profile} row={r} busy={list.busyProfile === r.profile} />
+              <WorkspaceRow
+                key={r.profile}
+                row={r}
+                busy={list.busyProfile === r.profile}
+                waiting={list.busyProfile === r.profile && list.notice?.text === SIGN_IN_WAITING}
+              />
             ))}
           </ul>
         </SettingsGroup>
