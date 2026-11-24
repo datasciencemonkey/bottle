@@ -125,6 +125,20 @@ describe('orchestrator wiring', () => {
     expect(bad.o.status()).toBeUndefined();
   });
 
+  it('[M3] a turn that ends failed, signed_out or offline reads the status again; others do not', async () => {
+    const r = rig();
+    await r.o.refresh();
+    const base = r.statusReads.length;
+    for (const outcome of ['answered', 'stopped', 'timeout']) r.o.turnEnded(outcome);
+    await flush();
+    expect(r.statusReads.length).toBe(base);
+    r.setStatus({ state: 'unreachable', model: HAIKU });
+    for (const outcome of ['failed', 'signed_out', 'offline']) r.o.turnEnded(outcome);
+    await flush();
+    expect(r.statusReads.length).toBe(base + 3);
+    expect(r.o.status()?.state).toBe('unreachable');
+  });
+
   it('drops a bad action, another window, another scope and a non-click', async () => {
     const r = rig();
     r.click({ action: 'orchestrator.model', model: 'not-a-system-model' });

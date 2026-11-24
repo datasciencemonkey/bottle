@@ -103,7 +103,7 @@ export type RouterTraceEvent =
 export interface RouterStepDeps {
   invoke: ModelInvoker;
   trace?: (e: RouterTraceEvent) => void;
-  /** The router model for the region: `routerModelFor` in `router-model.ts` (RTR-10a/b, #135). */
+  /** An optional model id for the request. The app sends none: Rust uses the user's setting. */
   model?: string;
   deadlineMs?: number;
 }

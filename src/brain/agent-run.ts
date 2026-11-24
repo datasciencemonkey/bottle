@@ -51,8 +51,8 @@ import type { GenieEnd } from './genie-history';
 import type { GeniePhase, PartFence } from './genie-direct';
 import type { BrainLog } from './log';
 
-/** The mode of a submit. An `ask_others` turn never asks home again. */
-export type AgentMode = NonNullable<CommandArgs['agent_turn_submit']['mode']>;
+/** The mode of a submit (ADR 0122: a new ask or a follow-up). */
+export type AgentMode = 'ask' | 'follow_up';
 
 /** The IPC functions of the client, one for each command. */
 export interface AgentApi {
@@ -124,8 +124,6 @@ interface TurnRec {
   parts: Map<string, AgentPartView>;
   fetched: Set<string>;
   pending: Set<Promise<unknown>>;
-  /** The mode of the submit: an `ask_others` turn never asks home again. */
-  mode: AgentMode;
   /** Terminal pulls that failed once: the turn retries them once when it ends. */
   failedPulls: Set<string>;
   /** Set when the turn ended; the order of `earlier`. */
@@ -181,9 +179,7 @@ const OUTCOMES: readonly string[] = [
   'timeout',
   'offline',
   'signed_out',
-  'not_eligible',
   'failed',
-  'lockdown',
   'refusals',
   'session_ended',
 ];
@@ -635,14 +631,10 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
           }
         : {}),
     };
-    // AC-2a.11: an agent that never asked a workspace falls back to one direct home call. An
-    // `ask_others` turn already asked home: it shows the reason and asks nothing more.
+    // AC-2a.11: an agent that never asked a workspace falls back to one direct home call.
     const why = e.calls === 0 ? whyOfOutcome(out) : undefined;
     const id = r.view.turnId;
-    if (why && r.mode === 'ask_others') {
-      r.view = { ...r.view, notice: fallbackNotice(why, names, false) };
-      update(r);
-    } else if (why && !r.fellBack) {
+    if (why && !r.fellBack) {
       r.fellBack = true;
       const notice = fallbackNotice(why, names);
       r.view = { ...r.view, notice };
@@ -798,11 +790,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       } catch (e) {
         const code = codeOf(e);
         const why = whyOfRefusal(code);
-        if (why && mode === 'ask_others') {
-          // Home was asked already: say why the others were not, and ask nothing more.
-          deps.note?.(turn.mogId, fallbackNotice(why, deps.names(), false));
-          return;
-        }
         if (why) {
           await deps.direct(turn, fallbackNotice(why, deps.names()));
           return;
@@ -823,7 +810,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         parts: new Map(),
         fetched: new Set(),
         pending: new Set(),
-        mode,
         failedPulls: new Set(),
         ended: false,
         fellBack: false,

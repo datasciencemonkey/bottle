@@ -149,7 +149,6 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
       crossWorkspaceData: false,
       crossWorkspaceLocked: false,
       genieCallBudget: 10,
-      runProfile: null,
     });
   });
 
@@ -839,22 +838,6 @@ describe('workspaces: the agent settings relays (ADR 0122)', () => {
     r.configs.files.set(id(2), cfg('Lab', 'lab', 'amber'));
     return r;
   }
-
-  it('sends the agent profile with the list', async () => {
-    const r = agentRig();
-    await r.ws.refresh();
-    expect(r.last()?.agent.runProfile).toBeNull();
-  });
-
-  it('[AC-2a.25] a change of the agent profile writes runProfile; null means home', async () => {
-    const r = agentRig();
-    await r.ws.refresh();
-    await r.ws.act({ action: 'workspace.agent_profile', profile: 'lab' });
-    expect(r.calls.find((c) => c[0] === 'settings_write')?.[1]).toEqual({ runProfile: 'lab' });
-    expect(r.last()?.agent.runProfile).toBe('lab');
-    await r.ws.act({ action: 'workspace.agent_profile', profile: null });
-    expect(r.last()?.agent.runProfile).toBeNull();
-  });
 
   it('writeSettings writes the orchestrator model and the dictation switch, then sends the list', async () => {
     const r = agentRig();

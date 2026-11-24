@@ -39,7 +39,13 @@ const turn = (md: string, citations: unknown[], o: Partial<AgentTurnView> = {}):
     ...o,
   }) as AgentTurnView;
 const cites = [
-  { n: 1, callId: 'c-00000001', workspace: sales, deepLink: LINK },
+  {
+    n: 1,
+    callId: 'c-00000001',
+    workspace: sales,
+    deepLink: LINK,
+    workspaceHost: 'sales.cloud.databricks.test',
+  },
   { n: 2, callId: 'c-00000002', workspace: fin },
 ];
 const click = (el: Element | null, init: MouseEventInit = {}) =>
@@ -170,6 +176,24 @@ describe('citation markers', () => {
     expect(checked?.summary?.citations).toHaveLength(2);
     const { el } = await render(card(checked as AgentTurnView));
     expect(el.querySelectorAll('[data-agent-cite]')).toHaveLength(2);
+  });
+
+  it('[L1] a link of another host, or with no host, is no link', async () => {
+    const bad = [
+      { n: 1, callId: 'c-00000001', workspace: sales, deepLink: LINK },
+      {
+        n: 2,
+        callId: 'c-00000002',
+        workspace: fin,
+        deepLink: 'https://evil.example/x',
+        workspaceHost: 'sales.cloud.databricks.test',
+      },
+    ];
+    const { el } = await render(card(turn('Sales [1] and finance [2].', bad)));
+    for (const n of [1, 2]) {
+      const chip = el.querySelector(`[data-agent-cite="${n}"]`) as HTMLElement;
+      expect(chip.hasAttribute('aria-describedby'), String(n)).toBe(false);
+    }
   });
 
   it('[M2] a chip with a link says how to open it, and Shift+Enter opens it once', async () => {

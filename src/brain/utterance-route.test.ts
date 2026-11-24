@@ -279,10 +279,7 @@ describe('utterance route (#59)', () => {
       .filter(([cmd]) => cmd === 'model_invoke')
       .map(([, a]) => (a as { args: { deadlineMs?: number; request: { model?: string } } }).args);
     expect(sent.map((a) => a.deadlineMs)).toEqual([1500, undefined]);
-    expect(sent.map((a) => a.request.model)).toEqual([
-      'system.ai.claude-haiku-5-5',
-      'system.ai.claude-haiku-5-5',
-    ]);
+    expect(sent.map((a) => a.request.model)).toEqual([undefined, undefined]);
   });
 
   it('[ADR 0113] a remember order is not pasted, not routed and not sent to the model', async () => {

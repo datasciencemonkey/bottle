@@ -5,14 +5,14 @@
  * model rewrite that passes one exact rule (`modelTextGrounded`):
  * - The router input is the pre-pass text (`cleanup-prepass.ts`).
  * - Only a dictation call has the deadline. When it passes, the pre-pass text is used at once,
- *   with no retry. A late reply changes nothing. A ⌥G ask, a session capture and a command keep
- *   the plain router step.
+ *   with no retry. A late reply changes nothing. A ⌥G ask and a session capture make no router
+ *   model call: the local heuristic and the injection guard decide (M1, RTR-14).
  * - The model `cleaned_text` is pasted only if its word sequence equals the pre-pass word sequence
  *   (see `modelTextGrounded`). Any other word added, dropped, reordered or changed gives the
  *   pre-pass text. A model text with an injection pattern also gives the pre-pass text.
  * - A ⌥G ask sends the pre-pass text, never the model text (`askText`, RTR-17a, ADR 0122).
- * - With `cleanDictation()` false the raw `text.trim()` is used, as before ADR 0122. The pre-pass
- *   and the model `cleaned_text` are both skipped.
+ * - With `cleanDictation()` false the raw `text.trim()` is used and NO model call is made (H2).
+ *   The pre-pass and the model `cleaned_text` are both skipped.
  *
  * It never logs text.
  */
@@ -42,10 +42,7 @@ const systemTimer: DeadlineTimer = {
 };
 
 export interface DictationCleanupConfig {
-  /**
-   * The "Clean up dictation" setting (default true). TODO(integration): the contract lane adds
-   * `cleanDictation`; the integration step passes a reader of the real setting here.
-   */
+  /** The "Clean up dictation" setting (default true). Off: no model call at all (H2). */
   cleanDictation?: () => boolean;
   /** A lower deadline for tests. It is never above `DICTATION_CLEANUP_DEADLINE_MS`. */
   deadlineMs?: number;
@@ -158,13 +155,14 @@ export function withDictationCleanup(
       input: RouterInput,
       opts: RouteOptions,
     ): Promise<RouterDecision> {
-      // An ask, a session capture and a command keep the plain router step.
-      if (!opts.dictation) return deps.route(text, mogId, input, opts);
+      // H2: with the switch off, no model call. The local heuristic and the injection guard decide.
       if (!cleanOn()) {
-        const decision = await deps.route(text, mogId, input, opts);
-        return { ...decision, cleaned_text: text.trim() };
+        return applyInjectionGuard(offlineDecision(text.trim()), text).decision;
       }
       const pre = safePrepass(text);
+      // M1: a ⌥G ask and a session capture never wait for the router model. The ask sends the
+      // pre-pass text anyway. The local injection guard still gives the RTR-14 warning.
+      if (!opts.dictation) return applyInjectionGuard(offlineDecision(pre), text).decision;
       let cancel: () => void = () => undefined;
       const deadline = new Promise<Raced>((resolve) => {
         cancel = timer.start(deadlineMs, () => resolve({ kind: 'deadline' }));

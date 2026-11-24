@@ -264,8 +264,8 @@ describe('submit', () => {
   it('[R-9] passes the mode and the host-minted Ask ticket of the chip click', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
-    await r.client.submit(turn('Plain question'), 'ask_others', 'ticket-1');
-    expect(r.calls[0]).toBe('submit:ask_others:op:ticket');
+    await r.client.submit(turn('Plain question'), 'ask', 'ticket-1');
+    expect(r.calls[0]).toBe('submit:ask:op:ticket');
   });
 
   it('[AC-2a.2] two calls show as two call rows with "n of N"', async () => {
@@ -683,10 +683,7 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
   });
 
   it.each([
-    [
-      'agent_profile_unsupported',
-      'The orchestrator model is not available in Sales. Asked Sales only.',
-    ],
+    ['agent_profile_unsupported', 'No home workspace is set.'],
     ['agent_not_eligible', 'The orchestrator model is not available in Sales. Asked Sales only.'],
     ['agent_signed_out', 'Your sign-in to Sales expired. Asked Sales only.'],
     ['agent_session_unavailable', 'The agent could not run. Asked Sales only.'],
@@ -707,13 +704,13 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
 });
 
 describe('needs you, and the session events', () => {
-  it('a signed-out end keeps the turn as `needs_you` with its question, and does not fall back', async () => {
+  it('a signed-out end keeps the turn as `needs_you` with its question, and falls back to direct (L3)', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'signed_out', calls: 0 });
     await r.settle();
-    expect(r.directs).toEqual([]);
+    expect(r.directs).toHaveLength(1);
     expect(r.client.panel().earlier[0]).toMatchObject({ state: 'needs_you', question: Q });
     expect(r.client.panel().earlier[0]?.notice).toMatch(/sign-in to Sales expired/);
   });
@@ -746,13 +743,17 @@ describe('needs you, and the session events', () => {
     },
   );
 
-  it('a crash keeps the failed turn on screen until the next session starts', async () => {
+  it('a session end with an unlisted reason keeps the failed turn on screen until the next session starts', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
     await r.settle();
-    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'crashed' });
+    r.client.onSessionEvent({
+      kind: 'ended',
+      sessionId: 'd'.repeat(32),
+      reason: 'unlisted' as never,
+    });
     expect(r.client.panel().earlier).toHaveLength(1);
     r.client.onSessionEvent({ kind: 'started', sessionId: 'f'.repeat(32) });
     expect(r.client.panel().earlier).toEqual([]);
@@ -844,7 +845,7 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     },
   );
 
-  it.each(['lockdown', 'refusals', 'session_ended', 'signed_out', 'not_eligible'] as const)(
+  it.each(['refusals', 'session_ended'] as const)(
     '[H1] [L4] a %s end before any call asks home never',
     async (outcome) => {
       const r = rig();
@@ -856,22 +857,16 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     },
   );
 
-  it('[H2] an ask_others turn that ends before any call shows the notice and asks home no more', async () => {
+  it('[L3] a signed_out end before any call falls back to direct with the sign-in notice', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
-    await r.client.submit(turn('Plain?'), 'ask_others', 't');
-    r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 0 });
+    await r.client.submit(turn('Plain?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'signed_out', calls: 0 });
     await r.settle();
-    expect(r.directs).toEqual([]);
-    expect(r.client.panel().earlier[0]?.notice).toBe('The agent could not run.');
-  });
-
-  it('[H2] a refused ask_others submit shows only a note', async () => {
-    const r = rig();
-    r.script.submit.push({ error: 'agent_not_eligible' });
-    await r.client.submit(turn('Plain?'), 'ask_others', 't');
-    expect(r.directs).toEqual([]);
-    expect(r.notes).toEqual(['The orchestrator model is not available in Sales.']);
+    expect(r.directs).toHaveLength(1);
+    expect(r.client.panel().earlier[0]?.notice).toBe(
+      'Your sign-in to Sales expired. Asked Sales only.',
+    );
   });
 
   it('[H3] a call that ends after its turn ended updates its row only, never the state', async () => {
@@ -897,13 +892,17 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     expect(p.earlier[0]?.parts).toHaveLength(1);
   });
 
-  it('[M1] clear() forgets what a crash left on screen', async () => {
+  it('[M1] clear() forgets what an unlisted session end left on screen', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
     await r.settle();
-    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'crashed' });
+    r.client.onSessionEvent({
+      kind: 'ended',
+      sessionId: 'd'.repeat(32),
+      reason: 'unlisted' as never,
+    });
     expect(r.client.panel().earlier).toHaveLength(1);
     r.client.clear();
     expect(r.client.panel().earlier).toEqual([]);
@@ -965,7 +964,7 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
     await r.settle();
-    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'crashed' });
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'idle' });
     r.script.session = sessionOf({ state: 'none', turns: 0 });
     await r.client.newSession();
     expect(r.client.panel().earlier).toEqual([]);

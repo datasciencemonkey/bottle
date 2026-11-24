@@ -162,13 +162,8 @@ export function cardChips(t: AgentTurnView): ChipView[] {
 export type FallbackWhy =
   'no_home' | 'signed_out' | 'no_model' | 'unreachable' | 'timeout' | 'offline' | 'failed';
 
-export function fallbackNotice(
-  why: FallbackWhy,
-  ws: { agent: string; home: string },
-  /** False for a turn that asked home already, so the line says no more. */
-  askedHome = true,
-): string {
-  const asked = askedHome ? ` Asked ${ws.home} only.` : '';
+export function fallbackNotice(why: FallbackWhy, ws: { agent: string; home: string }): string {
+  const asked = ` Asked ${ws.home} only.`;
   switch (why) {
     case 'no_home':
       return 'No home workspace is set.';
@@ -205,6 +200,7 @@ export function whyOfStatus(s: Pick<OrchestratorStatus, 'state'> | undefined): F
 export function whyOfRefusal(code: string): FallbackWhy | undefined {
   switch (code) {
     case 'agent_profile_unsupported':
+      return 'no_home';
     case 'agent_not_eligible':
       return 'no_model';
     case 'agent_signed_out':
@@ -232,8 +228,11 @@ export function whyOfOutcome(outcome: string): FallbackWhy | undefined {
       return 'offline';
     case 'failed':
       return 'failed';
-    // A session end (New session, Wipe, quit, a setting change) and a lockdown or refusals stop
-    // are never a reason to ask home: nothing falls back (AC-2a.11 names timeout, offline, failed).
+    // The sign-in expired: the turn falls back to direct, with the sign-in notice.
+    case 'signed_out':
+      return 'signed_out';
+    // A session end (New session, Wipe, quit, a setting change) and a refusals stop are never a
+    // reason to ask home: nothing falls back.
     default:
       return undefined;
   }

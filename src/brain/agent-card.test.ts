@@ -162,11 +162,10 @@ describe('notices', () => {
     expect(whyOfRefusal('ask_not_approved')).toBeUndefined();
     expect(whyOfOutcome('answered')).toBeUndefined();
     expect(whyOfOutcome('stopped')).toBeUndefined();
-    expect(whyOfOutcome('signed_out')).toBeUndefined();
-    expect(whyOfOutcome('lockdown')).toBeUndefined();
+    expect(whyOfOutcome('signed_out')).toBe('signed_out');
     expect(whyOfOutcome('refusals')).toBeUndefined();
     expect(whyOfOutcome('session_ended')).toBeUndefined();
-    expect(whyOfOutcome('not_eligible')).toBeUndefined();
+    expect(whyOfRefusal('agent_profile_unsupported')).toBe('no_home');
     expect(whyOfOutcome('failed')).toBe('failed');
   });
 });

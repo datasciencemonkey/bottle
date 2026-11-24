@@ -435,6 +435,32 @@ describe('the agent thread detail', () => {
     expect(d.querySelector('[data-agent-new-session]')).toBeNull();
   });
 
+  it('[M7] the summary of an agent turn in the hub draws its citations as [n] chips', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])], [], {
+      ...view({ session: SESSION }),
+      earlier: [
+        memTurn('e', {
+          parts: [],
+          summary: {
+            md: 'Sales is up [1] and finance is down [2].',
+            kind: 'combined',
+            workspaces: [sales, fin],
+            citations: [
+              { n: 1, callId: 'c-00000001', workspace: sales },
+              { n: 2, callId: 'c-00000002', workspace: fin },
+            ],
+          },
+        }),
+      ],
+      threads: [{ turnId: T('e'), threadId: THREAD_A }],
+    });
+    const earlier = q(el, '[data-agent-earlier]');
+    expect(
+      [...(earlier?.querySelectorAll('[data-agent-cite]') ?? [])].map((c) => c.textContent),
+    ).toEqual(['1', '2']);
+  });
+
   it('a thread of the live session shows the session line and New session', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a')])], [], {

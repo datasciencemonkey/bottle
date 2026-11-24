@@ -56,7 +56,13 @@ import {
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
-import { createAgentClient, ipcAgentApi, uuidOfTurn, type AgentClient } from '../agent-run';
+import {
+  asTurnEvent,
+  createAgentClient,
+  ipcAgentApi,
+  uuidOfTurn,
+  type AgentClient,
+} from '../agent-run';
 import { wireOrchestrator, ipcOrchestratorDeps } from '../orchestrator';
 import { createAskRouter, createFollowUpWindow, threadReplyMog } from '../agent-route';
 import {
@@ -101,7 +107,6 @@ import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
-import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
@@ -127,13 +132,12 @@ export interface BrainComponentEntry {
   readonly factory: () => unknown;
 }
 
-/** T1..T15 in 4.3 table order. */
+/** T1..T15 in 4.3 table order. T5 (CleanupProvider) is removed: `withDictationCleanup` runs. */
 export const BRAIN_COMPONENTS = [
   { id: 'T1', name: 'MogManager', factory: () => createMogManager() },
   { id: 'T2', name: 'OperationTracker', factory: () => createOperationTracker() },
   { id: 'T3', name: 'CapturePolicy', factory: () => createCapturePolicy() },
   { id: 'T4', name: 'SttProvider', factory: () => createSttProvider() },
-  { id: 'T5', name: 'CleanupProvider', factory: () => createCleanupProvider() },
   { id: 'T6', name: 'RouterContextGate', factory: () => createRouterContextGate() },
   { id: 'T7', name: 'ProfileService', factory: () => createProfileService() },
   { id: 'T8', name: 'GenieBridge', factory: () => createGenieBridge() },
@@ -473,12 +477,9 @@ export function startBrain(): Brain {
     const routeNames = () => {
       const cat = workspaces.catalog();
       const home = cat.find((c) => c.isHome);
-      const run = workspaces.last()?.agent.runProfile;
-      const agent = (run ? cat.find((c) => c.profile === run) : undefined) ?? home;
-      return {
-        agent: agent?.name ?? 'your home workspace',
-        home: home?.name ?? 'your home workspace',
-      };
+      // ADR 0122: the orchestrator runs on the home workspace, always.
+      const name = home?.name ?? 'your home workspace';
+      return { agent: name, home: name };
     };
     /** A one-line pop-up (queue full, "Not sent."): it takes the card and waits for the hold gate. */
     const showNote = (mogId: MogId, text: string) => {
@@ -565,7 +566,12 @@ export function startBrain(): Brain {
       void hubRef.current?.push();
     };
     agentClear.fence = () => agentClient.fence();
-    bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
+    bus.on(EVENTS['agent.turn'].name, (p) => {
+      agentClient.onTurnEvent(p);
+      // M3: a turn that ends failed, signed out or offline may mean the model is not ready.
+      const e = asTurnEvent(p);
+      if (e?.kind === 'ended') orchestrator.turnEnded(e.outcome);
+    });
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({
       context: () => ({ orchestrator: orchestrator.status() }),
