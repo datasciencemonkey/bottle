@@ -1309,6 +1309,18 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     expect(r.history).toEqual([]);
   });
 
+  it('[L-1j] a turn that starts during the remote deletes keeps its row', async () => {
+    const r = rig({ real: true });
+    const lift = r.client.fence();
+    // The local wipe worked: clear() ends the fence, the remote deletes still run.
+    r.client.clear();
+    await endTurn(r, T1, 'During remote?');
+    await r.settle();
+    lift();
+    await r.settle();
+    expect(r.rows).toEqual(['During remote?']);
+  });
+
   it('[L-1d] a lift does not undo a Wipe fence of the core that came meanwhile', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));

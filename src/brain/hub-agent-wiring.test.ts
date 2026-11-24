@@ -179,6 +179,47 @@ describe('hub Agent panel wiring', () => {
     }
   });
 
+  it('[L-1] after the local wipe the timer stays quiet and the second clear is skipped', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      let release!: () => void;
+      const flow = {
+        dialog: () => ({}) as never,
+        confirm: async (_s: unknown, _a: unknown, onLocal?: () => void) => {
+          onLocal?.();
+          await new Promise<void>((res) => (release = res));
+          return {} as never;
+        },
+      };
+      const p = clearingAgentPanel(
+        flow,
+        () => void calls.push('clear'),
+        () => {
+          calls.push('fence');
+          return () => void calls.push('lift');
+        },
+        () => void calls.push('fault'),
+        1000,
+      ).confirm('everything', true);
+      await vi.advanceTimersByTimeAsync(5000);
+      release();
+      await p;
+      expect(calls).toEqual(['fence', 'clear']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[L-1] a flow that never reports the local result is cleared once at the end', async () => {
+    const calls: string[] = [];
+    await clearingAgentPanel(
+      { dialog: () => ({}) as never, confirm: async () => ({}) as never },
+      () => void calls.push('clear'),
+    ).confirm('everything', false);
+    expect(calls).toEqual(['clear']);
+  });
+
   it('[L-1] one Wipe at a time: a second confirm waits for the first', async () => {
     const calls: string[] = [];
     let release!: () => void;

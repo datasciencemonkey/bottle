@@ -136,3 +136,5 @@ second meaning, so it does not change.
   worked ends the fence for good, before the remote deletes. The flow runs one Wipe at a time, and
   a fence that holds for 2 min is lifted with a logged fault. Known limit: a turn that the panel
   forgot at a session end while the fence was up is still replayed when the local wipe failed.
+- The 120 s fence timeout has a trade-off. If the local `mem_wipe` hangs longer, the fence lifts and
+  a late row can survive the Wipe. This keeps the history from being blocked for good.

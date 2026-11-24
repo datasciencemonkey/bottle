@@ -17,10 +17,13 @@ import { onViewInput, type BrainBus } from './bus';
 import type { WipeScope } from '../shared/wipe-view';
 import type { WipeDialogDeps } from './wipe-wiring';
 
-/** A Wipe of any scope ends the agent session (`wipe.rs`): the panel content goes with it. */
-/** A Wipe that runs longer than this lifts the fence (the wipe has its own timers; a hang must not hold rows for ever). */
+/**
+ * A Wipe that runs longer than this lifts the fence. The local wipe has no timer of its own: a
+ * hang must not block the history for good. Known trade-off (ADR 0121): a late row can survive.
+ */
 export const WIPE_FENCE_TIMEOUT_MS = 120_000;
 
+/** A Wipe of any scope ends the agent session (`wipe.rs`): the panel content goes with it. */
 export function clearingAgentPanel(
   flow: WipeDialogDeps['flow'],
   clear: () => void,
@@ -40,11 +43,18 @@ export function clearingAgentPanel(
       lift?.();
       fault?.();
     }, timeoutMs);
+    let localDone = false;
     try {
       // The fence ends for good when the local wipe worked (`clear()`), before the remote
-      // deletes: a later throw must not replay rows into a wiped store.
-      const done = await flow.confirm(scope, alsoGenie, clear);
-      clear();
+      // deletes: a later throw must not replay rows into a wiped store, and the timer is over.
+      const done = await flow.confirm(scope, alsoGenie, () => {
+        localDone = true;
+        clearTimeout(timer);
+        clear();
+      });
+      // A flow that never reported the local result: clear now. Not twice: a turn that started
+      // during the remote deletes keeps its row.
+      if (!localDone) clear();
       return done;
     } catch (e) {
       lift?.();
