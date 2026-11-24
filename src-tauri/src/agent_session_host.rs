@@ -117,6 +117,27 @@ impl ShimProvider for DefaultShim {
     }
 }
 
+/// The shim command of the real guard: this executable with the shim argument, and the socket,
+/// the session and the secret in the environment (`guard::shim::env_pairs`).
+#[cfg(unix)]
+struct GuardShim {
+    socket: PathBuf,
+}
+
+#[cfg(unix)]
+impl ShimProvider for GuardShim {
+    fn launch(&self, session_id: &str, secret: &RunSecret) -> ShimLaunch {
+        ShimLaunch {
+            command: std::env::current_exe().unwrap_or_default(),
+            args: vec![SHIM_ARG.to_owned()],
+            env: mog_core::agent_run::guard::shim::env_pairs(&self.socket, session_id, secret)
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        }
+    }
+}
+
 /// No network source exists in Rust yet (the brain owns `net:status`): always online.
 struct AlwaysOnline;
 
@@ -244,6 +265,44 @@ pub fn config_in(dir: &std::path::Path) -> SessionConfig {
     }
 }
 
+/// Build the `ask_genie` guard (R2) on the one R8, the workspace gate and the brain events, start
+/// its socket under `dir`, and manage the guard and its [`ShimProvider`]. [`install`] takes them
+/// from managed state. If R8, the workspace host or the socket is missing, nothing is managed:
+/// the session host then has no guard and no session opens (the agent is closed, not open).
+#[cfg(unix)]
+pub fn install_guard(handle: &tauri::AppHandle<tauri::Wry>) {
+    use mog_core::agent_guard::AuditActionLog;
+    use mog_core::agent_run::guard::session_log::SessionUuidLog;
+    use mog_core::audit::{AuditLog, AuditRetention, MemoryAuditStore};
+
+    let (Some(mcp), Some(ws), Ok(dir)) = (
+        handle.try_state::<McpHost>(),
+        handle.try_state::<WorkspacesHost>(),
+        handle.path().app_local_data_dir(),
+    ) else {
+        return;
+    };
+    // TODO(#442): the SQLCipher audit store. Until then the entries of one run stay in memory.
+    let log = AuditActionLog::new(
+        AuditLog::new(MemoryAuditStore::default(), AuditRetention::default()),
+        Arc::new(SystemWallClock),
+    );
+    let guard = crate::agent_host::agent_guard(
+        mcp.transport(),
+        ws.gate(),
+        Arc::new(BrainEvents(handle.clone())),
+        Arc::new(SessionUuidLog(Arc::new(log))),
+    );
+    let Ok(socket) = guard.listen(&dir.join("agent")) else {
+        return;
+    };
+    let session_guard: Arc<dyn SessionGuard> = guard.clone();
+    handle.manage(guard);
+    handle.manage(session_guard);
+    let shim: Arc<dyn ShimProvider> = Arc::new(GuardShim { socket });
+    handle.manage(shim);
+}
+
 /// Build the session host and fill the managed [`AgentSessionHost`]. [`crate::cli_host::install`],
 /// [`crate::profiles_host::install`], [`crate::workspaces_host::install`] and
 /// [`crate::mcp_host::install`] run first. Without them, or without an app data folder, the host
@@ -311,6 +370,11 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
     // Wipe ends the session first (plan A3.7). The slot is managed by `consent_host`.
     if let Some(slot) = handle.try_state::<Arc<AgentWipeSlot>>() {
         slot.bind(session.clone());
+    }
+    // The third refusal of a turn interrupts it (ADR 0119).
+    #[cfg(unix)]
+    if let Some(g) = handle.try_state::<Arc<mog_core::agent_run::guard::AgentGuard>>() {
+        g.set_refusal_hook(session.refusal_hook());
     }
     let _ = host.inner.set(session);
 }

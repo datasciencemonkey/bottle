@@ -22,7 +22,7 @@ use mog_core::error::{CoreError, CoreResult};
 use mog_core::http_transport::rate_bucket::RateBucket;
 use mog_core::http_transport::{ProfileHosts, ReqwestHttpTransport, StubProfileHosts};
 use mog_core::ipc_gateway::GatewayComponents;
-use mog_core::mcp_transport::{McpCallComponent, ReqwestMcpTransport};
+use mog_core::mcp_transport::{McpCallComponent, McpTransport, ReqwestMcpTransport};
 use mog_core::profile_login::LoginVerifier;
 use mog_core::token_broker::{CliTokenBroker, ScimMe, TokenBroker};
 use mog_core::workspaces::{SignInSource, WorkspaceGate};
@@ -39,6 +39,8 @@ pub struct McpHost {
     component: McpCallComponent<Arc<ReqwestMcpTransport>>,
     /// The R6 of R8, for the W-06a check after a sign-in (#162, [`McpHost::login_verifier`]).
     broker: Arc<CliTokenBroker>,
+    /// The one R8, for the agent guard (slice 2a, [`McpHost::transport`]).
+    transport: Arc<ReqwestMcpTransport>,
     /// R6 holds R7 weakly (`bind_scim`), so the host keeps R7 alive.
     _scim: Arc<ReqwestHttpTransport>,
 }
@@ -99,8 +101,9 @@ pub fn build_with_gate(
     let r6 = broker.clone();
     let transport = Arc::new(ReqwestMcpTransport::new(hosts, broker, bucket)?);
     Ok(McpHost {
-        component: McpCallComponent::with_gate(transport, gate),
+        component: McpCallComponent::with_gate(transport.clone(), gate),
         broker: r6,
+        transport,
         _scim: scim,
     })
 }
@@ -120,6 +123,12 @@ impl McpHost {
     /// stays inside R6: callers get only `with_token` and `workspace_id`.
     pub fn token_broker(&self) -> Arc<dyn TokenBroker> {
         self.broker.clone()
+    }
+
+    /// The one R8 of the app, for the `ask_genie` guard (slice 2a). It is the same transport that
+    /// `mcp_call` uses, so the rate bucket and the workspace gate are shared.
+    pub fn transport(&self) -> Arc<dyn McpTransport> {
+        self.transport.clone()
     }
 
     /// R6 as the sign-in source of the workspace list (ADR 0117). It gives no token.

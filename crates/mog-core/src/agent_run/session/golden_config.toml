@@ -48,7 +48,7 @@ default_mode_request_user_input = false
 [mcp_servers.bottle]
 command = "/Applications/Bottle.app/Contents/MacOS/bottle"
 args = ["--agent-mcp-shim"]
-env_vars = ["BOTTLE_SHIM_SOCKET", "BOTTLE_SHIM_SECRET"]
+env_vars = ["BOTTLE_AGENT_SOCK", "BOTTLE_AGENT_SESSION", "BOTTLE_AGENT_SECRET"]
 enabled_tools = ["ask_genie"]
 required = true
 startup_timeout_sec = 30

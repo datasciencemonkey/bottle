@@ -323,7 +323,11 @@ mod tests {
             profile: "sales".into(),
             shim_command: PathBuf::from("/Applications/Bottle.app/Contents/MacOS/bottle"),
             shim_args: vec!["--agent-mcp-shim".into()],
-            shim_env_names: vec!["BOTTLE_SHIM_SOCKET".into(), "BOTTLE_SHIM_SECRET".into()],
+            shim_env_names: vec![
+                "BOTTLE_AGENT_SOCK".into(),
+                "BOTTLE_AGENT_SESSION".into(),
+                "BOTTLE_AGENT_SECRET".into(),
+            ],
         }
     }
 
@@ -379,7 +383,7 @@ mod tests {
         let got = config_toml(&spec()).unwrap();
         assert!(!got.contains("dapi") && !got.contains("Bearer"));
         // Only the names of the shim variables, never a value.
-        assert!(got.contains("BOTTLE_SHIM_SECRET"));
+        assert!(got.contains("BOTTLE_AGENT_SECRET"));
     }
 
     #[cfg(unix)]
@@ -434,7 +438,7 @@ mod tests {
             &vars,
             Path::new("/h/genie-home"),
             Some(Path::new("/opt/cli")),
-            &[("BOTTLE_SHIM_SECRET".into(), "ab".into())],
+            &[("BOTTLE_AGENT_SECRET".into(), "ab".into())],
         );
         let names: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
@@ -444,7 +448,7 @@ mod tests {
                 "HTTPS_PROXY",
                 "GENIE_HOME",
                 "PATH",
-                "BOTTLE_SHIM_SECRET"
+                "BOTTLE_AGENT_SECRET"
             ]
         );
         assert_eq!(

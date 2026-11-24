@@ -171,8 +171,8 @@ for line in sys.stdin:
     elif meth == "tools/call":
         cid = "c-" + uuid.uuid4().hex[:8]
         with open(LOG, "a") as f:
-            f.write(json.dumps({"callId": cid, "secret_env_forwarded": bool(os.environ.get("BOTTLE_SHIM_SECRET")),
-                                "socket_env_forwarded": bool(os.environ.get("BOTTLE_SHIM_SOCKET"))}) + "\n")
+            f.write(json.dumps({"callId": cid, "secret_env_forwarded": bool(os.environ.get("BOTTLE_AGENT_SECRET")),
+                                "socket_env_forwarded": bool(os.environ.get("BOTTLE_AGENT_SOCK"))}) + "\n")
         r = {"content": [{"type": "text", "text": json.dumps({"callId": cid, "workspace": "home", "answer": ANS})}]}
     else:
         r = None
@@ -255,7 +255,7 @@ def main() -> int:
     (home / "config.toml").write_text(cfg)
     env = {"HOME": str(Path.home()), "GENIE_HOME": str(home), "PATH": "/usr/bin:/bin" + (":" + str(Path(cli).parent) if cli else ""),
            "DATABRICKS_CONFIG_FILE": str(work / "empty.cfg"),
-           "BOTTLE_SHIM_SOCKET": str(work / "s.sock"), "BOTTLE_SHIM_SECRET": "00" * 32, "BOTTLE_SHIM_SESSION": "s" * 32,
+           "BOTTLE_AGENT_SOCK": str(work / "s.sock"), "BOTTLE_AGENT_SECRET": "00" * 32, "BOTTLE_AGENT_SESSION": "s" * 32,
            "HTTP_PROXY": f"http://127.0.0.1:{proxy_sock.getsockname()[1]}", "HTTPS_PROXY": f"http://127.0.0.1:{proxy_sock.getsockname()[1]}",
            "ALL_PROXY": f"http://127.0.0.1:{proxy_sock.getsockname()[1]}", "NO_PROXY": "127.0.0.1,localhost"}
     c = Client(genie, env, str(cwd))

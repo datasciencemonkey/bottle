@@ -6,6 +6,7 @@
 //! - [`ask`]: the ten `ask_genie` checks, in order, fail closed.
 //! - [`genie_poll`]: the Rust poll loop (G-POLL delays, 30 s cap).
 //! - [`receipt`]: receipts and text blocks (quarantine, D1 off).
+//! - [`session_log`]: the session id as a UUID, for the real audit log.
 //! - [`channel`], [`peer`] (unix): the app socket and its authentication.
 //! - [`shim`] (unix): the stdio MCP shim that Genie Code starts once per server process.
 //!
@@ -34,6 +35,7 @@ mod ledger;
 #[cfg(unix)]
 pub mod peer;
 pub mod receipt;
+pub mod session_log;
 #[cfg(unix)]
 pub mod shim;
 #[cfg(test)]

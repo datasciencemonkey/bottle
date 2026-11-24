@@ -411,6 +411,10 @@ pub fn run() {
             // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
             let _ = agent_host::install(handle);
             // Slice 2a: the one Genie Code session host, on T7, R5, R6 and the workspace store.
+            // The `ask_genie` guard, its socket and the shim command come first: the session host
+            // takes them from managed state, and without them no session opens.
+            #[cfg(unix)]
+            agent_session_host::install_guard(handle);
             agent_session_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
             for kind in startup_windows(demo) {

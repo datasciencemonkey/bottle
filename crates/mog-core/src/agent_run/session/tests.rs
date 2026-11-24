@@ -529,7 +529,7 @@ impl ShimProvider for Shim {
         ShimLaunch {
             command: PathBuf::from("/Applications/Bottle.app/bottle"),
             args: vec!["--agent-mcp-shim".into()],
-            env: vec![("BOTTLE_SHIM_SESSION".into(), session_id.into())],
+            env: vec![("BOTTLE_AGENT_SESSION".into(), session_id.into())],
         }
     }
 }
@@ -770,7 +770,7 @@ fn the_start_rewrites_genie_home_and_spawns_with_a_clean_argv_and_env() {
     let cfg = std::fs::read_to_string(r.cfg.home.join("config.toml")).unwrap();
     assert!(cfg.contains("approval_policy = \"never\""));
     assert!(cfg.contains("tool_timeout_sec = 600"));
-    assert!(cfg.contains("BOTTLE_SHIM_SESSION"));
+    assert!(cfg.contains("BOTTLE_AGENT_SESSION"));
     assert!(r.cfg.home.join("answer.schema.json").exists());
     assert_eq!(s.spec.args, vec!["app-server".to_owned()]);
     assert_eq!(s.spec.program, PathBuf::from("/fake/genie"));
