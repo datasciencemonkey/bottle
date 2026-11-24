@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bottle: your Genie, ready</title>
+    <meta
+      name="description"
+      content="Bottle is a small floating Genie for your Mac. Hold a key and ask your governed data a question out loud. Answers come from Databricks Genie, with sources you can check."
+    />
+    <meta name="theme-color" content="#18202e" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top" aria-label="Bottle, back to top">
+          <img src="assets/mood-idle.webp" alt="" width="36" height="36" />
+          <span>Bottle</span>
+        </a>
+        <nav aria-label="Sections">
+          <ul class="nav-links">
+            <li><a href="#keys">Three keys</a></li>
+            <li><a href="#flow">How it works</a></li>
+            <li><a href="#trust">Trust</a></li>
+            <li><a href="#genie">Built on Genie</a></li>
+            <li><a href="#next">Roadmap</a></li>
+          </ul>
+        </nav>
+        <a class="btn btn-small" href="https://github.com/datasciencemonkey/bottle/releases/latest">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15V3" />
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+          Download
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Hero -->
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <h1 id="hero-title">Your Genie,<br />ready.</h1>
+            <p class="lede">
+              Bottle puts a small floating Genie on your Mac. Hold a key and ask your company's data
+              a question out loud. The answer comes from Databricks Genie, with sources you can
+              check.
+            </p>
+            <div class="cta-row">
+              <a
+                class="btn btn-primary"
+                href="https://github.com/datasciencemonkey/bottle/releases/latest"
+                data-cheer
+              >
+                <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 15V3" />
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <path d="m7 10 5 5 5-5" />
+                </svg>
+                Download for macOS
+              </a>
+              <a class="btn btn-ghost" href="https://github.com/datasciencemonkey/bottle">
+                View on GitHub
+              </a>
+            </div>
+            <p class="fine">
+              For macOS 14.4 or later. Needs a Databricks workspace with Genie and the Databricks
+              CLI. Windows and Linux: work in progress.
+            </p>
+          </div>
+
+          <div
+            class="hero-lamp"
+            role="img"
+            aria-label="The Bottle mascot: a small genie rising out of a red lamp, with a gold spark above it"
+          >
+            <div class="lamp" data-lamp>
+              <div class="lamp-halo"></div>
+              <img class="lamp-back" src="assets/lamp-back.webp" alt="" width="400" height="400" />
+              <div class="lamp-genie">
+                <div class="genie-float">
+                  <img
+                    class="genie genie-idle"
+                    src="assets/genie-idle.webp"
+                    alt=""
+                    width="400"
+                    height="400"
+                  />
+                  <img
+                    class="genie genie-cheer"
+                    src="assets/genie-success.webp"
+                    alt=""
+                    width="400"
+                    height="400"
+                  />
+                  <i class="lid lid-l"></i><i class="lid lid-r"></i>
+                </div>
+              </div>
+              <img
+                class="lamp-front"
+                src="assets/lamp-front.webp"
+                alt=""
+                width="400"
+                height="400"
+              />
+              <img class="spark" src="assets/spark.webp" alt="" width="100" height="88" />
+            </div>
+          </div>
+        </div>
+
+        <!-- The product scene -->
+        <div class="wrap">
+          <figure class="scene-figure">
+            <div
+              class="scene-frame"
+              data-scene-frame
+              role="img"
+              aria-label="Illustration of Bottle on a Mac desktop. The person holds Right Option and taps G, asks how weekly active customers changed in EMEA versus North America last quarter, and an answer card appears next to the lamp. It combines answers from two workspaces in a table, with citation one and citation two, and an Open in Databricks link."
+            >
+              <div class="scene" data-scene data-step="answer" aria-hidden="true">
+                <div class="wallpaper"></div>
+
+                <div class="menubar">
+                  <b>Docs</b><span>File</span><span>Edit</span><span>View</span><span>Format</span>
+                  <span class="mb-right">Tue 9:41</span>
+                </div>
+
+                <div class="win doc">
+                  <div class="win-bar">
+                    <span class="lights"><i></i><i></i><i></i></span>
+                    <span class="win-title">Q3 business review</span>
+                  </div>
+                  <div class="doc-tools">
+                    <i style="width: 54px"></i><i style="width: 30px"></i><i style="width: 30px"></i
+                    ><b></b><i style="width: 70px"></i><i style="width: 40px"></i>
+                  </div>
+                  <div class="doc-body">
+                    <div class="doc-h">Q3 business review</div>
+                    <div class="bars">
+                      <i style="width: 92%"></i><i style="width: 84%"></i><i style="width: 60%"></i>
+                    </div>
+                    <div class="doc-h2">Regional growth</div>
+                    <div class="doc-line">
+                      Weekly active customers, EMEA vs North America:<span class="caret"></span>
+                    </div>
+                    <div class="bars">
+                      <i style="width: 88%"></i><i style="width: 70%"></i><i style="width: 78%"></i>
+                    </div>
+                    <div class="doc-chart">
+                      <i style="height: 38%"></i><i style="height: 52%"></i
+                      ><i style="height: 46%"></i><i style="height: 64%"></i
+                      ><i style="height: 58%"></i><i style="height: 72%"></i
+                      ><i style="height: 80%"></i><i style="height: 76%"></i>
+                    </div>
+                    <div class="bars"><i style="width: 80%"></i><i style="width: 66%"></i></div>
+                  </div>
+                </div>
+
+                <!-- Keystroke display -->
+                <div class="hud" data-keys="opt g">
+                  <span class="kc kc-opt" data-key="opt"
+                    ><small>&#8997;</small><em>right option</em></span
+                  >
+                  <span class="hud-plus">+</span>
+                  <span class="kc kc-g" data-key="g">G</span>
+                  <span class="kc kc-esc" data-key="esc"><em>esc</em></span>
+                </div>
+
+                <!-- The MOG -->
+                <div class="mog">
+                  <img class="m m-idle" src="assets/mood-idle.webp" alt="" />
+                  <img class="m m-listening" src="assets/mood-listening.webp" alt="" />
+                  <img class="m m-processing" src="assets/mood-processing.webp" alt="" />
+                  <img class="m m-answering" src="assets/mood-answering.webp" alt="" />
+                </div>
+
+                <!-- The pill: the full question -->
+                <div class="pill">
+                  <div class="pill-status">
+                    <span class="st st-listen"><i class="dot"></i>Listening</span>
+                    <span class="st st-ask"><i class="dot"></i>Ask Genie</span>
+                    <span class="st st-wait"
+                      ><i class="dot"></i>Asking 2 workspaces<span class="ell"
+                        ><i>.</i><i>.</i><i>.</i></span
+                      ></span
+                    >
+                  </div>
+                  <div class="pill-q" data-question>
+                    How did weekly active customers change in EMEA vs North America last quarter?
+                  </div>
+                </div>
+
+                <!-- The answer card -->
+                <div class="card">
+                  <div class="card-hd">
+                    <span class="card-from">Answer from 2 workspaces</span>
+                    <span class="card-open"
+                      >Open in Databricks
+                      <svg class="ic" viewBox="0 0 24 24">
+                        <path d="M15 3h6v6" />
+                        <path d="M10 14 21 3" />
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg
+                    ></span>
+                  </div>
+                  <div class="card-q">
+                    Weekly active customers, EMEA vs North America, last quarter
+                  </div>
+                  <p class="card-a">
+                    Weekly active customers grew in both regions. EMEA grew faster
+                    <span class="cite" data-cite="1">1</span>, while North America stayed the larger
+                    base <span class="cite" data-cite="2">2</span>.
+                  </p>
+                  <table class="card-t">
+                    <thead>
+                      <tr>
+                        <th>Region</th>
+                        <th>Q2</th>
+                        <th>Q3</th>
+                        <th>Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>EMEA</td>
+                        <td>41.2k</td>
+                        <td>46.9k</td>
+                        <td class="up">+13.8%</td>
+                      </tr>
+                      <tr>
+                        <td>North America</td>
+                        <td>88.5k</td>
+                        <td>93.1k</td>
+                        <td class="up">+5.2%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="card-src">
+                    <span class="src" data-src="1"
+                      ><b>1</b>sales-emea<small>Full answer</small></span
+                    >
+                    <span class="src" data-src="2"><b>2</b>sales-na<small>Full answer</small></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <figcaption class="scene-cap">
+              <span
+                >Hold Right <span aria-hidden="true">&#8997;</span><span class="vh">Option</span>,
+                tap G, ask. Illustrative data.</span
+              >
+              <button class="scene-toggle" type="button" data-scene-toggle aria-pressed="false">
+                <svg class="ic ic-pause" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                </svg>
+                <svg class="ic ic-play" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 4v16l13-8z" />
+                </svg>
+                <span data-scene-label>Pause the demo</span>
+              </button>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- POV -->
+      <section class="pov" aria-labelledby="pov-title">
+        <div class="wrap pov-grid">
+          <h2 id="pov-title">
+            The answers already live in Databricks. The questions come up everywhere else.
+          </h2>
+          <div class="pov-copy">
+            <p>
+              A number comes up in a meeting. A question lands in a chat. A doubt appears halfway
+              through a document. Leaving to open a browser tab costs you the moment.
+            </p>
+            <p>
+              Bottle keeps the moment. It brings Databricks Genie to the app you are already in,
+              asks it in every workspace you switch on, and hands back one answer you can verify.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Three keys -->
+      <section class="keys" id="keys" aria-labelledby="keys-title">
+        <div class="wrap">
+          <div class="sec-head">
+            <h2 id="keys-title">Three keys. You always know what happens.</h2>
+            <p>The key decides, so Bottle never guesses whether you meant to type or to ask.</p>
+          </div>
+
+          <ol class="key-rows">
+            <li class="key-row" tabindex="0">
+              <div class="combo" aria-hidden="true">
+                <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
+              </div>
+              <div class="key-main">
+                <h3>Dictate anywhere</h3>
+                <p>
+                  Hold Right <span aria-hidden="true">&#8997;</span
+                  ><span class="vh">Option</span> and speak. Let go, and your words land at the
+                  cursor in a chat, a doc, a notebook or an email.
+                </p>
+              </div>
+              <ul class="key-facts">
+                <li>Speech-to-text runs on your Mac (Parakeet)</li>
+                <li>Cleanup removes filler words and keeps numbers exact</li>
+                <li>Databricks transcription if you choose it</li>
+              </ul>
+            </li>
+
+            <li class="key-row key-row-hero" tabindex="0">
+              <div class="combo" aria-hidden="true">
+                <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
+                <span class="combo-plus">+</span>
+                <span class="kc kc-lg kc-letter tap">G</span>
+              </div>
+              <div class="key-main">
+                <h3>Ask Genie</h3>
+                <p>
+                  Hold Right <span aria-hidden="true">&#8997;</span><span class="vh">Option</span>,
+                  tap G and ask out loud. Nothing is typed. Your question goes to Genie in each
+                  workspace you switched on.
+                </p>
+              </div>
+              <ul class="key-facts">
+                <li>One workspace: the answer exactly as Genie gave it</li>
+                <li>
+                  Several: one answer with <span class="cite">1</span>
+                  <span class="cite">2</span> citations
+                </li>
+                <li>Open in Databricks on every answer</li>
+              </ul>
+            </li>
+
+            <li class="key-row" tabindex="0">
+              <div class="combo" aria-hidden="true">
+                <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
+                <span class="combo-plus">+</span>
+                <span class="kc kc-lg kc-letter tap">R</span>
+              </div>
+              <div class="key-main">
+                <h3>Record a call</h3>
+                <p>
+                  Right <span aria-hidden="true">&#8997;</span><span class="vh">Option</span> + R
+                  records your mic and the other side of the call to your Unity Catalog volume, then
+                  writes a transcript and notes.
+                </p>
+              </div>
+              <ul class="key-facts">
+                <li>Off until you turn it on in Settings</li>
+                <li>Your volume, under your governance</li>
+                <li>Transcript and notes through your AI Gateway</li>
+              </ul>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- How it works -->
+      <section class="flow" id="flow" aria-labelledby="flow-title">
+        <div class="wrap">
+          <div class="sec-head">
+            <h2 id="flow-title">From your voice to a cited answer</h2>
+            <p>Local where it can be. Governed where it must be.</p>
+          </div>
+
+          <div class="lanes">
+            <div class="lane lane-mac" aria-hidden="true"></div>
+            <div class="lane lane-db" aria-hidden="true"></div>
+            <p class="lane-label lane-label-mac">
+              <b>On your Mac</b>
+              The mic, speech-to-text, your tokens and your history stay in the Rust core.
+            </p>
+            <p class="lane-label lane-label-db">
+              <b>In your Databricks</b>
+              Models run on your AI Gateway. Genie answers under Unity Catalog permissions.
+            </p>
+            <svg
+              class="lane-path"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M10 27 L30 27 C40 27 40 73 50 73 L70 73 C80 73 80 27 90 27"
+                vector-effect="non-scaling-stroke"
+              />
+              <path
+                class="flowing"
+                d="M10 27 L30 27 C40 27 40 73 50 73 L70 73 C80 73 80 27 90 27"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+            <ol class="steps">
+              <li class="step on-mac" style="--col: 1">
+                <span class="where">On your Mac</span>
+                <span class="n">1</span>
+                <h3>You speak</h3>
+                <p>
+                  Hold Right <span aria-hidden="true">&#8997;</span><span class="vh">Option</span>,
+                  tap G. The Rust core owns the mic.
+                </p>
+              </li>
+              <li class="step on-mac" style="--col: 2">
+                <span class="where">On your Mac</span>
+                <span class="n">2</span>
+                <h3>Speech becomes text</h3>
+                <p>Parakeet runs on the device. Your audio stays put.</p>
+              </li>
+              <li class="step on-db" style="--col: 3">
+                <span class="where">In your Databricks</span>
+                <span class="n">3</span>
+                <h3>The orchestrator plans</h3>
+                <p>
+                  A <code>system.ai</code> model on your AI Gateway, with <code>store: false</code>.
+                  Its only tool: ask Genie.
+                </p>
+              </li>
+              <li class="step on-db" style="--col: 4">
+                <span class="where">In your Databricks</span>
+                <span class="n">4</span>
+                <h3>Genie answers in each workspace</h3>
+                <p>Genie One, with your own permissions, in the workspaces you switched on.</p>
+                <span class="ws"><i>sales-emea</i><i>sales-na</i></span>
+              </li>
+              <li class="step on-mac" style="--col: 5">
+                <span class="where">On your Mac</span>
+                <span class="n">5</span>
+                <h3>One answer you can check</h3>
+                <p>Citations, tables, Open in Databricks. Saved to encrypted local history.</p>
+              </li>
+            </ol>
+          </div>
+          <p class="flow-note">
+            Model not reachable? Bottle asks Genie on your home workspace directly and tells you so.
+            Dictation keeps working offline.
+          </p>
+        </div>
+      </section>
+
+      <!-- Trust -->
+      <section class="trust" id="trust" aria-labelledby="trust-title">
+        <div class="wrap trust-grid">
+          <div class="trust-intro">
+            <h2 id="trust-title">Built for people who handle real data</h2>
+            <p>
+              The safeguards are in the architecture, not in a policy page. Bottle can only do what
+              your Databricks sign-in already allows.
+            </p>
+            <div class="receipt" aria-label="Example receipt of one ask, with illustrative values">
+              <div class="receipt-hd">
+                <img src="assets/mood-success.webp" alt="" width="40" height="40" />
+                <div>
+                  <b>What was asked where</b>
+                  <small>Receipt for one ask</small>
+                </div>
+              </div>
+              <dl>
+                <div>
+                  <dt>Workspaces</dt>
+                  <dd>sales-emea, sales-na</dd>
+                </div>
+                <div>
+                  <dt>Combine across workspaces</dt>
+                  <dd class="on">On</dd>
+                </div>
+                <div>
+                  <dt>Tool calls</dt>
+                  <dd><code>ask_genie</code> &#215; 2</dd>
+                </div>
+                <div>
+                  <dt>Model</dt>
+                  <dd><code>system.ai</code>, store: false</dd>
+                </div>
+                <div>
+                  <dt>Withheld replies</dt>
+                  <dd>0</dd>
+                </div>
+              </dl>
+              <small class="receipt-note">Illustrative values</small>
+            </div>
+          </div>
+
+          <div class="trust-groups">
+            <div class="tgroup">
+              <h3>Your sign-in stays yours</h3>
+              <dl>
+                <div>
+                  <dt>Nothing new to log in to</dt>
+                  <dd>
+                    Tokens come from the official Databricks CLI (OAuth). They live in memory only
+                    and never reach the UI or the model.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Citations you can trust</dt>
+                  <dd>
+                    Every link is checked against your own workspace hosts. Anything else shows as
+                    plain text.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Small and native</dt>
+                  <dd>Tauri 2 with a Rust core. A light desktop app, not a browser tab.</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="tgroup">
+              <h3>The model is on a short leash</h3>
+              <dl>
+                <div>
+                  <dt>One tool, no shell</dt>
+                  <dd>
+                    The model can call exactly one tool, ask Genie, through a Rust guard. No shell,
+                    no web access. Hard limits on steps, time and calls.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Prompt-injection quarantine</dt>
+                  <dd>
+                    Genie replies are fenced before the model reads them. A reply that tries to
+                    steer the model is withheld and shown to you.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Governed models only</dt>
+                  <dd>
+                    Every model call goes through your Unity AI Gateway to
+                    <code>system.ai</code> models, with nothing stored.
+                  </dd>
+                </div>
+              </dl>
+            </div>
+            <div class="tgroup">
+              <h3>Your data stays in your house</h3>
+              <dl>
+                <div>
+                  <dt>You decide what combines</dt>
+                  <dd>
+                    With Combine across workspaces off, one workspace's answer never reaches
+                    another's context. A receipt shows what was asked where.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Private speech by default</dt>
+                  <dd>Dictation runs on the device. No audio leaves your Mac unless you choose.</dd>
+                </div>
+                <div>
+                  <dt>Encrypted local history</dt>
+                  <dd>
+                    Conversations live in SQLCipher, with the key in the macOS keychain. Wipe clears
+                    everything.
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Built on Genie -->
+      <section class="built" id="genie" aria-labelledby="genie-title">
+        <div class="wrap built-grid">
+          <div class="built-copy">
+            <h2 id="genie-title">Bottle asks. Databricks Genie answers.</h2>
+            <p>
+              Bottle does not invent answers, copy your tables or run a server of its own. Every
+              answer comes from Databricks Genie, in your workspaces, under your permissions. Bottle
+              is the shortest path to it.
+            </p>
+            <p class="muted">
+              No new infrastructure, and no warehouse, job or cluster for Bottle to start.
+            </p>
+          </div>
+
+          <ol class="stack" aria-label="What Bottle is built on, from your Mac down to your data">
+            <li class="slab slab-bottle">
+              <b>Bottle</b>
+              <span>On your Mac: the keys, on-device speech, the lamp, encrypted history.</span>
+            </li>
+            <li class="slab">
+              <b>Databricks Genie</b>
+              <span>Genie One through MCP answers in each workspace, from governed data.</span>
+            </li>
+            <li class="slab">
+              <b>Unity AI Gateway</b>
+              <span
+                >The orchestrator and speech models: <code>system.ai</code>, nothing stored.</span
+              >
+            </li>
+            <li class="slab">
+              <b>Unity Catalog</b>
+              <span>Governance for the data behind every answer, and your recordings volume.</span>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Roadmap -->
+      <section class="next" id="next" aria-labelledby="next-title">
+        <div class="wrap next-grid">
+          <div class="sec-head">
+            <h2 id="next-title">Where we're going</h2>
+            <p>
+              Today Bottle helps you ask. Next, it helps your team remember. The know-how that makes
+              data useful is said in calls and lost when they end. Bottle will keep it, with your
+              approval.
+            </p>
+          </div>
+
+          <div class="wheel" aria-label="The know-how flywheel, planned">
+            <svg class="wheel-ring" viewBox="0 0 200 200" aria-hidden="true">
+              <circle cx="100" cy="100" r="78" />
+              <circle class="wheel-run" cx="100" cy="100" r="78" />
+            </svg>
+            <ol class="wheel-steps">
+              <li class="w1">
+                <b>Capture</b><span>Dictate, ask and record where the work happens</span>
+              </li>
+              <li class="w2">
+                <b>You approve</b
+                ><span>A transcript becomes governed context, after your review</span>
+              </li>
+              <li class="w3">
+                <b>Everyone benefits</b
+                ><span>Every Genie answer gets better, yours and your team's</span>
+              </li>
+            </ol>
+            <img
+              class="wheel-lamp"
+              src="assets/mood-processing.webp"
+              alt=""
+              width="120"
+              height="120"
+            />
+          </div>
+
+          <ul class="status">
+            <li>
+              <span class="tag tag-now">Available</span>
+              <b>macOS</b>
+              <span>Dictation, Ask Genie across workspaces, and call recording.</span>
+            </li>
+            <li>
+              <span class="tag tag-plan">Planned</span>
+              <b>Local memory and the know-how flywheel</b>
+              <span
+                >Memories from your work, kept on your Mac, shared with Genie only after
+                review.</span
+              >
+            </li>
+            <li>
+              <span class="tag tag-wip">Work in progress</span>
+              <b>Windows and Linux</b>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Final CTA -->
+      <section class="final" aria-labelledby="final-title">
+        <div class="wrap final-inner">
+          <img
+            class="final-lamp"
+            src="assets/mood-answering.webp"
+            alt="The Bottle genie, risen from its lamp and ready"
+            width="200"
+            height="200"
+          />
+          <h2 id="final-title">Put Genie one keystroke away.</h2>
+          <div class="cta-row">
+            <a
+              class="btn btn-primary"
+              href="https://github.com/datasciencemonkey/bottle/releases/latest"
+            >
+              <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15V3" />
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <path d="m7 10 5 5 5-5" />
+              </svg>
+              Download for macOS
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/datasciencemonkey/bottle">
+              View on GitHub
+            </a>
+          </div>
+          <p class="fine">
+            Needs a Databricks workspace with Genie and the Databricks CLI. Bottle can install the
+            official CLI for you, after you agree.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap foot-inner">
+        <div class="foot-brand">
+          <b>Bottle</b>
+          <span>Your Genie, ready. MIT licensed and experimental.</span>
+        </div>
+        <p>
+          Product scenes use illustrative data. Databricks, Databricks Genie and Unity Catalog are
+          trademarks of Databricks, Inc.
+        </p>
+      </div>
+    </footer>
+
+    <script src="assets/site.js" defer></script>
+  </body>
+</html>

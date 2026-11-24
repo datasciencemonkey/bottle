@@ -35,4 +35,9 @@ export default tseslint.config(
     files: ['tests/**/*.ts', 'vite.config.ts', 'eslint.config.js'],
     languageOptions: { globals: { ...globals.node } },
   },
+  {
+    // The static landing page script (site/, published by .github/workflows/pages.yml).
+    files: ['site/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+  },
 );
