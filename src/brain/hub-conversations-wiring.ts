@@ -78,6 +78,8 @@ export interface ConversationsWireDeps extends ConversationsReadDeps {
   sendOpen(open: { requestId?: string; threadId?: string }): Promise<unknown>;
   /** Delete: the agent client forgets the finished turns of this thread. */
   forgetThread?(threadId: string): void;
+  /** Delete: a deleted Genie thread (`c:`) is no follow-up target any more (⌥G, the composer). */
+  forgetConversation?(conversationId: string): void;
   /** Whether a hub window exists. Default: yes (the hub is built at start and only hidden). */
   hubPresent?(): Promise<boolean>;
 }
@@ -291,8 +293,9 @@ function agentThreadsOf(
 ): { threads: AgentThread[]; threadMogs: Map<string, string> } {
   const chipOf = deps.chipOf ?? NO_CHIP;
   const memory = deps.memoryTurns?.() ?? [];
-  // The turns that the hub gets in `hub:agent`: for these the view swaps the stored turn.
-  const inMemory = new Set(memory.filter((t) => t.shown !== false).map((t) => t.turnUuid));
+  // Every turn the client holds, shown or not: its parts are never a thread of their own (they
+  // join the thread of the turn, and a Delete of that thread takes them).
+  const inMemory = new Set(memory.map((t) => t.turnUuid));
   const turnRows = all.filter((x) => x.agent && UUID_RE.test(x.split));
   const parts = new Map<string, Stored[]>();
   for (const x of all) {
@@ -438,11 +441,15 @@ export function wireHubConversations(
       const byMog = new Map<string, Set<string>>();
       /** The agent clients' threads to forget, with the MOGs whose rows must go first. */
       const forget = new Map<string, Set<string>>();
+      /** The Genie threads (`c:`) to drop as a follow-up target, with their MOGs. */
+      const forgetConv = new Map<string, Set<string>>();
+      let deferredNow = 0;
       for (const key of new Set(keys)) {
         // A thread in progress is not deleted yet: its rows are not all saved. It goes once the
         // turn settled (the view stopped showing it as in progress a moment before the brain).
         if (key.startsWith('a:') && running.has(key.slice(2))) {
           deferred.set(key, opts.onlyFailed === true);
+          deferredNow += 1;
           continue;
         }
         const k = read.keys.get(key);
@@ -450,12 +457,16 @@ export function wireHubConversations(
         // An answered thread in memory only (no stored row) has no key: Clear failed skips it.
         if (!k && opts.onlyFailed) continue;
         if (key.startsWith('a:')) forget.set(key.slice(2), new Set(k?.rows.map((r) => r.mogId)));
+        if (key.startsWith('c:'))
+          forgetConv.set(key.slice(2), new Set(k?.rows.map((r) => r.mogId)));
         for (const r of k?.rows ?? []) {
           const set = byMog.get(r.mogId) ?? new Set<string>();
           set.add(r.requestId);
           byMog.set(r.mogId, set);
         }
       }
+      // Every thread waits: nothing changed, and a list now would show the thread again.
+      if (deferredNow === new Set(keys).size) return;
       const failedMogs = new Set<string>();
       const now = Date.now();
       for (const [mogId, ids] of byMog) {
@@ -476,6 +487,9 @@ export function wireHubConversations(
       // would come back with fewer details.
       for (const [id, mogIds] of forget) {
         if (![...mogIds].some((m) => failedMogs.has(m))) deps.forgetThread?.(id);
+      }
+      for (const [id, mogIds] of forgetConv) {
+        if (![...mogIds].some((m) => failedMogs.has(m))) deps.forgetConversation?.(id);
       }
     } catch {
       // A failed delete shows again on the next list.

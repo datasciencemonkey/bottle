@@ -336,16 +336,18 @@ describe('Delete and Clear failed', () => {
     const f = fakeStore(rows);
     const sent: HubConversations[] = [];
     const forgotten: string[] = [];
+    const forgottenConv: string[] = [];
     const w = wireHubConversations(bus, {
       store: f.store,
       mogs,
       chipOf,
       memoryTurns: () => mem,
       forgetThread: (t) => void forgotten.push(t),
+      forgetConversation: (c) => void forgottenConv.push(c),
       send: async (l) => void sent.push(l),
       sendOpen: async () => undefined,
     });
-    return { ...f, w, sent, forgotten };
+    return { ...f, w, sent, forgotten, forgottenConv };
   }
   const writes = (calls: { stmtId: string }[]) =>
     calls.filter((c) => c.stmtId !== 'mem.exchange.recent').map((c) => c.stmtId);
@@ -578,6 +580,56 @@ describe('Delete and Clear failed', () => {
     const del = r.calls.find((c) => c.stmtId === 'mem.exchange.delete');
     expect(del?.params['now']).toEqual(expect.any(Number));
     expect(Object.keys(del?.params ?? {}).sort()).toEqual(['mogId', 'now', 'requestIds']);
+  });
+
+  it('[L-3] a Delete of a thread in progress sends no list: the thread does not flicker back', async () => {
+    const mem: MemoryTurn[] = [{ turnUuid: id(600), threadId: ROOT, inProgress: true }];
+    const r = rig(threadRows(), mem);
+    await r.w.refresh();
+    const n = r.sent.length;
+    await r.w.remove([`a:${ROOT}`]);
+    expect(r.sent.length).toBe(n);
+    // A Delete with one thread that goes and one that waits still sends the list.
+    await r.w.remove([`a:${ROOT}`, `r:${id(900)}`]);
+    expect(r.sent.length).toBe(n + 1);
+  });
+
+  it('[L-8] the parts of a memory turn that is not shown are no thread of their own', async () => {
+    const hidden = id(500);
+    const root = id(501);
+    const r = rig({ [MOG_A]: [partRow(1, hidden, T0)] }, [
+      { turnUuid: hidden, threadId: root, inProgress: false, shown: false },
+    ]);
+    await r.w.refresh();
+    expect(r.sent.at(-1)?.agentThreads).toBeUndefined();
+    // They stay part of the Delete of the thread of the turn.
+    await r.w.remove([`a:${root}`]);
+    expect(r.rows[MOG_A]).toEqual([]);
+  });
+
+  it('[open question] a deleted Genie thread is no follow-up target any more', async () => {
+    const r = rig(threadRows());
+    await r.w.refresh();
+    await r.w.remove(['c:plain']);
+    expect(r.forgottenConv).toEqual(['plain']);
+    // A failed delete leaves the target.
+    const f = fakeStore(threadRows());
+    const kept: string[] = [];
+    const w = wireHubConversations(bus, {
+      store: {
+        exec: (s, p) =>
+          (s as string) === 'mem.exchange.delete'
+            ? Promise.reject(new Error('x'))
+            : f.store.exec(s, p),
+      },
+      mogs,
+      forgetConversation: (c) => void kept.push(c),
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await w.refresh();
+    await w.remove(['c:plain']);
+    expect(kept).toEqual([]);
   });
 });
 

@@ -57,7 +57,7 @@ import {
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
 import { createAgentClient, ipcAgentApi, uuidOfTurn, type AgentClient } from '../agent-run';
-import { createAskRouter, createFollowUpWindow } from '../agent-route';
+import { createAskRouter, createFollowUpWindow, threadReplyMog } from '../agent-route';
 import {
   clearingAgentPanel,
   sendHubAgent,
@@ -213,6 +213,7 @@ export function startBrain(): Brain {
         ticket?: string,
       ) => void;
     } = {};
+    const focusRef: { current?: ReturnType<typeof createThreadFocus> } = {};
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
       // ADR 0121: the agent threads. The chips come from the workspaces list; the turns in memory
@@ -226,6 +227,12 @@ export function startBrain(): Brain {
       },
       memoryTurns: () => agentRef.client?.turns() ?? [],
       forgetThread: (threadId) => agentRef.client?.forgetThread(threadId),
+      // A deleted Genie thread is no follow-up target: ⌥G then asks as usual.
+      forgetConversation: (id) => {
+        const a = focusRef.current?.active();
+        if (a !== undefined && 'conversationId' in a && a.conversationId === id)
+          focusRef.current?.set(undefined);
+      },
       mogs: async () =>
         (await components.T1.list()).mogs.map((m) => ({
           mogId: m.mogId,
@@ -290,6 +297,7 @@ export function startBrain(): Brain {
     // thread come from the stored exchanges (ARC-2), because the composer itself never carries a
     // `mogId`, and its own copy of the profile is for display only.
     const threadFocus = createThreadFocus();
+    focusRef.current = threadFocus;
     const followup = createGenieFollowup({
       genie: components.T8,
       findThread: (conversationId) => conversations.findThread(conversationId),
@@ -320,11 +328,12 @@ export function startBrain(): Brain {
     // user's confirm click. TODO(#525): the default core sends `mem_wipe` once it is in the
     // contract; until then a Wipe fails safe and the dialog says that nothing changed.
     // Slice 2a: every Wipe scope ends the agent session, so the panel content goes too.
-    const agentClear: { fn?: () => void } = {};
+    const agentClear: { fn?: () => void; fence?: () => () => void } = {};
     wireWipe(bus, {
       flow: clearingAgentPanel(
         clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
         () => agentClear.fn?.(),
+        () => agentClear.fence?.() ?? (() => undefined),
       ),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });
@@ -523,9 +532,10 @@ export function startBrain(): Brain {
         const known = conversations.threadMog(threadId) ?? agentClient.threadMog(threadId);
         // The hub's MOG must own the thread: a mismatch writes a turn under one MOG with the
         // root of another.
-        if (mogId !== undefined && known !== undefined && known !== mogId)
-          return showNote(mogId, 'Not sent.');
-        const target = mogId ?? known;
+        const owner = threadReplyMog(mogId, known);
+        if (owner === 'refused')
+          return mogId !== undefined ? showNote(mogId, 'Not sent.') : undefined;
+        const target = owner.mogId;
         const clean = sanitizeQuestion(raw);
         if (target === undefined) return;
         if (!(await components.T1.list()).mogs.some((m) => m.mogId === target)) return;
@@ -550,6 +560,7 @@ export function startBrain(): Brain {
       agentClient.clear();
       void hubRef.current?.push();
     };
+    agentClear.fence = () => agentClient.fence();
     bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({

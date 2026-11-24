@@ -117,6 +117,19 @@ export function routeAsk(i: AgentRouteInput): AgentRoute {
 }
 
 /** R-13: when the follow-up window is open. */
+/**
+ * The MOG of a thread reply. The hub's MOG must own the thread: a mismatch would write a turn
+ * under one MOG with the root of another, so it is refused ("Not sent."). `known` is the owner
+ * of the thread, if any; with no hub MOG the reply takes it.
+ */
+export function threadReplyMog(
+  hubMogId: string | undefined,
+  known: string | undefined,
+): { mogId: string | undefined } | 'refused' {
+  if (hubMogId !== undefined && known !== undefined && known !== hubMogId) return 'refused';
+  return { mogId: hubMogId ?? known };
+}
+
 export interface FollowUpWindow {
   /** The card of an agent turn opened (true) or closed (false). */
   card(open: boolean): void;

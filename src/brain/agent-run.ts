@@ -133,6 +133,8 @@ interface TurnRec {
   noRecord: boolean;
   /** The outcome the turn ended with (set when `finish` starts). */
   outcome?: string;
+  /** The turn left the queue before it ended (set when `finish` starts). A queued one ran nothing. */
+  ran?: boolean;
   /** `finish` is over: the turn row is asked for, and a Delete may take the turn. */
   settled: boolean;
 }
@@ -276,6 +278,12 @@ export interface AgentClient {
   onSessionEvent(payload: unknown): void;
   /** Wipe: forget every finished turn, also those that a crash left on screen. */
   clear(): void;
+  /**
+   * Fence the writes before a Wipe runs: no turn row is written from now on. The core wipe and
+   * the remote deletes are slow, and a turn must not write a row in that time. Returns a lift
+   * for a Wipe that failed: later turns write again.
+   */
+  fence(): () => void;
   /** Stop the live turn, or remove a waiting one. */
   stop(turnId: string): Promise<void>;
   /** The New session button. */
@@ -570,6 +578,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     }
     // A turn that never left the queue ran nothing: it saves no turn row.
     const ran = r.view.state !== 'queued';
+    r.ran = ran;
     const state: AgentTurnView['state'] =
       out === 'answered'
         ? 'done'
@@ -818,7 +827,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         if (e.reason === 'wipe') continue;
         // Any other end saves what it can of a turn that ran, also one that the session end cut
         // off (`session_ended`: its row waited for this event).
-        if (r.ended ? r.outcome === 'session_ended' : r.view.state !== 'queued')
+        if (r.ended ? r.outcome === 'session_ended' && r.ran : r.view.state !== 'queued')
           void recordTurn(r, 'session_ended').catch(fault);
       }
       if (CLEARING.has(e.reason)) {
@@ -829,6 +838,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       session = { ...NO_SESSION };
       changed();
       void refresh();
+    },
+    fence() {
+      const fenced = [...recs.values()].filter((r) => !r.noRecord);
+      fenceWrites();
+      return () => {
+        for (const r of fenced) r.noRecord = false;
+      };
     },
     clear() {
       // Every Wipe scope ends here: no row of a turn in flight is written after it.

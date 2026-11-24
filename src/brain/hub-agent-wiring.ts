@@ -20,11 +20,21 @@ import type { WipeDialogDeps } from './wipe-wiring';
 export function clearingAgentPanel(
   flow: WipeDialogDeps['flow'],
   clear: () => void,
+  /** Fences the writes before the Wipe runs. Returns the lift for a Wipe that failed. */
+  fence?: () => () => void,
 ): WipeDialogDeps['flow'] {
   return {
     dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
     async confirm(scope, alsoGenie) {
-      const done = await flow.confirm(scope, alsoGenie);
+      // The wipe is slow (core and remote deletes): no turn row may land in the meantime.
+      const lift = fence?.();
+      let done;
+      try {
+        done = await flow.confirm(scope, alsoGenie);
+      } catch (e) {
+        lift?.();
+        throw e;
+      }
       clear();
       return done;
     },

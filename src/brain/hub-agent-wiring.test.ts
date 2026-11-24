@@ -104,6 +104,30 @@ describe('hub Agent panel wiring', () => {
     expect(calls).toEqual(['clear']);
   });
 
+  it('[L-1] the fence is up before the Wipe runs, stays after it, and lifts when the Wipe fails', async () => {
+    const calls: string[] = [];
+    const flow = (fail: boolean) => ({
+      dialog: () => ({}) as never,
+      confirm: async () => {
+        calls.push('confirm');
+        if (fail) throw new Error('no');
+        return {} as never;
+      },
+    });
+    const fence = () => {
+      calls.push('fence');
+      return () => void calls.push('lift');
+    };
+    await clearingAgentPanel(flow(false), () => void calls.push('clear'), fence).confirm(
+      'everything',
+      false,
+    );
+    await clearingAgentPanel(flow(true), () => void calls.push('clear2'), fence)
+      .confirm('everything', false)
+      .catch(() => undefined);
+    expect(calls).toEqual(['fence', 'confirm', 'clear', 'fence', 'confirm', 'lift']);
+  });
+
   it('a failed send never rejects', async () => {
     const bus = new BrainBus();
     const w = wireHubAgent(bus, {

@@ -381,6 +381,32 @@ fn mem_32a_mem_32c_session_conversations_are_collected_before_the_delete() {
     assert!(rows(&exec(&s, "mem.forget.session_conversations", q)).is_empty());
 }
 
+/// ADR 0121: a hub Delete leaves a tombstone, so Forget session and Forget MOG still find the
+/// Genie conversation to delete on the server.
+#[test]
+fn adr_0121_forget_reads_return_the_conversation_of_a_locally_deleted_exchange() {
+    let (_t, s) = seeded("0121-forget");
+    exec(
+        &s,
+        "mem.exchange.delete",
+        json!({"mogId": MOG_A, "now": T0 + 5,
+               "requestIds": ["41111111-2222-4333-8444-555555555501",
+                              "41111111-2222-4333-8444-555555555502"]}),
+    );
+    let by_session = exec(
+        &s,
+        "mem.forget.session_conversations",
+        json!({"mogId": MOG_A, "sessionId": S1}),
+    );
+    assert_eq!(rows(&by_session)[0]["conversationId"], "conv-s1");
+    let by_mog = exec(&s, "mem.forget.mog_conversations", json!({"mogId": MOG_A}));
+    let ids: Vec<&str> = rows(&by_mog)
+        .iter()
+        .map(|r| r["conversationId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["conv-s1", "conv-s2"]);
+}
+
 #[test]
 fn mem_32a_mem_32c_mog_conversations_are_distinct_and_mog_scoped() {
     let (_t, s) = seeded("32a-mogconv");

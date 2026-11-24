@@ -1099,4 +1099,39 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     await r.settle();
     expect(r.history).toEqual([]);
   });
+
+  it('[M-1] a queued turn that the session end cut off writes no row at the next session end', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1), accepted(T2, { position: 1, newSession: false }));
+    await r.client.submit(turn('Live?'), 'ask');
+    await r.client.submit(turn('Queued?'), 'ask');
+    // The core order: the live turn ended, the session ended, then the queued turn ended.
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+    r.client.onSessionEvent({ ...END, reason: 'new_session' });
+    r.ev({ kind: 'ended', turnId: T2, outcome: 'session_ended', calls: 0 });
+    await r.settle();
+    // A new session starts and ends idle: the queued turn must not get a row now.
+    r.client.onSessionEvent({ kind: 'started', sessionId: 'e'.repeat(32) });
+    r.client.onSessionEvent({ ...END, sessionId: 'e'.repeat(32), reason: 'idle' });
+    await r.settle();
+    expect(turnRows(r).map((h) => h.question)).toEqual(['Live?']);
+  });
+
+  it('[L-1] fence() stops the rows of a turn in flight until the Wipe is over, and a lift lets later turns write', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiping?'), 'ask');
+    const lift = r.client.fence();
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(r.history).toEqual([]);
+    // The Wipe failed: a turn that starts after the lift writes its row.
+    lift();
+    r.script.submit.push(accepted(T2, { newSession: false }));
+    await r.client.submit(turn('After?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T2, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(turnRows(r).map((h) => h.question)).toEqual(['After?']);
+  });
 });

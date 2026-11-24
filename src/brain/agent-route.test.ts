@@ -5,6 +5,7 @@ import {
   FOLLOW_UP_WINDOW_MS,
   createFollowUpWindow,
   routeAsk,
+  threadReplyMog,
   type AgentRouteInput,
   type RouteWorkspace,
 } from './agent-route';
@@ -155,5 +156,17 @@ describe('the follow-up window (R-13)', () => {
     expect(w.isOpen()).toBe(true);
     w.reset();
     expect(w.isOpen()).toBe(false);
+  });
+});
+
+describe('threadReplyMog', () => {
+  it('refuses a hub MOG that does not own the thread ("Not sent.")', () => {
+    expect(threadReplyMog('mog-b', 'mog-a')).toBe('refused');
+  });
+  it('takes the hub MOG when it owns the thread, or the owner when the hub names none', () => {
+    expect(threadReplyMog('mog-a', 'mog-a')).toEqual({ mogId: 'mog-a' });
+    expect(threadReplyMog(undefined, 'mog-a')).toEqual({ mogId: 'mog-a' });
+    expect(threadReplyMog('mog-a', undefined)).toEqual({ mogId: 'mog-a' });
+    expect(threadReplyMog(undefined, undefined)).toEqual({ mogId: undefined });
   });
 });
