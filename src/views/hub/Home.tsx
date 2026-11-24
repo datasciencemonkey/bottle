@@ -356,7 +356,7 @@ export function Home({ hidden }: { hidden: boolean }) {
         </ul>
       </div>
       <p className="hub-home-punchline" data-home-punchline>
-        Ship in a bottle.
+        Your Genie, ready.
       </p>
     </section>
   );

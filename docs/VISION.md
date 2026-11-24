@@ -4,7 +4,7 @@
   <img src="../mog-rive/fallback/mood-idle.png" alt="The Bottle mascot, a small genie, peeking out of its lamp" width="240">
 </p>
 
-**Ship in a bottle.**
+**Your Genie, ready.**
 
 Bottle turns your team's unwritten know-how into governed context that every Genie answer can use. It is captured where the work happens, approved by you, and shared with everyone.
 

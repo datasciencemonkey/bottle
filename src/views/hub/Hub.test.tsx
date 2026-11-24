@@ -197,7 +197,7 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(h.querySelector('[data-home-wordmark] .sr-only')?.textContent).toBe('Bottle');
     // The hub header keeps the page's one h1; Home adds none.
     expect(el.querySelectorAll('h1')).toHaveLength(1);
-    expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
+    expect(h.querySelector('[data-home-punchline]')?.textContent).toBe('Your Genie, ready.');
     expect(h.querySelectorAll('button, a, [role="button"]')).toHaveLength(0);
     // Clicking the wordmark does nothing: the area stays Home.
     await act(async () => realClick(h.querySelector<HTMLElement>('[data-home-wordmark]')));

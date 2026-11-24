@@ -68,7 +68,7 @@ describe('Home landing', () => {
       'Hold Right Option and tap G to ask Genie.',
       'Hold Right Option and tap R to start or stop a call recording.',
     ]);
-    expect(el.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
+    expect(el.querySelector('[data-home-punchline]')?.textContent).toBe('Your Genie, ready.');
   });
 
   it('[home] reduced motion renders the final frame at once: no entrance, no idle loops', async () => {
