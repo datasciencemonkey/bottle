@@ -508,7 +508,11 @@ export function startBrain(): Brain {
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
       followUp,
-      onChange: () => void hubRef.current?.push(),
+      onChange: () => {
+        void hubRef.current?.push();
+        // A Delete that waited for a turn to settle goes now.
+        void conversations.retryDeferred();
+      },
       log: agentLog,
     });
     agentRef.client = agentClient;
@@ -516,8 +520,12 @@ export function startBrain(): Brain {
       void (async () => {
         // The hub names the MOG (the host bound the ticket to it); ⌥G takes the MOG of the thread.
         // Either way it must be a defined MOG.
-        const target =
-          mogId ?? conversations.threadMog(threadId) ?? agentClient.threadMog(threadId);
+        const known = conversations.threadMog(threadId) ?? agentClient.threadMog(threadId);
+        // The hub's MOG must own the thread: a mismatch writes a turn under one MOG with the
+        // root of another.
+        if (mogId !== undefined && known !== undefined && known !== mogId)
+          return showNote(mogId, 'Not sent.');
+        const target = mogId ?? known;
         const clean = sanitizeQuestion(raw);
         if (target === undefined) return;
         if (!(await components.T1.list()).mogs.some((m) => m.mogId === target)) return;

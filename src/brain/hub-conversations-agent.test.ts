@@ -4,6 +4,10 @@
  * a double that holds rows and runs `mem.exchange.recent` and `mem.exchange.delete`.
  */
 import { BrainBus } from './bus';
+import { createAgentClient, type AgentApi } from './agent-run';
+import { createGenieHistory, type ExchangeMemory } from './genie-history';
+import type { AgentTurn } from '../shared/interfaces';
+import type { AgentTurnAccepted, AgentTurnEvent } from '../shared/ipc';
 import type { LocalMemoryStore } from './components/memory-store';
 import {
   readConversations,
@@ -66,6 +70,8 @@ function fakeStore(initial: Record<string, Row[]>) {
       const mog = params['mogId'] as string;
       if (stmtId === 'mem.exchange.recent') return { rows: rows[mog] ?? [] };
       if ((stmtId as string) === 'mem.exchange.delete') {
+        // The brain gives the time of the tombstone.
+        if (typeof params['now'] !== 'number') throw new Error('mem.exchange.delete needs now');
         const ids = params['requestIds'] as string[];
         const before = rows[mog]?.length ?? 0;
         rows[mog] = (rows[mog] ?? []).filter((r) => !ids.includes(r['requestId'] as string));
@@ -206,15 +212,16 @@ describe('the rebuild of agent threads', () => {
     expect(list.rows).toEqual([]);
   });
 
-  it('[dedup] a turn that the client holds in memory wins: the stored turn is not sent', async () => {
+  it('[dedup] every stored turn is sent: the view swaps it for the turn in memory with the same id', async () => {
     const { store } = fakeStore(threadRows());
-    const mem: MemoryTurn[] = [{ turnUuid: TURN1, threadId: ROOT, inProgress: false }];
+    const mem: MemoryTurn[] = [
+      { turnUuid: TURN1, threadId: ROOT, inProgress: false, shown: true },
+      { turnUuid: TURN2, threadId: ROOT, inProgress: false, shown: false },
+    ];
     const list = await readConversations({ store, mogs, memoryTurns: () => mem });
-    expect(list.agentThreads?.[0]?.turns.map((t) => t.turnUuid)).toEqual([TURN2]);
-    // Every turn in memory: the thread stays (its MOG), with no stored turn.
-    mem.push({ turnUuid: TURN2, threadId: ROOT, inProgress: false });
-    const all = await readConversations({ store, mogs, memoryTurns: () => mem });
-    expect(all.agentThreads?.[0]).toMatchObject({ threadId: ROOT, turns: [] });
+    // The turn that hub:agent sends and the one it does not (older than the 20 it holds).
+    expect(list.agentThreads?.[0]?.turns.map((t) => t.turnUuid)).toEqual([TURN1, TURN2]);
+    expect(list.agentThreads?.[0]?.turns[0]?.askedAt).toBe(T0 + 1000);
   });
 
   it('[dedup] the call rows of a live turn that has no turn row yet are no thread', async () => {
@@ -228,13 +235,100 @@ describe('the rebuild of agent threads', () => {
     expect(list.agentThreads).toBeUndefined();
   });
 
-  it('[Wipe] after a Wipe the store and the client are empty: no thread', async () => {
-    const f = fakeStore(threadRows());
-    f.rows[MOG_A] = [];
-    f.rows[MOG_B] = [];
-    const list = await readConversations({ store: f.store, mogs, memoryTurns: () => [] });
-    expect(list).toEqual({ rows: [] });
-  });
+  it.each([
+    ['wipe', 0],
+    ['idle', 1],
+  ] as const)(
+    '[Wipe] [HIGH] the core order (turn ended{session_ended}, session ended{%s}, then the DELETE) leaves %d turn rows',
+    async (reason, left) => {
+      const f = fakeStore({ [MOG_A]: [], [MOG_B]: [] });
+      // The store double that records what the history writer saves.
+      const memory: ExchangeMemory = {
+        registerMog: async () => undefined,
+        recordExchange: async (x) => {
+          f.rows[MOG_A]?.push(
+            turnRow(x.requestId, x.splitGroupId ?? x.requestId, T0, {
+              questionUser: x.questionUser,
+            }),
+          );
+        },
+      };
+      const record = createGenieHistory({
+        memory,
+        mogName: async () => 'Sales',
+        // Each lookup takes several turns of the event loop, like the IPC hops of the real brain.
+        hostOf: async () => {
+          for (let i = 0; i < 5; i++) await Promise.resolve();
+          return 'sales.fake.test';
+        },
+        log: { event: () => true },
+      });
+      const turnId = 'a'.repeat(32);
+      const api: AgentApi = {
+        submit: async () =>
+          ({
+            turnId,
+            sessionId: 'd'.repeat(32),
+            position: 0,
+            newSession: true,
+            budget: 10,
+            crossWorkspace: false,
+            catalog: [],
+          }) as AgentTurnAccepted,
+        stop: async () => undefined,
+        callDetail: async () => {
+          throw { error: 'agent_turn_unknown' };
+        },
+        result: async () => {
+          throw { error: 'agent_turn_unknown' };
+        },
+        sessionState: async () => ({
+          state: 'none',
+          agentProfile: null,
+          turns: 0,
+          queued: 0,
+          tokens: 0,
+        }),
+        endSession: async () => undefined,
+      };
+      const client = createAgentClient({
+        api,
+        chipOf: () => ({ name: 'Sales', colorVariant: '' }),
+        names: () => ({ agent: 'Sales', home: 'Sales' }),
+        homeProfile: async () => {
+          for (let i = 0; i < 5; i++) await Promise.resolve();
+          return 'fake-sales';
+        },
+        hostOf: async () => 'sales.fake.test',
+        newId: () => id(1),
+        wallNow: () => T0,
+        recordCall: (x) => void record(x),
+        direct: async () => undefined,
+        showTurn: () => undefined,
+        dropTurn: () => undefined,
+      });
+      const turn: AgentTurn = {
+        mogId: MOG_A,
+        question: 'Wiped?',
+        decision: {} as never,
+        recall: [],
+        target: 'fake-sales',
+      };
+      await client.submit(turn, 'ask');
+      const ev = (e: AgentTurnEvent) => client.onTurnEvent(e);
+      // The order of `session/component.rs`: the turn ends first, the session event follows ...
+      ev({ kind: 'ended', turnId, outcome: 'session_ended', calls: 0 });
+      client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason });
+      // ... and `wipe.rs` deletes the rows at once (a Wipe only).
+      if (reason === 'wipe') f.rows[MOG_A] = [];
+      for (let i = 0; i < 60; i++) await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(f.rows[MOG_A]).toHaveLength(left);
+      // After a Wipe the list has no thread.
+      const list = await readConversations({ store: f.store, mogs, memoryTurns: () => [] });
+      if (reason === 'wipe') expect(list).toEqual({ rows: [] });
+    },
+  );
 });
 
 describe('Delete and Clear failed', () => {
@@ -408,6 +502,82 @@ describe('Delete and Clear failed', () => {
     await w.refresh();
     await expect(w.remove([`a:${ROOT}`])).resolves.toBeUndefined();
     expect(sent.at(-1)?.agentThreads).toHaveLength(1);
+  });
+
+  it('[LOW] Delete reads the store again: a row saved after the last list goes too', async () => {
+    const r = rig(threadRows());
+    await r.w.refresh();
+    const late = id(950);
+    r.rows[MOG_A]?.push(partRow(950, TURN1, T0 + 1300));
+    await r.w.remove([`a:${ROOT}`]);
+    expect(r.rows[MOG_A]?.map((x) => x['requestId'])).not.toContain(late);
+  });
+
+  it('[LOW] the client forgets a thread only when every delete of it worked', async () => {
+    const f = fakeStore(threadRows());
+    const forgotten: string[] = [];
+    const w = wireHubConversations(bus, {
+      store: {
+        exec: (s, p) =>
+          (s as string) === 'mem.exchange.delete' && p['mogId'] === MOG_B
+            ? Promise.reject(new Error('x'))
+            : f.store.exec(s, p),
+      },
+      mogs,
+      forgetThread: (t) => void forgotten.push(t),
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await w.refresh();
+    await w.remove([`a:${ROOT}`]);
+    expect(forgotten).toEqual([]);
+    // Another thread with rows in a MOG whose delete works is forgotten.
+    const root2 = id(300);
+    f.rows[MOG_A]?.push(turnRow(root2, root2, T0 + 20_000));
+    await w.remove([`a:${root2}`]);
+    expect(forgotten).toEqual([root2]);
+  });
+
+  it('[LOW] the part rows of a turn in memory with no turn row go with its thread', async () => {
+    const live = id(500);
+    const root = id(501);
+    const r = rig({ [MOG_A]: [partRow(1, live, T0)] }, [
+      { turnUuid: live, threadId: root, inProgress: false, shown: true },
+    ]);
+    await r.w.refresh();
+    // It is no thread of its own (the view has the turn), but a Delete of its thread takes it.
+    expect(r.sent.at(-1)?.agentThreads).toBeUndefined();
+    await r.w.remove([`a:${root}`]);
+    expect(r.rows[MOG_A]).toEqual([]);
+    expect(r.forgotten).toEqual([root]);
+  });
+
+  it('[LOW] a Delete of a thread in progress waits for the turn to settle, then goes', async () => {
+    const mem: MemoryTurn[] = [{ turnUuid: id(600), threadId: ROOT, inProgress: true }];
+    const r = rig(threadRows(), mem);
+    await r.w.refresh();
+    await r.w.remove([`a:${ROOT}`]);
+    expect(r.rows[MOG_A]).toHaveLength(5);
+    await r.w.retryDeferred();
+    expect(r.rows[MOG_A]).toHaveLength(5);
+    const first = mem[0];
+    if (first) first.inProgress = false;
+    await r.w.retryDeferred();
+    expect(r.rows[MOG_A]?.map((x) => x['requestId'])).toEqual([id(900)]);
+    expect(r.forgotten).toEqual([ROOT]);
+    // Nothing waits any more.
+    const n = r.calls.length;
+    await r.w.retryDeferred();
+    expect(r.calls.length).toBe(n);
+  });
+
+  it('[M1] Delete tells the store the time of the tombstone and the ids, no text', async () => {
+    const r = rig(threadRows());
+    await r.w.refresh();
+    await r.w.remove([`a:${ROOT}`]);
+    const del = r.calls.find((c) => c.stmtId === 'mem.exchange.delete');
+    expect(del?.params['now']).toEqual(expect.any(Number));
+    expect(Object.keys(del?.params ?? {}).sort()).toEqual(['mogId', 'now', 'requestIds']);
   });
 });
 

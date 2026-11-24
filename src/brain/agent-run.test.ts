@@ -994,7 +994,7 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     expect(r.client.turn(T1)).toBeDefined();
   });
 
-  it('a turn that a Wipe overtook writes no turn row', async () => {
+  it('a turn that a Wipe overtook (the session event first) writes no turn row', async () => {
     const r = rig();
     r.script.submit.push(accepted(T1));
     await r.client.submit(turn('Wiped?'), 'ask');
@@ -1003,5 +1003,100 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
     await r.settle();
     expect(turnRows(r)).toEqual([]);
+  });
+
+  const END = { kind: 'ended' as const, sessionId: 'd'.repeat(32) };
+
+  it('[Wipe] [HIGH] the real core order, turn ended{session_ended} then session ended{wipe}: no turn row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    await r.settle();
+    expect(turnRows(r)).toEqual([]);
+  });
+
+  it('[Wipe] [HIGH] a turn that ended answered just before the Wipe writes no row, and no call row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.ev(callEv(T1, C1, SALES, 'asking'));
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered'));
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    // The Wipe comes while the writes are still waiting for the home profile.
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    await r.settle();
+    expect(r.history).toEqual([]);
+  });
+
+  it('[Wipe] [L3] a write that started before the Wipe sees a moved fence', async () => {
+    const r = rig();
+    await ask(r, T1, 'Before?');
+    const row = turnRows(r)[0];
+    expect(row?.isStale?.()).toBe(false);
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    expect(row?.isStale?.()).toBe(true);
+  });
+
+  it('a turn that the session end cut off writes its row when the session event comes, not before', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Cut off?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+    await r.settle();
+    expect(turnRows(r)).toEqual([]);
+    r.client.onSessionEvent({ ...END, reason: 'idle' });
+    await r.settle();
+    expect(turnRows(r)).toHaveLength(1);
+    expect(turnRows(r)[0]?.end.t).toBe('failed');
+  });
+
+  it('turns() says which turns the panel sends: the 20 newest ended turns only', async () => {
+    const r = rig();
+    const ids = Array.from({ length: 22 }, (_, i) => i.toString(16).padStart(32, '0'));
+    for (const id of ids) {
+      r.script.submit.push(accepted(id, { newSession: false }));
+      await r.client.submit(turn(`Q ${id}`), 'ask');
+      r.script.result = NOTE;
+      r.ev({ kind: 'ended', turnId: id, outcome: 'answered', calls: 0 });
+      await r.settle();
+    }
+    const t = r.client.turns();
+    expect(t).toHaveLength(22);
+    expect(t.filter((x) => x.shown)).toHaveLength(20);
+    expect(t.filter((x) => !x.shown).map((x) => x.turnUuid)).toEqual([
+      uuidOfTurn(ids[0] as string),
+      uuidOfTurn(ids[1] as string),
+    ]);
+    expect(r.client.panel().earlier).toHaveLength(20);
+  });
+
+  it('a turn stays in progress until finish is over, and the change that settles it is announced', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Settling?'), 'ask');
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    // `finish` waits for its pulls: the turn is ended but not settled yet.
+    expect(r.client.turn(T1)?.state).toBe('done');
+    expect(r.client.turns()[0]?.inProgress).toBe(true);
+    const before = r.changes();
+    await r.settle();
+    expect(r.client.turns()[0]?.inProgress).toBe(false);
+    expect(r.changes()).toBeGreaterThan(before);
+  });
+
+  it('[Wipe] clear() (every Wipe scope) also fences the writes of a turn in flight', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    r.client.clear();
+    await r.settle();
+    expect(r.history).toEqual([]);
   });
 });

@@ -301,4 +301,25 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     });
     expect(typeof exchange(store)['answerSummary']).toBe('string');
   });
+
+  it('[Wipe] [L3] a write that a Wipe overtook while it looked up the host saves nothing', async () => {
+    const { store, record } = rig();
+    let stale = false;
+    // The Wipe lands during the lookups; the writer checks the fence before the first store call.
+    const end = answered({ isStale: () => stale });
+    const done = record(end);
+    stale = true;
+    await done;
+    expect(ids(store)).toEqual([]);
+  });
+
+  it('[Wipe] [L3] a Wipe between the MOG row and the exchange stops the exchange write', async () => {
+    let stale = false;
+    const { store, record } = rig(() => {
+      stale = true;
+      return { rows: [{ changes: 1 }] };
+    });
+    await record(answered({ isStale: () => stale }));
+    expect(ids(store)).toEqual(['mem.mog.upsert']);
+  });
 });

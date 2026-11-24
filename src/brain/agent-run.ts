@@ -129,8 +129,10 @@ interface TurnRec {
   threadId: string;
   /** The turn row was asked for (once). */
   recorded: boolean;
-  /** A Wipe ended the session while the turn ran: the turn writes no row. */
+  /** A Wipe ended the session while the turn ran or after it: the turn writes no row. */
   noRecord: boolean;
+  /** The outcome the turn ended with (set when `finish` starts). */
+  outcome?: string;
   /** `finish` is over: the turn row is asked for, and a Delete may take the turn. */
   settled: boolean;
 }
@@ -280,7 +282,7 @@ export interface AgentClient {
   newSession(): Promise<void>;
   /** Read the session state again (the panel header). */
   refreshSession(): Promise<void>;
-  /** The Agent panel as it is now (the genie code status is the caller's). */
+  /** The turns that hub Conversations shows now (the genie code status is the caller's). */
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
@@ -288,8 +290,18 @@ export interface AgentClient {
   threadOf(turnId: string): string | undefined;
   /** The MOG that asked in a thread of the panel, if the client holds one of its turns. */
   threadMog(threadId: string): MogId | undefined;
-  /** The turns in memory: their stored `request_id`, thread, and whether they are in progress. */
-  turns(): { turnUuid: string; threadId: string; mogId: MogId; inProgress: boolean }[];
+  /**
+   * The turns in memory: their stored `request_id`, thread, whether they are in progress, and
+   * whether `panel()` sends them to the hub (`shown`; a turn that is not shown has no memory view,
+   * so its stored turn must be listed).
+   */
+  turns(): {
+    turnUuid: string;
+    threadId: string;
+    mogId: MogId;
+    inProgress: boolean;
+    shown: boolean;
+  }[];
   /** Whether the open session holds a turn of this thread (a reply is a `follow_up`). */
   inSession(threadId: string): boolean;
   /** Delete: forget the finished turns of a thread (an in-progress turn stays). */
@@ -306,6 +318,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let stale = false;
   /** The thread of the newest answered turn: a ⌥G follow-up continues it (R-13). */
   let lastAnswered: string | undefined;
+  /**
+   * A brain-side Wipe fence (security L3): it counts the Wipes this brain saw. A write notes the
+   * number when it starts and refuses to save when the number moved by the time it is ready.
+   */
+  let wipeGen = 0;
   const fault = () => void deps.log?.event('agent.turn', { ok: 0 });
   const changed = () => {
     try {
@@ -393,7 +410,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   /** One history row for each Genie call. */
   async function record(r: TurnRec, d: AgentTurnCall): Promise<void> {
     if (!deps.recordCall || r.noRecord) return;
+    const gen = wipeGen;
     const home = await deps.homeProfile().catch(() => undefined);
+    // A Wipe while we waited: write nothing. (A session end that only forgets the turn from the
+    // panel still saves its history.)
+    if (r.noRecord || gen !== wipeGen) return;
     const refs = replyRefs(d);
     let end: TerminalAskEvent;
     switch (d.state) {
@@ -432,6 +453,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         question: d.question,
         end,
         splitGroupId: uuidOfTurn(r.view.turnId),
+        isStale: () => gen !== wipeGen || r.noRecord,
         homeWorkspace: home === undefined || d.profile === home,
         ...(refs.conversationId !== undefined ? { conversationId: refs.conversationId } : {}),
         ...(refs.responseId !== undefined ? { responseId: refs.responseId } : {}),
@@ -448,9 +470,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   async function recordTurn(r: TurnRec, out: string): Promise<void> {
     if (!deps.recordCall || r.recorded || r.noRecord) return;
     r.recorded = true;
+    const gen = wipeGen;
     const home = await deps.homeProfile().catch(() => undefined);
     const profile = home ?? r.agentProfile;
-    if (profile === undefined || r.noRecord) return;
+    // A Wipe while we waited: the turn row is not written.
+    if (profile === undefined || r.noRecord || gen !== wipeGen) return;
     const md = r.view.summary?.md ?? '';
     const end: TerminalAskEvent =
       out === 'answered'
@@ -469,6 +493,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         end,
         backend: 'genie_agent',
         threadId: r.threadId,
+        isStale: () => gen !== wipeGen || r.noRecord,
         homeWorkspace: true,
       });
     } catch {
@@ -528,6 +553,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   async function finish(r: TurnRec, e: Extract<AgentTurnEvent, { kind: 'ended' }>) {
     if (r.ended) return;
     r.ended = true;
+    r.outcome = e.outcome;
     r.endedSeq = ++seq;
     const names = deps.names();
     const out = e.outcome;
@@ -595,7 +621,10 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     if (recs.get(id) !== r) return;
     syncParts(r);
     update(r);
-    if (ran) await recordTurn(r, out);
+    // A turn that the session end cut off writes its row when the `agent:session` event arrives:
+    // the core sends the turn `ended` first and the session `ended{wipe}` right after, and a Wipe
+    // must leave no turn row.
+    if (ran && out !== 'session_ended') await recordTurn(r, out);
     // A fallback has its own phases: the direct call shows its own outcome.
     if (!r.fellBack)
       deps.phase?.(
@@ -684,6 +713,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
           .catch(fault)
           .finally(() => {
             r.settled = true;
+            // A Delete that waited for this turn goes now.
+            changed();
           });
     }
   }
@@ -780,11 +811,15 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       }
       deps.followUp?.reset();
       lastAnswered = undefined;
+      // A Wipe leaves nothing on disk: no turn, ended or not, writes a row after it, and a write
+      // that is already in flight finds the fence moved.
+      if (e.reason === 'wipe') fenceWrites();
       for (const r of recs.values()) {
-        if (r.ended) continue;
-        // A Wipe leaves nothing on disk; any other end saves what it can of a turn that ran.
-        if (e.reason === 'wipe') r.noRecord = true;
-        else if (r.view.state !== 'queued') void recordTurn(r, 'session_ended').catch(fault);
+        if (e.reason === 'wipe') continue;
+        // Any other end saves what it can of a turn that ran, also one that the session end cut
+        // off (`session_ended`: its row waited for this event).
+        if (r.ended ? r.outcome === 'session_ended' : r.view.state !== 'queued')
+          void recordTurn(r, 'session_ended').catch(fault);
       }
       if (CLEARING.has(e.reason)) {
         for (const [id, r] of recs) if (r.ended) forget(id, r);
@@ -795,7 +830,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       changed();
       void refresh();
     },
-    clear: clearAll,
+    clear() {
+      // Every Wipe scope ends here: no row of a turn in flight is written after it.
+      fenceWrites();
+      clearAll();
+    },
     async stop(turnId) {
       if (!recs.has(turnId)) return;
       await deps.api.stop(turnId).catch(fault);
@@ -808,15 +847,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     },
     refreshSession: refresh,
     panel() {
-      const all = [...recs.values()];
-      const live = all.find(
-        (r) => r.view.state === 'planning' || r.view.state === 'running' || r.view.state === 'slow',
-      );
-      const waiting = all.filter((r) => r.view.state === 'queued').slice(0, 3);
-      const earlier = all
-        .filter((r) => r.ended)
-        .sort((a, b) => (b.endedSeq ?? 0) - (a.endedSeq ?? 0))
-        .slice(0, EARLIER_MAX);
+      const { live, waiting, earlier } = shown();
       return {
         session: { ...session, queued: waiting.length },
         ...(live ? { live: live.view } : {}),
@@ -828,13 +859,18 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     turn: (turnId) => recs.get(turnId)?.view,
     threadOf: (turnId) => recs.get(turnId)?.threadId,
     threadMog: (threadId) => [...recs.values()].find((r) => r.threadId === threadId)?.origin.mogId,
-    turns: () =>
-      [...recs.values()].map((r) => ({
+    turns: () => {
+      const { live, waiting, earlier } = shown();
+      const sent = new Set([...(live ? [live] : []), ...waiting, ...earlier]);
+      return [...recs.values()].map((r) => ({
         turnUuid: uuidOfTurn(r.view.turnId),
         threadId: r.threadId,
         mogId: r.origin.mogId,
+        // Until `finish` is over: it saves the rows, and a Delete would miss them.
         inProgress: !r.settled,
-      })),
+        shown: sent.has(r),
+      }));
+    },
     inSession: (threadId) =>
       session.state !== 'none' && [...recs.values()].some((r) => r.threadId === threadId),
     forgetThread(threadId) {
@@ -843,6 +879,26 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       changed();
     },
   };
+
+  /** A Wipe: the writes in flight are stale, and no turn writes a row after it. */
+  function fenceWrites() {
+    wipeGen += 1;
+    for (const r of recs.values()) r.noRecord = true;
+  }
+
+  /** The turns `panel()` sends: the live one, the waiting ones and the newest ended ones. */
+  function shown() {
+    const all = [...recs.values()];
+    const live = all.find(
+      (r) => r.view.state === 'planning' || r.view.state === 'running' || r.view.state === 'slow',
+    );
+    const waiting = all.filter((r) => r.view.state === 'queued').slice(0, 3);
+    const earlier = all
+      .filter((r) => r.ended)
+      .sort((a, b) => (b.endedSeq ?? 0) - (a.endedSeq ?? 0))
+      .slice(0, EARLIER_MAX);
+    return { live, waiting, earlier };
+  }
 
   /** Wipe, or New session with no session open: nothing stays, also what a crash left on screen. */
   function clearAll() {

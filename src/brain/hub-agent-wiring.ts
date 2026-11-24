@@ -1,5 +1,5 @@
 /**
- * Slice 2a: the brain side of the hub Agent panel (plan Amendment 2 A2, "Agent panel").
+ * Slice 2a: the brain side of the agent view in hub Conversations (plan Amendment 2 A2).
  *
  * The brain keeps the content of the panel in memory (`agent-run.ts`) and sends a `HubAgentView`
  * to the hub window only (ARC-5). The hub sends `agent.ready` when it opens, and one action for

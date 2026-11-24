@@ -62,7 +62,7 @@ export function wireThreadFollowup(
     /** `hub:thread.access`, to the hub window only. Never throws. */
     sendAccess?: ((access: ThreadAccess) => void) | undefined;
     /** `agent.thread_send` with the host's Ask ticket. Never throws. */
-    agentSend?: ((a: AgentThreadSendAction, ticket: string | undefined) => void) | undefined;
+    agentSend?: ((a: AgentThreadSendAction, ticket: string) => void) | undefined;
   },
 ): ThreadFollowupWiring {
   const off = onViewInput(bus, (input) => {
@@ -81,7 +81,8 @@ export function wireThreadFollowup(
     }
     const agentSend = asAgentThreadSendAction(input.payload);
     if (agentSend) {
-      deps.agentSend?.(agentSend, input.actionTicket);
+      // The hub composer path is ticket-only: with no ticket the ⌥G latch must not approve it.
+      if (input.actionTicket !== undefined) deps.agentSend?.(agentSend, input.actionTicket);
       return;
     }
     const check = asThreadCheckAction(input.payload);

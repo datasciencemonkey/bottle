@@ -18,11 +18,13 @@
  *   thread root) holds the user's question and the combined answer. The call rows and the
  *   fallback row of the turn carry `split_group_id` = the turn UUID and are its parts. They never
  *   go into the plain `rows`. A group of parts with no turn row (a 0.1.5 build) is a thread with
- *   "Question not saved" (an empty question). During the session the in-memory turn wins: a
- *   stored turn that the agent client still holds is not sent (`hub:agent` has it).
- * - `conversations.delete` resolves its keys from the last read, refuses a thread in progress,
- *   deletes the rows locally (one `mem.exchange.delete` for each MOG, never a Genie conversation
- *   and never a memory item), tells the agent client to forget the turns, then sends the list.
+ *   "Question not saved" (an empty question). A stored turn is always sent: the view swaps it for
+ *   the in-memory turn with the same id (`hub:agent` has the newest turns only). A group of parts
+ *   of a turn that is in memory and has no turn row yet is not sent, but its rows stay deletable.
+ * - `conversations.delete` reads the store again, defers a thread in progress until it settles,
+ *   deletes the rows locally (one `mem.exchange.delete` for each MOG: a tombstone that keeps the
+ *   Genie conversation id for Wipe and Forget, ADR 0121; never a memory item), tells the agent
+ *   client to forget the turns whose rows were deleted, then sends the list.
  */
 import { emitTo } from '@tauri-apps/api/event';
 import {
@@ -56,8 +58,10 @@ export interface MemoryTurn {
   /** The stored `request_id` of the turn row. */
   turnUuid: string;
   threadId: string;
-  /** The turn is live, queued or not yet saved: a Delete refuses its thread. */
+  /** The turn is live, queued or not yet settled (its rows may not be saved): a Delete waits. */
   inProgress: boolean;
+  /** The agent client sends this turn to the hub (`hub:agent`). Default: yes. */
+  shown?: boolean;
 }
 
 export interface ConversationsReadDeps {
@@ -65,7 +69,7 @@ export interface ConversationsReadDeps {
   mogs(): Promise<ConversationMog[]>;
   /** The name and colour of a workspace chip. Default: the profile name and no colour. */
   chipOf?(profile: string): AgentWsChip;
-  /** The turns in memory: they win over the stored turn with the same UUID. */
+  /** The turns in memory: the view shows the one that `hub:agent` sends instead of its stored turn. */
   memoryTurns?(): MemoryTurn[];
 }
 
@@ -100,11 +104,13 @@ export interface HubConversationsWiring {
   /** The MOG of an agent thread in the last list, or undefined. */
   threadMog(threadId: string): string | undefined;
   /**
-   * Delete threads by key (`c:`, `r:`, `a:`) from the last list. With `onlyFailed` (Clear failed)
-   * a key whose thread has an answered exchange now stays. A thread in progress always stays.
-   * Sends the list again. Never rejects.
+   * Delete threads by key (`c:`, `r:`, `a:`), resolved from a fresh read of the store. With
+   * `onlyFailed` (Clear failed) a key whose thread has an answered exchange now stays. A thread in
+   * progress waits: `retryDeferred` deletes it once it settled. Sends the list again. Never rejects.
    */
   remove(keys: readonly string[], opts?: { onlyFailed?: boolean }): Promise<void>;
+  /** Delete the threads that waited for a turn to settle, when it did. Never rejects. */
+  retryDeferred(): Promise<void>;
   /**
    * The MOG and the profile that own a thread's `conversationId` (genie-followup, #145): a
    * follow-up keeps the MOG and the workspace of the first question, read from the stored
@@ -218,7 +224,11 @@ function partOf(x: Stored, chipOf: (profile: string) => AgentWsChip): AgentThrea
 /** A row of the store: which MOG holds it. `delete` needs this for each MOG. */
 interface KeyRows {
   rows: { mogId: string; requestId: string }[];
-  /** No answered exchange in it (stopped and timed-out count as failed). */
+  /**
+   * No answered exchange in it: a turn row or a part with status `completed` makes it answered.
+   * The view's `isFailedThread` (AgentThread.tsx) uses the same rule on the stored turns; a test
+   * keeps the two equal.
+   */
   failed: boolean;
 }
 
@@ -280,7 +290,9 @@ function agentThreadsOf(
   keys: Map<string, KeyRows>,
 ): { threads: AgentThread[]; threadMogs: Map<string, string> } {
   const chipOf = deps.chipOf ?? NO_CHIP;
-  const inMemory = new Set((deps.memoryTurns?.() ?? []).map((t) => t.turnUuid));
+  const memory = deps.memoryTurns?.() ?? [];
+  // The turns that the hub gets in `hub:agent`: for these the view swaps the stored turn.
+  const inMemory = new Set(memory.filter((t) => t.shown !== false).map((t) => t.turnUuid));
   const turnRows = all.filter((x) => x.agent && UUID_RE.test(x.split));
   const parts = new Map<string, Stored[]>();
   for (const x of all) {
@@ -315,9 +327,8 @@ function agentThreadsOf(
     const ps = parts.get(x.requestId) ?? [];
     used.add(x.requestId);
     const d = threads.get(x.split) ?? { mog: x.mog, turns: [], rows: [] };
-    const turn = turnOf(x, ps);
-    // The in-memory turn wins: the stored one is not sent, but its rows stay deletable.
-    if (!inMemory.has(x.requestId)) d.turns.push(turn);
+    // The stored turn is always sent: the view swaps it for the in-memory turn of the same id.
+    d.turns.push(turnOf(x, ps));
     d.rows.push(x, ...ps);
     threads.set(x.split, d);
   }
@@ -329,13 +340,27 @@ function agentThreadsOf(
     const turn = turnOf({ ...first, requestId: group, o: { status: 'failed' } }, ps);
     threads.set(group, { mog: first.mog, turns: [turn], rows: ps });
   }
+  // The parts of a turn that is in memory and has no turn row (it never wrote one, or has not yet):
+  // they are not sent, but a Delete of their thread must take them.
+  const extra = new Map<string, Stored[]>();
+  for (const t of memory) {
+    if (used.has(t.turnUuid)) continue;
+    const ps = parts.get(t.turnUuid);
+    if (ps) extra.set(t.threadId, [...(extra.get(t.threadId) ?? []), ...ps]);
+  }
   const out: AgentThread[] = [];
   const threadMogs = new Map<string, string>();
+  const keyRows = (d: Draft | undefined, more: Stored[]): KeyRows => {
+    const rows = [...(d?.rows ?? []), ...more];
+    return {
+      rows: rows.map((x) => ({ mogId: x.mog.mogId, requestId: x.requestId })),
+      failed: !rows.some((x) => x.o['status'] === 'completed'),
+    };
+  };
+  for (const [id, more] of extra)
+    if (!threads.has(id)) keys.set(`a:${id}`, keyRows(undefined, more));
   for (const [id, d] of threads) {
-    keys.set(`a:${id}`, {
-      rows: d.rows.map((x) => ({ mogId: x.mog.mogId, requestId: x.requestId })),
-      failed: !d.rows.some((x) => x.o['status'] === 'completed'),
-    });
+    keys.set(`a:${id}`, keyRows(d, extra.get(id) ?? []));
     threadMogs.set(id, d.mog.mogId);
     out.push({
       threadId: id,
@@ -395,50 +420,82 @@ export function wireHubConversations(
       // No hub is open. The hub asks again with conversations.ready when it opens.
     }
   };
+  /** Threads in progress when a Delete came: `retryDeferred` deletes them once they settled. */
+  const deferred = new Map<string, boolean>();
+  const runningThreads = () =>
+    new Set((deps.memoryTurns?.() ?? []).filter((t) => t.inProgress).map((t) => t.threadId));
   const remove = async (
     keys: readonly string[],
     opts: { onlyFailed?: boolean } = {},
   ): Promise<void> => {
     try {
       if (keys.length === 0 || keys.length > CONVERSATIONS_DELETE_MAX) return;
-      const read = last ?? (await readConversationsIndexed(deps));
-      const running = new Set(
-        (deps.memoryTurns?.() ?? []).filter((t) => t.inProgress).map((t) => t.threadId),
-      );
+      // A fresh read, never the last one: a row saved since then would come back.
+      const read = await readConversationsIndexed(deps);
+      if (read.list.unavailable) return;
+      last = read;
+      const running = runningThreads();
       const byMog = new Map<string, Set<string>>();
-      const forget: string[] = [];
+      /** The agent clients' threads to forget, with the MOGs whose rows must go first. */
+      const forget = new Map<string, Set<string>>();
       for (const key of new Set(keys)) {
-        if (key.startsWith('a:')) {
-          // A thread in progress is never deleted: the user stops or removes the turn first.
-          if (running.has(key.slice(2))) continue;
+        // A thread in progress is not deleted yet: its rows are not all saved. It goes once the
+        // turn settled (the view stopped showing it as in progress a moment before the brain).
+        if (key.startsWith('a:') && running.has(key.slice(2))) {
+          deferred.set(key, opts.onlyFailed === true);
+          continue;
         }
         const k = read.keys.get(key);
         if (k && opts.onlyFailed && !k.failed) continue;
         // An answered thread in memory only (no stored row) has no key: Clear failed skips it.
         if (!k && opts.onlyFailed) continue;
-        if (key.startsWith('a:')) forget.push(key.slice(2));
+        if (key.startsWith('a:')) forget.set(key.slice(2), new Set(k?.rows.map((r) => r.mogId)));
         for (const r of k?.rows ?? []) {
           const set = byMog.get(r.mogId) ?? new Set<string>();
           set.add(r.requestId);
           byMog.set(r.mogId, set);
         }
       }
+      const failedMogs = new Set<string>();
+      const now = Date.now();
       for (const [mogId, ids] of byMog) {
         const all = [...ids];
         for (let i = 0; i < all.length; i += CONVERSATIONS_DELETE_MAX) {
-          await deps.store
-            .exec('mem.exchange.delete', {
+          try {
+            await deps.store.exec('mem.exchange.delete', {
               mogId,
               requestIds: all.slice(i, i + CONVERSATIONS_DELETE_MAX),
-            })
-            .catch(() => undefined);
+              now,
+            });
+          } catch {
+            failedMogs.add(mogId);
+          }
         }
       }
-      for (const id of forget) deps.forgetThread?.(id);
+      // The client forgets a thread only when every delete of it worked: else the stored copy
+      // would come back with fewer details.
+      for (const [id, mogIds] of forget) {
+        if (![...mogIds].some((m) => failedMogs.has(m))) deps.forgetThread?.(id);
+      }
     } catch {
       // A failed delete shows again on the next list.
     }
     await publish();
+  };
+  const retryDeferred = async (): Promise<void> => {
+    if (deferred.size === 0) return;
+    try {
+      const running = runningThreads();
+      const ready = [...deferred].filter(([key]) => !running.has(key.slice(2)));
+      if (ready.length === 0) return;
+      for (const [key] of ready) deferred.delete(key);
+      for (const only of [false, true]) {
+        const keys = ready.filter(([, f]) => f === only).map(([key]) => key);
+        if (keys.length > 0) await remove(keys, { onlyFailed: only });
+      }
+    } catch {
+      // The thread shows again; the user deletes it again.
+    }
   };
   const off = onViewInput(bus, (input) => {
     if (input.from !== 'hub' || input.mogId !== CONVERSATIONS_VIEW_ID || input.kind !== 'click')
@@ -482,6 +539,7 @@ export function wireHubConversations(
     },
     threadMog: (threadId) => last?.threadMogs.get(threadId),
     remove,
+    retryDeferred,
     async openConversations(requestId) {
       const open = requestId ? { requestId } : {};
       held = open;

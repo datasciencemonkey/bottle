@@ -60,6 +60,11 @@ export interface GenieEnd {
   backend?: 'genie_agent';
   /** With `backend: 'genie_agent'`: the root UUID of the thread, saved as `split_group_id`. */
   threadId?: string;
+  /**
+   * The brain-side Wipe fence (security L3): true once a Wipe ran since the write started. The
+   * writer checks it before each store write and saves nothing after a Wipe.
+   */
+  isStale?: () => boolean;
   /** Slice 2a: false for a call to a workspace that is not home (the table keeps no question text). */
   homeWorkspace?: boolean;
 }
@@ -156,11 +161,14 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
         deps.mogName(dataMogId).catch(() => ''),
         deps.hostOf(x.profile).catch(() => undefined),
       ]);
+      if (x.isStale?.()) return;
       await deps.memory.registerMog({
         mogId: dataMogId,
         displayName: name.trim() === '' ? MOG_NAME_FALLBACK : name,
         backendKind: MOG_BACKEND_KIND,
       });
+      // A Wipe may have run while the lookups above waited: it deleted every row, so none returns.
+      if (x.isStale?.()) return;
       await deps.memory.recordExchange(exchangeOf(x, host ?? '', dataMogId));
     } catch {
       deps.log.event('memory.write', { ok: 0 });

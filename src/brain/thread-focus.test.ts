@@ -233,6 +233,7 @@ describe('agent threads (ADR 0121)', () => {
         actionTicket: 'ticket-1',
       },
     });
+    // No ticket (the host minted none): nothing, so a ⌥G latch never approves a hub send.
     input(send);
     // From another window, or with a bad shape: nothing.
     input(send, 'card-x');
@@ -242,10 +243,6 @@ describe('agent threads (ADR 0121)', () => {
       [
         { action: 'agent.thread_send', threadId: THREAD, mogId: MOG, question: 'And Q4?' },
         'ticket-1',
-      ],
-      [
-        { action: 'agent.thread_send', threadId: THREAD, mogId: MOG, question: 'And Q4?' },
-        undefined,
       ],
     ]);
   });
