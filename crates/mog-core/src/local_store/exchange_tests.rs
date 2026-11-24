@@ -254,6 +254,10 @@ fn mem_26_no_statement_or_trigger_purges_exchanges_by_age() {
                 "mem.forget.session_exchanges" | "mem.forget.mog_exchanges" => {
                     assert!(!sql.contains("_at"), "{}: Forget has no age rule", st.id);
                 }
+                // Hub Conversations delete: named request ids only, no age rule (ADR 0121).
+                "mem.exchange.delete" => {
+                    assert!(!sql.contains("_at"), "{}: no age rule", st.id);
+                }
                 // Wipe: Settings only, through R14 (U9).
                 "mem.wipe.exchanges_before" => assert_eq!(st.access, Access::Core),
                 other => panic!("{other} deletes exchanges"),
@@ -457,4 +461,163 @@ fn genie_followup_exchange_recent_carries_the_conversation_id() {
     for row in r {
         assert_eq!(row["conversationId"], "test-conv");
     }
+}
+
+// ---- ADR 0121: agent turn rows and the local Conversations delete -------------------------------
+
+const TURN_REQ: &str = "41111111-2222-4333-8444-555555555510";
+const TURN_EXCH: &str = "31111111-2222-4333-8444-555555555510";
+const CALL_REQ: &str = "41111111-2222-4333-8444-555555555511";
+const CALL_EXCH: &str = "31111111-2222-4333-8444-555555555511";
+const ROOT: &str = "41111111-2222-4333-8444-555555555512";
+
+/// A turn row (`genie_agent`) with the thread root in `split_group_id`, and a call row of that turn.
+fn seed_turn(s: &SqlCipherLocalStore) {
+    let mut turn = home(TURN_EXCH, TURN_REQ, T0);
+    {
+        let o = turn.as_object_mut().unwrap();
+        o.insert("backendKind".into(), json!("genie_agent"));
+        o.insert("splitGroupId".into(), json!(ROOT));
+        o.insert("conversationId".into(), Value::Null);
+        o.insert("answerSummary".into(), Value::Null);
+    }
+    exec(s, "mem.exchange.upsert", turn);
+    let mut call = home(CALL_EXCH, CALL_REQ, T0 + 1_000);
+    call["splitGroupId"] = json!(TURN_REQ);
+    exec(s, "mem.exchange.upsert", call);
+}
+
+#[test]
+fn adr_0121_recent_returns_backend_kind_and_split_group_id() {
+    let t = TempDir::new("0121-recent");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0 + 2_000));
+    let got = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let by = |req: &str| {
+        rows(&got)
+            .iter()
+            .find(|r| r["requestId"] == req)
+            .unwrap()
+            .clone()
+    };
+    let turn = by(TURN_REQ);
+    assert_eq!(turn["backendKind"], "genie_agent");
+    assert_eq!(turn["splitGroupId"], ROOT);
+    let call = by(CALL_REQ);
+    assert_eq!(call["backendKind"], "genie_one_mcp");
+    assert_eq!(call["splitGroupId"], TURN_REQ);
+    let plain = by(REQ_1);
+    assert_eq!(plain["splitGroupId"], Value::Null);
+}
+
+fn delete(s: &SqlCipherLocalStore, mog: &str, ids: Value) -> i64 {
+    changes(&exec(
+        s,
+        "mem.exchange.delete",
+        json!({"mogId": mog, "requestIds": ids}),
+    ))
+}
+
+#[test]
+fn adr_0121_delete_removes_only_the_named_ids_of_that_mog() {
+    let t = TempDir::new("0121-delete");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0 + 2_000));
+    let mut other = home(EXCH_2, REQ_2, T0 + 3_000);
+    other["mogId"] = json!(MOG_B);
+    exec(&s, "mem.exchange.upsert", other);
+
+    // MEM-01: another MOG's id in the list matches nothing.
+    assert_eq!(delete(&s, MOG_A, json!([REQ_2])), 0);
+    assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
+    // Two named ids go; the rest stay.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ, CALL_REQ])), 2);
+    assert!(get(&s, MOG_A, TURN_REQ).is_empty());
+    assert!(get(&s, MOG_A, CALL_REQ).is_empty());
+    assert_eq!(get(&s, MOG_A, REQ_1).len(), 1);
+    assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
+    // A repeat, an empty list and an unknown id delete nothing.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ])), 0);
+    assert_eq!(delete(&s, MOG_A, json!([])), 0);
+    // A local delete leaves no forget_log row.
+    let n: i64 = s
+        .with_conn(|c| c.query_row("SELECT count(*) FROM forget_log", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(n, 0);
+    // The statement is a brain write that passes the MEM-01 guard.
+    let st = super::catalog::find("mem.exchange.delete").expect("delete");
+    assert_eq!(st.access, Access::Brain);
+    assert_eq!(st.kind, super::catalog::Kind::Write);
+    super::mog_guard::require_mog_id_filter(st.sql).expect("mog_guard");
+}
+
+#[test]
+fn adr_0121_delete_matches_no_non_uuid_id_and_checks_the_list_shape() {
+    let t = TempDir::new("0121-shape");
+    let s = open(&t);
+    seed_turn(&s);
+    // Values that are no request id match nothing, even in a list with a real one removed.
+    assert_eq!(
+        delete(
+            &s,
+            MOG_A,
+            json!(["%", "*", "' OR 1=1 --", "", "null", "c:test-conv"])
+        ),
+        0
+    );
+    assert_eq!(get(&s, MOG_A, TURN_REQ).len(), 1);
+    assert_eq!(get(&s, MOG_A, CALL_REQ).len(), 1);
+    // The list is 200 strings of 36 characters at most; any other shape is refused.
+    let too_many: Vec<String> = (0..201).map(|_| REQ_1.to_owned()).collect();
+    let ok: Vec<String> = (0..200).map(|_| REQ_1.to_owned()).collect();
+    assert_eq!(delete(&s, MOG_A, json!(ok)), 0);
+    for bad in [
+        json!(too_many),
+        json!([REQ_1, "x".repeat(37)]),
+        json!({"a": REQ_1}),
+        json!(REQ_1),
+        json!([[REQ_1]]),
+        json!([7]),
+    ] {
+        let r = s.exec(
+            "mem.exchange.delete",
+            json!({"mogId": MOG_A, "requestIds": bad}),
+        );
+        assert!(r.is_err(), "{bad}");
+    }
+    assert!(s
+        .exec("mem.exchange.delete", json!({"mogId": MOG_A}))
+        .is_err());
+    assert_eq!(get(&s, MOG_A, TURN_REQ).len(), 1);
+}
+
+#[test]
+fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange_with_a_null_source() {
+    let t = TempDir::new("0121-cite");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(
+        &s,
+        "mem.item.write",
+        json!({"mogId": MOG_A, "itemId": ITEM_1, "itemType": "fact", "text": "Q3 is up",
+               "source": "you", "confidence": 0.9, "sourceExchangeId": CALL_EXCH,
+               "seenAt": T0, "rowHlc": 1, "deviceId": "test-device", "now": T0}),
+    );
+    assert_eq!(delete(&s, MOG_A, json!([CALL_REQ])), 1);
+    let src: Option<String> = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT source_exchange_id FROM memory_item WHERE item_id = ?1",
+                [ITEM_1],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(src, None);
 }
