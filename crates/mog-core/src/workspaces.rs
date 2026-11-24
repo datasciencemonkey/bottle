@@ -64,6 +64,11 @@ pub trait WorkspaceGate: Send + Sync + std::fmt::Debug {
     /// True if `genie_ask` may go to `profile`: it is the home or it is switched on. It fails
     /// closed: a store that cannot be read allows nothing.
     fn allows(&self, profile: &str) -> bool;
+    /// The workspace URL (`https://host`) of a supported `profile`, for the link trust check.
+    /// `None` when unknown: no link is then trusted.
+    fn workspace_url(&self, _profile: &str) -> Option<String> {
+        None
+    }
 }
 
 /// T7 as the store sees it: the profile list.
@@ -769,6 +774,12 @@ impl WorkspaceGate for WorkspaceStore {
     fn allows(&self, profile: &str) -> bool {
         let _g = self.guard();
         self.load().is_ok_and(|d| d.allows(profile))
+    }
+    fn workspace_url(&self, profile: &str) -> Option<String> {
+        let list = self.profiles.profiles(false).ok()?;
+        list.into_iter()
+            .find(|p| p.name == profile && p.supported)
+            .map(|p| p.host)
     }
 }
 

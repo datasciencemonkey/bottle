@@ -76,9 +76,17 @@ pub fn system(i: &PromptInput<'_>) -> String {
     );
     p.push_str(
         "Output: when you have the answer, call submit_answer with {\"answer\": string, \
-         \"sources\": [{\"workspace\": alias, \"callId\": id}]}. Keep answer short. \
+         \"sources\": [{\"workspace\": alias, \"callId\": id}]}. \
          In answer, cite a source inline as [n], where n is the 1-based position of that source \
          in sources.\n",
+    );
+    p.push_str(
+        "Format: write answer in Markdown. Keep the formatting of the Genie answer, its tables \
+         and its hyperlinks exactly. Never drop or rewrite a URL. When only one workspace \
+         answered, return that answer in full with its formatting, not a summary. End the answer \
+         with one \"Open in Databricks\" Markdown link for each workspace that you used, as \
+         [Open in Databricks](<link>), where <link> is the link attribute of its genie_answer \
+         block. Never invent a URL. Use only URLs that appear in the genie_answer blocks.\n",
     );
     p
 }
@@ -138,6 +146,18 @@ mod tests {
         assert!(p.contains("[n]"));
         assert!(p.contains("call submit_answer"));
         assert!(!p.contains("SECRET-PROFILE"));
+    }
+
+    #[test]
+    fn the_prompt_keeps_formatting_and_links_and_asks_for_open_in_databricks() {
+        let c = cat();
+        let p = system(&input(&c, true));
+        assert!(p.contains("Markdown"));
+        assert!(p.contains("Never drop or rewrite a URL"));
+        assert!(p.contains("in full with its formatting"));
+        assert!(p.contains("[Open in Databricks](<link>)"));
+        assert!(p.contains("Never invent a URL"));
+        assert!(!p.contains("Keep answer short"));
     }
 
     #[test]

@@ -856,14 +856,14 @@ fn an_unknown_source_makes_the_answer_hidden() {
 }
 
 #[test]
-fn the_answer_is_cut_to_twelve_hundred_chars() {
+fn the_answer_is_cut_to_eight_thousand_chars() {
     let r = rig(
         false,
         10,
         FakeR8::answering(by_profile),
         Box::new(|_, _| {
             reply_of(vec![final_item(
-                json!({"answer": "a".repeat(5000), "sources": []}),
+                json!({"answer": "a".repeat(9000), "sources": []}),
             )])
         }),
     );
@@ -876,7 +876,7 @@ fn the_answer_is_cut_to_twelve_hundred_chars() {
             .unwrap()
             .chars()
             .count(),
-        1200
+        8000
     );
 }
 
@@ -1820,9 +1820,13 @@ fn stop_during_a_blocking_model_call_lets_the_queued_turn_run() {
 fn markers_outside_the_sources_are_removed_from_the_answer() {
     assert_eq!(
         host::strip_bad_markers("a [1] b [2] c [3] [0] [x]", 2),
-        "a [1] b [2] c   [x]"
+        "a [1] b [2] c [x]"
     );
-    assert_eq!(host::strip_bad_markers("a [1] b", 0), "a  b");
+    assert_eq!(host::strip_bad_markers("a [1] b", 0), "a b");
+    assert_eq!(
+        host::strip_bad_markers("Ukraine [3]; Wednesday [4]. End [5]", 0),
+        "Ukraine; Wednesday. End"
+    );
     let r = rig(
         false,
         10,
@@ -1836,7 +1840,7 @@ fn markers_outside_the_sources_are_removed_from_the_answer() {
     let (tid, _) = r.run("q");
     assert_eq!(
         r.host.turn_result(&tid).unwrap().answer.as_deref(),
-        Some("fact  and ")
+        Some("fact and")
     );
 }
 

@@ -294,22 +294,19 @@ describe('agent threads in the list', () => {
 describe('the agent thread detail', () => {
   beforeEach(() => tauri.reset());
 
-  it('[owner bug] a stored turn shows the answers open and first, the note after them as a muted block', async () => {
+  it('[owner bug] a stored turn shows the summary as the main answer, the workspace answers folded under it', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a')])]);
     const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
     expect(d.querySelector('h2')?.textContent).toBe('Stored question a?');
-    const titles = [...d.querySelectorAll('h3.agent-part-title')].map((h) => h.textContent);
-    expect(titles).toEqual(['Answer from Sales', 'Answer from Finance']);
     const list = d.querySelector<HTMLElement>('.agent-parts') as HTMLElement;
-    expect(list.hidden).toBe(false);
+    expect(list.hidden).toBe(true);
     expect(list.textContent).toContain('Answer 1 from a workspace.');
     expect(list.textContent).toContain('$1M bookings');
-    const note = d.querySelector('[data-agent-note]') as HTMLElement;
-    expect(note.className).toContain('agent-note--after');
-    expect(note.textContent).toContain('Note from your MOG');
+    const note = d.querySelector('[data-agent-summary]') as HTMLElement;
+    expect(note.textContent).not.toContain('Note from your MOG');
     expect(note.textContent).toContain('Finance is higher.');
-    expect(list.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('[P2-8] the answers have a toggle with a chevron and a label that says what it does', async () => {
@@ -317,14 +314,15 @@ describe('the agent thread detail', () => {
     await feed([thread(THREAD_A, [stored('a')])]);
     const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
     const toggle = d.querySelector<HTMLElement>('[data-action="parts"]') as HTMLElement;
-    expect(toggle.textContent).toBe('Hide workspace answers');
-    expect(toggle.querySelector('svg')).not.toBeNull();
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    const list = d.querySelector<HTMLElement>(`#${toggle.getAttribute('aria-controls')}`);
-    await click(toggle);
     expect(toggle.textContent).toBe('2 workspace answers');
+    expect(toggle.querySelector('svg')).not.toBeNull();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const list = d.querySelector<HTMLElement>(`#${toggle.getAttribute('aria-controls')}`);
     expect(list?.hidden).toBe(true);
+    await click(toggle);
+    expect(toggle.textContent).toBe('Hide workspace answers');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(list?.hidden).toBe(false);
   });
 
   it('[P2-6] a stored part has its workspace colour stripe', async () => {
@@ -962,7 +960,7 @@ describe('review fixes (needs you, queued only, toast, composer, list line)', ()
       ...view({ session: SESSION }),
       earlier: [
         memTurn('a', {
-          summary: { md: 'Shown directly to you.', kind: 'note', workspaces: [] },
+          summary: { md: '', kind: 'note', workspaces: [] },
           parts: [
             {
               callId: 'c-00000001',

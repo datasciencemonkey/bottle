@@ -216,6 +216,20 @@
   font-weight: var(--mog-weight-semibold);
 }
 
+/* The answer of the MOG: the main answer of a turn, in the answer colours, not a muted note. */
+.agent-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  font-size: var(--mog-text-sm);
+}
+
+.agent-summary .agent-part-body {
+  align-self: stretch;
+}
+
 .agent-note-chips {
   display: flex;
   flex-wrap: wrap;

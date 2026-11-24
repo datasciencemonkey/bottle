@@ -482,6 +482,7 @@ impl AgentGuard {
         ended: Ended,
     ) -> ToolOut {
         let mut out = ToolOut::refusal(RUN_STOPPED);
+        let ws_url = self.deps.gate.workspace_url(&a.profile);
         let event = {
             let mut st = self.lock();
             if let Some(sess) = st.sessions.get_mut(sid) {
@@ -503,7 +504,7 @@ impl AgentGuard {
                     Some(o) => {
                         reply = o.reply.as_ref().map(McpCallReply::from);
                         let (text, w) = if as_text {
-                            receipt::text_block(&a.call_id, &a.alias, &o)
+                            receipt::text_block(&a.call_id, &a.alias, &o, ws_url.as_deref())
                         } else {
                             (receipt::receipt(&a.call_id, &a.alias, &o), None)
                         };

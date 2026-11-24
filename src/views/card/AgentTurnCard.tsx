@@ -32,7 +32,7 @@ import type {
   AgentWsChip,
   CardSection,
 } from '../../shared/ipc';
-import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { LINK_OPEN, bareHost, openInDatabricksUrl } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
 import { SafeMarkdown } from './safe-markdown';
@@ -482,7 +482,11 @@ function CallsOf({ turn, now }: { turn: AgentTurnView; now: number }) {
  * Else (D1 on) the combined note comes first and the parts fold under it.
  */
 export const answersFirstOf = (turn: AgentTurnView): boolean =>
-  turn.parts.length > 0 && (turn.summary === undefined || turn.summary.kind !== 'combined');
+  turn.parts.length > 0 && !hasSummaryText(turn);
+
+/** The orchestrator wrote an answer: it is the main answer, the parts fold under it. */
+export const hasSummaryText = (turn: AgentTurnView): boolean =>
+  turn.summary !== undefined && turn.summary.md.trim() !== '';
 
 /** The first line of the first answer of a turn, for a list: never the note of the agent. */
 export function firstAnswerLine(turn: AgentTurnView): string {
@@ -542,11 +546,34 @@ export function TurnBody({
   // On an ended turn the answer comes before the process.
   const answerFirst = !isOpenState(turn.state) && turn.state !== 'needs_you';
   const answersFirst = answersFirstOf(turn);
-  const combined = turn.summary?.kind === 'combined';
-  const note = turn.summary && (
-    <div className={answersFirst ? 'agent-note agent-note--after' : 'agent-note'} data-agent-note>
-      <p className="agent-note-label">{combined ? COMBINED_LABEL : NOTE_LABEL}</p>
-      {combined && turn.summary.workspaces.length > 0 && (
+  const combined = hasSummaryText(turn);
+  // Links in the answer must lead to a workspace of this turn: a part host or a cited host.
+  const summaryTrust = useMemo(() => {
+    const hosts = [
+      ...turn.parts.map((p) => sectionOf(p.sections, 'footer')?.workspaceHost ?? ''),
+      ...(turn.summary?.citations ?? []).map((c) => c.workspaceHost ?? ''),
+    ].map(bareHost);
+    return {
+      profileHost: '',
+      allowedAppUrls: [...new Set(hosts)].filter((h) => h !== '').map((h) => `https://${h}`),
+    };
+  }, [turn.parts, turn.summary]);
+  // "Open in Databricks" of each cited workspace, unless the answer carries that link already.
+  const footerLinks = useMemo(() => {
+    const seen = new Set<string>();
+    const md = turn.summary?.md ?? '';
+    const out: { url: string; name: string }[] = [];
+    for (const c of turn.summary?.citations ?? []) {
+      const url = openInDatabricksUrl(c.deepLink, c.workspaceHost);
+      if (url === undefined || seen.has(url) || md.includes(url)) continue;
+      seen.add(url);
+      out.push({ url, name: c.workspace.name });
+    }
+    return out;
+  }, [turn.summary]);
+  const note = turn.summary && combined && (
+    <div className="agent-summary" data-agent-summary data-agent-note>
+      {turn.summary.workspaces.length > 1 && (
         <div
           className="agent-note-chips"
           role="group"
@@ -575,14 +602,31 @@ export function TurnBody({
           })}
         </div>
       )}
-      <div className="agent-note-body">
+      <div className="agent-part-body" data-answer>
         <SafeMarkdown
           text={turn.summary.md}
-          trust={{ profileHost: '', allowedAppUrls: [] }}
+          trust={summaryTrust}
           {...(onOpenLink ? { onOpenLink } : {})}
           renderMarker={renderMarker}
         />
       </div>
+      {onOpenLink &&
+        footerLinks.map((l) => (
+          <a
+            key={l.url}
+            className="genie-toggle agent-databricks"
+            href={l.url}
+            rel="noopener noreferrer"
+            data-action="open-in-databricks"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenLink(l.url);
+            }}
+          >
+            {footerLinks.length > 1 ? `${OPEN_IN_DATABRICKS}: ${l.name}` : OPEN_IN_DATABRICKS}
+          </a>
+        ))}
     </div>
   );
   return (

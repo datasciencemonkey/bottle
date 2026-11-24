@@ -33,7 +33,6 @@ import {
 import type { AgentTurnView, OrchestratorState } from '../../shared/ipc';
 import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
-  NOTE_LABEL,
   OPEN_IN_DATABRICKS,
   QUEUED_LABEL,
   SLOW_COPY,
@@ -450,7 +449,8 @@ function StoredTurn({
   turn: AgentThreadTurn;
   headingId?: string | undefined;
 }) {
-  const [open, setOpen] = useState(true);
+  // The answer of the MOG comes first; the workspace answers fold under it.
+  const [open, setOpen] = useState(turn.summaryMd === '');
   // The note may link to the workspaces that it combines: each of their hosts is trusted for it,
   // and a click goes to the brain with the part of that host (the same path as StoredPart).
   const trust = useMemo(
@@ -506,6 +506,13 @@ function StoredTurn({
             : 'Genie could not answer this question.'}
         </p>
       )}
+      {hasNote && (
+        <div className="agent-summary" data-agent-summary data-agent-note>
+          <div className="agent-part-body" data-answer>
+            <SafeMarkdown text={turn.summaryMd} trust={trust} onOpenLink={openNoteLink} />
+          </div>
+        </div>
+      )}
       {turn.parts.length > 0 && (
         <>
           {hasNote && (
@@ -532,14 +539,6 @@ function StoredTurn({
             ))}
           </ul>
         </>
-      )}
-      {hasNote && (
-        <div className="agent-note agent-note--after" data-agent-note>
-          <p className="agent-note-label">{NOTE_LABEL}</p>
-          <div className="agent-note-body">
-            <SafeMarkdown text={turn.summaryMd} trust={trust} onOpenLink={openNoteLink} />
-          </div>
-        </div>
       )}
     </section>
   );
