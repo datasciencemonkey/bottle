@@ -1871,6 +1871,7 @@ fn adr_0122_a_sources_footer_that_the_model_wrote_is_removed() {
     assert_eq!(
         host::strip_source_footer(
             "Top is X [1].\n\n[1] Source: logfood, call-f84ecf32a509",
+            &[],
             &[]
         ),
         "Top is X [1]."
@@ -1878,25 +1879,51 @@ fn adr_0122_a_sources_footer_that_the_model_wrote_is_removed() {
     assert_eq!(
         host::strip_source_footer(
             "Up [1] [2].\n\n---\n**Sources:**\n- [1] sales (c-0a1b2c3d)\n- [2] finance\n",
+            &["c-0a1b2c3d"],
             &[]
         ),
         "Up [1] [2]."
     );
+    // A bare "Source:" line goes when it names a cited workspace or a known call id.
     assert_eq!(
-        host::strip_source_footer("A [1].\nSource: sales", &[]),
+        host::strip_source_footer("A [1].\nSource: sales", &[], &["sales"]),
+        "A [1]."
+    );
+    assert_eq!(
+        host::strip_source_footer("A [1].\nSource: c-0a1b2c3d", &["c-0a1b2c3d"], &[]),
         "A [1]."
     );
     // A line in the middle stays, and so does a last line that only starts with "Sources".
     let keep = "Source: the sales table.\nSources show growth [1].";
-    assert_eq!(host::strip_source_footer(keep, &[]), keep);
+    assert_eq!(host::strip_source_footer(keep, &[], &["sales"]), keep);
     // A known call id goes from the text, also with the brackets that hold only it.
     assert_eq!(
         host::strip_source_footer(
             "Revenue grew [1] (c-0a1b2c3d) fast, see c-0a1b2c3d.",
-            &["c-0a1b2c3d"]
+            &["c-0a1b2c3d"],
+            &[]
         ),
         "Revenue grew [1] fast, see."
     );
+}
+
+#[test]
+fn adr_0122_a_genie_source_line_and_a_list_of_ids_stay() {
+    // Genie names its table at the end: that is data, not a model footer.
+    let genie = "Top product is X [1].\n\nSource: main.sales.orders";
+    assert_eq!(
+        host::strip_source_footer(genie, &["c-0a1b2c3d"], &["sales"]),
+        genie
+    );
+    // A list of customer ids that look like call ids, with no known call id among them.
+    let ids = "Customers [1]:\n- c-1a2b3c4d\n- c-5e6f7a8b";
+    assert_eq!(
+        host::strip_source_footer(ids, &["c-0a1b2c3d"], &["sales"]),
+        ids
+    );
+    // A "Sources" heading alone, with nothing that names a source, stays too.
+    let head = "A [1].\n\nSources:\n- the orders table";
+    assert_eq!(host::strip_source_footer(head, &[], &["sales"]), head);
 }
 
 #[test]

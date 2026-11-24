@@ -79,6 +79,13 @@ describe('citationsByWorkspace', () => {
     expect(got.md).toBe('A B.');
   });
 
+  it('drops the markers of a workspace that the brain cannot name, and numbers the rest', () => {
+    const got = citationsByWorkspace('A [1] B [2].', src, both, (ws) => ws !== 'sales');
+    expect(got.md).toBe('A B [1].');
+    expect(got.citations.map((c) => [c.n, c.workspace.name])).toEqual([[1, 'finance']]);
+    expect(got.workspaceIds).toEqual(['finance']);
+  });
+
   it('does not take a link label [1](url) for a marker', () => {
     const got = cites('[1](https://x.example) text');
     expect(got.citations).toEqual([]);

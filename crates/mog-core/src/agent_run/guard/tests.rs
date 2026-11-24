@@ -372,6 +372,31 @@ fn ac_2a_5_the_agent_workspace_gets_a_text_block_and_taints_the_session() {
 /// The owner bug of 0.1.8: the guard made `call-<12 hex>` ids, the wire takes only `c-<8 hex>`,
 /// so the brain dropped every call event and Conversations had no parts, chips or links.
 #[test]
+fn adr_0122_a_call_id_is_minted_again_while_its_session_has_it() {
+    let r = rig();
+    r.session();
+    r.turn("t1", 5);
+    let first = val(&r.ask("sales"))["callId"].as_str().unwrap().to_owned();
+    let st = r.guard.lock();
+    let sess = st.sessions.get(S).unwrap();
+    // A minter that repeats the taken id a few times, then gives a new one.
+    let mut n = 0;
+    let got = super::ask::unique_call_id_with(sess, || {
+        n += 1;
+        if n < 3 {
+            first.clone()
+        } else {
+            "c-0000abcd".into()
+        }
+    });
+    assert_eq!(got, "c-0000abcd");
+    // Random bytes that always fail (every id is the same): a counter finds a free id.
+    let got = super::ask::unique_call_id_with(sess, || first.clone());
+    assert_ne!(got, first);
+    assert!(crate::ipc::AgentCallId::try_from(got).is_ok());
+}
+
+#[test]
 fn adr_0122_every_call_id_has_the_wire_form_of_agent_call_id() {
     let r = rig();
     r.session();

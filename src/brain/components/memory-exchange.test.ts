@@ -3,7 +3,7 @@ import type { OperationState } from '../../shared/interfaces';
 import type { JsonObject } from '../../shared/ipc';
 import { RecordingLocalStore, genieExchangeDouble } from '../../test-support/memory-double';
 import { distilSummary } from './exchange-summary';
-import { ANSWER_CUT_MARK, LocalMemoryService } from './memory-service';
+import { ANSWER_CUT_MARK, CITATIONS_MAX_BYTES, LocalMemoryService } from './memory-service';
 
 /** The simulated clock: 2026-01-01T00:00:00Z in epoch ms, and one day. */
 const T0 = 1_767_225_600_000;
@@ -253,5 +253,39 @@ describe('T10 registerMog (#40, ADR 0061)', () => {
       svc.registerMog({ mogId, displayName: '', backendKind: 'genie_one_mcp' }),
     ).rejects.toThrow();
     expect(store.calls).toEqual([]);
+  });
+});
+
+describe('ADR 0122: the citations and the asked time of an agent row', () => {
+  it('writes the citations of a turn row, cut so the row always fits', async () => {
+    const { store, svc } = setup();
+    const few = [
+      { n: 1, profile: 'fake-sales', requestId: '31111111-2222-4333-8444-000000000009' },
+    ];
+    await svc.recordExchange({ ...genieExchangeDouble(), citations: few });
+    expect(at(upserts(store), 0).citations).toEqual(few);
+    // A list that is too long for the column loses its last entries, never the row.
+    const many = Array.from({ length: 200 }, (_, i) => ({ n: i + 1, profile: 'p'.repeat(100) }));
+    await svc.recordExchange({
+      ...genieExchangeDouble(),
+      requestId: genieExchangeDouble().requestId,
+      citations: many,
+    });
+    const cut = at(upserts(store), 1).citations as unknown[];
+    expect(cut.length).toBeGreaterThan(0);
+    expect(cut.length).toBeLessThan(many.length);
+    expect(new TextEncoder().encode(JSON.stringify(cut)).length).toBeLessThanOrEqual(
+      CITATIONS_MAX_BYTES,
+    );
+    expect(cut).toEqual(many.slice(0, cut.length));
+  });
+
+  it('saves the asked time that the caller gives, else now', async () => {
+    const { store, svc } = setup();
+    await svc.recordExchange({ ...genieExchangeDouble(), askedAt: T0 - 5_000 });
+    await svc.recordExchange({ ...genieExchangeDouble(), askedAt: -1 });
+    expect(at(upserts(store), 0).askedAt).toBe(T0 - 5_000);
+    expect(at(upserts(store), 1).askedAt).toBe(T0);
+    expect(at(upserts(store), 1)).not.toHaveProperty('citations');
   });
 });

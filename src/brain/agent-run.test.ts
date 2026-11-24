@@ -466,9 +466,10 @@ describe('a finished call and a finished turn', () => {
     expect(s.md).toBe('Sales [1] and finance, not or [x].');
     expect(s.citations).toMatchObject([{ n: 1, callId: C1, workspace: { name: SALES.name } }]);
     expect(s.citations).toHaveLength(1);
-    // The turn row saves which workspace each number names.
+    // The turn row saves which workspace each number names, and the part row it reaches.
+    const salesRow = r.history.find((h) => h.backend === undefined && h.profile === SALES.profile);
     expect(r.history.find((h) => h.backend === 'genie_agent')?.citations).toEqual([
-      { n: 1, profile: SALES.profile },
+      { n: 1, profile: SALES.profile, requestId: salesRow?.opId },
     ]);
   });
 
@@ -499,7 +500,37 @@ describe('a finished call and a finished turn', () => {
     expect(s?.citations?.[0]).toMatchObject({ n: 1, callId: C2 });
     const row = r.history.find((h) => h.backend === 'genie_agent');
     expect(row?.end).toMatchObject({ t: 'answer', md: 'Top is X [1] [1].' });
-    expect(row?.citations).toEqual([{ n: 1, profile: SALES.profile }]);
+    // The number reaches the part row of the last call, the one that the chip reaches live.
+    const calls = r.history.filter((h) => h.backend === undefined);
+    expect(calls.map((h) => h.question)).toHaveLength(2);
+    const second = calls.find((h) => h.end.t === 'answer' && h.end.md === 'Top is **X**.');
+    expect(row?.citations).toEqual([{ n: 1, profile: SALES.profile, requestId: second?.opId }]);
+  });
+
+  it('[owner bug] parts follow the order their calls were asked; part rows save that time', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.ev({ kind: 'started', turnId: T1 });
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'First.'));
+    r.script.details.set(`${T1}:${C2}`, detail(T1, C2, SALES, 'answered', 'Second.'));
+    r.ev(callEv(T1, C1, SALES, 'asking', 1));
+    const firstAsked = r.clock.now();
+    r.clock.advance(1_000);
+    r.ev(callEv(T1, C2, SALES, 'asking', 2));
+    // The second call ends first.
+    r.clock.advance(1_000);
+    r.ev(callEv(T1, C2, SALES, 'answered', 2));
+    await r.settle();
+    r.clock.advance(1_000);
+    r.ev(callEv(T1, C1, SALES, 'answered', 2));
+    await r.settle();
+    const live = r.client.panel().live ?? r.client.turn(T1);
+    expect(live?.parts.map((p) => p.callId)).toEqual([C1, C2]);
+    const rows = r.history.filter((h) => h.backend === undefined);
+    const byQ = (md: string) => rows.find((h) => h.end.t === 'answer' && h.end.md === md);
+    expect(byQ('First.')?.askedAt).toBe(firstAsked);
+    expect(byQ('Second.')?.askedAt).toBe(firstAsked + 1_000);
   });
 
   it('[AC-2a.12] a hidden summary shows no note and folds nothing', async () => {

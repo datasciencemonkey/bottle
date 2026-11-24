@@ -43,12 +43,15 @@ export function citationsByWorkspace(
   md: string,
   sources: readonly { callId: string; workspaceId: string }[],
   parts: ReadonlyMap<string, AgentPartView>,
+  /** False for a workspace the brain cannot name (no profile): its markers go too. */
+  known: (workspaceId: string) => boolean = () => true,
 ): WorkspaceCitations {
   const byWs = new Map<string, { k: number; calls: Set<string> }>();
   const text = md.replace(MARKER, (_all, spaces: string, raw: string) => {
     const source = sources[Number(raw) - 1];
     const part = source && parts.get(source.callId);
     if (source === undefined || part === undefined || part.notShownToAgent === true) return '';
+    if (!known(source.workspaceId)) return '';
     const ws = byWs.get(source.workspaceId) ?? { k: byWs.size + 1, calls: new Set<string>() };
     ws.calls.add(source.callId);
     byWs.set(source.workspaceId, ws);

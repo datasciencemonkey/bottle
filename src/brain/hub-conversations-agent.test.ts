@@ -12,6 +12,7 @@ import type { LocalMemoryStore } from './components/memory-store';
 import {
   readConversations,
   wireHubConversations,
+  withoutOldFooter,
   type MemoryTurn,
 } from './hub-conversations-wiring';
 import type { HubConversations } from '../shared/hub-conversations';
@@ -357,6 +358,37 @@ describe('the stored citations of a turn (ADR 0122)', () => {
       { n: 1, workspace: { name: 'Sales', colorVariant: 'sky' }, requestId: id(2) },
       { n: 2, workspace: { name: 'Fin', colorVariant: 'sky' } },
     ]);
+  });
+
+  it('[owner bug] a saved part row wins: the chip reaches the same part as the live chip', async () => {
+    const cites = JSON.stringify([{ n: 1, profile: 'fake-sales', requestId: id(1) }]);
+    const { store } = fakeStore({
+      [MOG_A]: [
+        turnRow(TURN1, ROOT, T0 + 1000, { finalAnswerMd: 'A [1].', citations: cites }),
+        partRow(1, TURN1, T0 + 1100),
+        partRow(2, TURN1, T0 + 1200),
+      ],
+    });
+    const list = await readConversations({ store, mogs, chipOf });
+    expect(list.agentThreads?.[0]?.turns[0]?.citations?.[0]?.requestId).toBe(id(1));
+  });
+
+  it('[owner bug] a 0.1.8 turn row shows without the sources footer that its model wrote', async () => {
+    const md = 'Top is X [1].\n\n---\n**Sources:**\n[1] Source: logfood, call-f84ecf32a509';
+    const { store } = fakeStore({
+      [MOG_A]: [turnRow(TURN1, ROOT, T0 + 1000, { finalAnswerMd: md })],
+    });
+    const list = await readConversations({ store, mogs, chipOf });
+    expect(list.agentThreads?.[0]?.turns[0]?.summaryMd).toBe('Top is X [1].');
+  });
+
+  it('keeps every other last line of a stored answer', () => {
+    for (const md of [
+      'Top is X [1].\n\nSource: main.sales.orders',
+      'Customers:\n- [1] c-1a2b3c4d',
+      'A [1].\n[1] Source: logfood',
+    ])
+      expect(withoutOldFooter(md)).toBe(md);
   });
 
   it('a turn row with no saved citations (an older build) has none', async () => {
