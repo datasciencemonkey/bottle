@@ -398,6 +398,37 @@ fn a_slow_probe_times_out_and_leaves_the_row_unknown() {
 
 // ---------- switches and home ----------
 
+/// Write the file behind the store, as an old build or a test does, and drop the cache.
+fn write_file(w: &WorkspaceStore, s: &Scratch, data: &Value) {
+    fs::write(s.file(), serde_json::to_vec(data).unwrap()).unwrap();
+    *w.cache.lock().unwrap() = None;
+}
+
+/// L5: the home and the model read the cache. Only a write of the store empties it.
+#[test]
+fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert_eq!(w.home().as_deref(), Some("home"));
+    let model = w.orchestrator_model().unwrap();
+    // A read that hit the disk would fail on this file; the cache answers instead.
+    fs::write(s.file(), b"{ not json").unwrap();
+    assert_eq!(w.home().as_deref(), Some("home"));
+    assert_eq!(w.orchestrator_model().as_deref(), Some(model.as_str()));
+    // A write goes on the cached copy and saves it, so the new value shows at once.
+    w.settings_write(&WorkspaceSettingsWriteArgs {
+        cross_workspace_data: None,
+        genie_call_budget: None,
+        agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
+        clean_dictation: None,
+    })
+    .unwrap();
+    assert_eq!(
+        w.orchestrator_model().as_deref(),
+        Some("system.ai.gpt-oss-20b")
+    );
+}
+
 fn ready(s: &Scratch) -> WorkspaceStore {
     // One old MOG on `home`: home is set. `other` is a new connection.
     put_config(&s.configs(), "a", "A", "home");
@@ -609,7 +640,7 @@ fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
             .as_object_mut()
             .unwrap()
             .remove("cleanDictation");
-        fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+        write_file(&w, &s, &data);
         let l = w.list(false).unwrap();
         assert_eq!(
             l.agent.endpoint.as_str(),
@@ -623,7 +654,7 @@ fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
     w.list(false).unwrap();
     let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
     data["agent"]["endpoint"] = json!("system.ai.gpt-oss-20b");
-    fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+    write_file(&w, &s, &data);
     assert_eq!(
         w.list(false).unwrap().agent.endpoint.as_str(),
         "system.ai.gpt-oss-20b"
@@ -639,7 +670,7 @@ fn an_old_file_with_run_profile_loads_and_the_next_save_drops_it() {
     w.list(false).unwrap();
     let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
     data["agent"]["runProfile"] = json!("other");
-    fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+    write_file(&w, &s, &data);
     let l = w.call("workspace_settings_write", json!({"genieCallBudget": 5}));
     assert!(l.unwrap()["agent"].get("runProfile").is_none());
     let saved: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();

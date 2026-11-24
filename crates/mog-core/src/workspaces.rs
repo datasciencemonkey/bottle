@@ -334,6 +334,9 @@ pub struct WorkspaceStore {
     slots: Arc<Slots>,
     /// One read-modify-write at a time.
     lock: Mutex<()>,
+    /// The parsed file, so the home, the model and the catalog reads of each call do not read
+    /// the disk again. Only this store writes the file: `save` empties the cache.
+    cache: Mutex<Option<Data>>,
 }
 
 impl std::fmt::Debug for WorkspaceStore {
@@ -358,6 +361,7 @@ impl WorkspaceStore {
             probe_timeout: PROBE_TIMEOUT,
             slots: Slots::new(PROBE_PARALLEL),
             lock: Mutex::new(()),
+            cache: Mutex::new(None),
         }
     }
 
@@ -379,6 +383,15 @@ impl WorkspaceStore {
     /// Read the file, or migrate it from the MOG configs when it is missing. A file that is
     /// there but bad is an error and stays on disk. The caller holds `lock`.
     fn load(&self) -> CoreResult<Data> {
+        if let Some(d) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+            return Ok(d);
+        }
+        let data = self.load_from_disk()?;
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(data.clone());
+        Ok(data)
+    }
+
+    fn load_from_disk(&self) -> CoreResult<Data> {
         let file = match fs::File::open(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -448,6 +461,8 @@ impl WorkspaceStore {
 
     fn save(&self, data: &Data) -> CoreResult<()> {
         let bytes = serde_json::to_vec_pretty(data).map_err(|_| storage_failed())?;
+        // The cache goes first: a failed write may leave the file in an unknown state.
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
         atomic_write(self.dir(), &self.path, &bytes)
     }
 
