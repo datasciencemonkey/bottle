@@ -311,6 +311,7 @@ export type RecordingAction =
   | { action: 'recordings.ready' }
   | { action: 'recordings.detail'; id: string }
   | { action: 'recordings.retry'; id: string }
+  | { action: 'recordings.delete'; id: string }
   | { action: 'recordings.open'; id: string; target?: RecordingOpenWhat }
   | { action: 'recordings.upload_all' };
 
@@ -353,6 +354,7 @@ export function asRecordingAction(p: unknown): RecordingAction | undefined {
       return isStr(p['instructions']) ? { action: a, instructions: p['instructions'] } : undefined;
     case 'recordings.detail':
     case 'recordings.retry':
+    case 'recordings.delete':
       return isId(p['id']) ? { action: a, id: p['id'] } : undefined;
     case 'recordings.open': {
       if (!isId(p['id'])) return undefined;
@@ -559,4 +561,15 @@ export function rowActionOf(row: {
 }): 'upload' | 'retry' | undefined {
   if (row.onDeviceOnly) return 'upload';
   return row.status === 'failed' ? 'retry' : undefined;
+}
+
+/**
+ * May the row be deleted from this Mac? Only a recording that never reached the volume: on this
+ * device only, or failed with no part uploaded. Rust checks again and refuses the rest.
+ */
+export function rowCanDeleteOf(
+  row: Pick<RecordingRow, 'status' | 'partsUploaded' | 'onDeviceOnly' | 'waitingNetwork'>,
+): boolean {
+  if (row.onDeviceOnly) return true;
+  return row.status === 'failed' && !row.waitingNetwork && (row.partsUploaded ?? 0) === 0;
 }

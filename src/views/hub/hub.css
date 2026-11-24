@@ -1904,6 +1904,30 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* The inline "Delete this recording?" question: calm, with a destructive confirm. */
+  .rec-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    max-width: 68ch;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--mog-destructive-text) 45%, transparent);
+    border-radius: var(--mog-radius-sm);
+  }
+
+  .hub .rec-confirm p {
+    flex: 1 1 240px;
+    margin: 0;
+  }
+
+  .hub .rec-confirm button.rec-confirm-delete {
+    border-color: color-mix(in srgb, var(--mog-destructive-text) 55%, transparent);
+    color: var(--mog-destructive-text);
+    font-weight: 600;
+  }
+
   .rec-detail .rec-alert {
     max-width: 68ch;
     margin-top: 16px;

@@ -122,7 +122,9 @@ fn sample(command: &str) -> (&'static str, Value) {
         "recording_storage_probe" | "recording_list" => json!({"profile": "p"}),
         "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"profile": "p", "instructions": "Notes."}),
-        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_detail" | "recording_retry" | "recording_delete" => {
+            json!({"profile": "p", "id": "rec-1"})
+        }
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => return ("hub", json!({})),
         "stt_model_consent" => return ("hub", json!({"consent": "granted"})),

@@ -142,6 +142,8 @@ export interface RecordingApi {
   list(): Promise<RecSummary[]>;
   detail(id: string): Promise<RecDetail>;
   retry(id: string): Promise<unknown>;
+  /** Delete a recording that is only on this Mac. */
+  delete(id: string): Promise<unknown>;
   open(id: string, target?: RecordingOpenWhat): Promise<unknown>;
   /** Open the OS privacy pane for System Audio Recording. */
   openSystemAudioSettings(): Promise<unknown>;
@@ -741,6 +743,12 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
           (e: unknown) => showError(e),
         );
         break;
+      case 'recordings.delete':
+        void api.delete(a.id).then(
+          () => refreshList(),
+          (e: unknown) => showError(e),
+        );
+        break;
       case 'recordings.open':
         void (a.target ? api.open(a.id, a.target) : api.open(a.id)).catch((e: unknown) =>
           showError(e),
@@ -884,6 +892,7 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
       return r;
     },
     retry: async (id) => call('recording_retry', { profile: await home(), id }),
+    delete: async (id) => call('recording_delete', { profile: await home(), id }),
     open: async (id, target = 'folder') =>
       call('recording_open', { profile: await home(), id, target }),
     openSystemAudioSettings: () => call('recording_open_system_audio_settings', {}),

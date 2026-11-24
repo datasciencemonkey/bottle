@@ -73,6 +73,7 @@ export const CALL_CLASS = {
   recording_list: 'cloud',
   recording_detail: 'cloud',
   recording_retry: 'cloud',
+  recording_delete: 'cloud', // reads job.json from the volume; never writes
   recording_open: 'local', // opens the browser; Bottle itself sends nothing
   recording_open_system_audio_settings: 'local',
   stt_model_status: 'local',

@@ -150,6 +150,7 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
         ("recording_list", json!({"profile": "p"})),
         ("recording_detail", json!({"profile": "p", "id": "rec-1"})),
         ("recording_retry", json!({"profile": "p", "id": "rec-1"})),
+        ("recording_delete", json!({"profile": "p", "id": "rec-1"})),
         (
             "recording_open",
             json!({"profile": "p", "id": "rec-1", "target": "folder"}),
@@ -175,6 +176,7 @@ fn recording_cloud_commands_require_the_home_profile() {
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_delete", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
     ] {
         assert_eq!(code(c.call(name, args)), "invalid_args", "{name}");

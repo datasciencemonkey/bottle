@@ -168,6 +168,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("recording_list", BH),
     row("recording_detail", BH),
     row("recording_retry", BH),
+    row("recording_delete", BH),
     row("recording_open", BH),
     // The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane.
     row("recording_open_system_audio_settings", BH),
@@ -1421,7 +1422,7 @@ args!(
     }
 );
 args!(
-    /// `recording_detail` and `recording_retry` (ADR 0103). `profile`: the home profile.
+    /// `recording_detail`, `recording_retry` and `recording_delete` (ADR 0103). `profile`: the home profile.
     RecordingIdArgs {
         profile: ProfileName,
         id: crate::types::RecordingId,
@@ -1744,7 +1745,9 @@ macro_rules! for_command {
             "recording_volume_create" => Some($f::<RecordingVolumeCreateArgs>()),
             "recording_start" => Some($f::<RecordingStartArgs>()),
             "recording_list" => Some($f::<RecordingListArgs>()),
-            "recording_detail" | "recording_retry" => Some($f::<RecordingIdArgs>()),
+            "recording_detail" | "recording_retry" | "recording_delete" => {
+                Some($f::<RecordingIdArgs>())
+            }
             "recording_open" => Some($f::<RecordingOpenArgs>()),
             "stt_model_status" | "stt_model_verify" | "stt_model_cancel" => Some($f::<NoArgs>()),
             "stt_model_consent" => Some($f::<SttModelConsentArgs>()),

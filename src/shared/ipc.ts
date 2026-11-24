@@ -115,6 +115,8 @@ export const COMMANDS = {
   recording_list: BH,
   recording_detail: BH,
   recording_retry: BH,
+  /** Delete a recording that is only on this Mac (failed upload). Local files only. */
+  recording_delete: BH,
   /** Rust builds the Catalog Explorer URL from the profile host and opens it. */
   recording_open: BH,
   /** The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane. */
@@ -447,6 +449,7 @@ export interface CommandArgs {
   recording_list: { profile: ProfileName };
   recording_detail: { profile: ProfileName; id: RecordingId };
   recording_retry: { profile: ProfileName; id: RecordingId };
+  recording_delete: { profile: ProfileName; id: RecordingId };
   recording_open: {
     profile: ProfileName;
     id: RecordingId;
@@ -1278,6 +1281,7 @@ export interface CommandReturns {
   recording_list: RecordingSummary[];
   recording_detail: RecordingDetail;
   recording_retry: RecordingSummary;
+  recording_delete: Empty;
   recording_open: Empty;
   recording_open_system_audio_settings: Empty;
   stt_model_status: SttModelStatus;

@@ -78,6 +78,7 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("recording_list", &[B, H]),
         ("recording_detail", &[B, H]),
         ("recording_retry", &[B, H]),
+        ("recording_delete", &[B, H]),
         ("recording_open", &[B, H]),
         ("recording_open_system_audio_settings", &[B, H]),
         // Not in 4.5 (#413, #45, #529, ADR 0104): the hub's Local speech step, hub-only like
@@ -978,7 +979,9 @@ fn recording_sample(name: &str) -> serde_json::Value {
         "recording_volume_create" => json!({"profile": "p", "catalog": "main", "schema": "calls"}),
         "recording_start" => json!({"profile": "p", "instructions": "Write short notes."}),
         "recording_list" => json!({"profile": "p"}),
-        "recording_detail" | "recording_retry" => json!({"profile": "p", "id": "rec-1"}),
+        "recording_detail" | "recording_retry" | "recording_delete" => {
+            json!({"profile": "p", "id": "rec-1"})
+        }
         "recording_open" => json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         _ => json!({}),
     }
@@ -995,6 +998,7 @@ const RECORDING_COMMANDS: &[&str] = &[
     "recording_list",
     "recording_detail",
     "recording_retry",
+    "recording_delete",
     "recording_open",
     "recording_open_system_audio_settings",
 ];
@@ -1097,6 +1101,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ("recording_detail", json!({"profile": "p"})),
         ("recording_detail", json!({"profile": "p", "id": "../etc"})),
         ("recording_retry", json!({"profile": "p", "id": ""})),
+        ("recording_delete", json!({"profile": "p", "id": "../etc"})),
         ("recording_open", json!({"profile": "p", "id": "rec-1"})),
         (
             "recording_open",
@@ -1114,6 +1119,7 @@ fn sec_02b_recording_arguments_are_checked() {
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_delete", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
         (
             "recording_open",
