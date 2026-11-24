@@ -137,6 +137,8 @@ TOP_LEVEL = {
     "brain.html", "card.html", "hub.html", "mog.html",
     # project content
     "docs", "research", "mog-rive",
+    # the static landing page, published to GitHub Pages by .github/workflows/pages.yml
+    "site",
 }
 
 # Known structural debt: printed as WARN on every run until it is fixed. Each entry is

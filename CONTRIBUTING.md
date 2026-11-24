@@ -15,6 +15,7 @@ Read `AGENTS.md` first. The single source of truth is `research/final-requiremen
 | `crates/mog-core/src/local_store/migrations` | Local store schema, forward-only (ADR 0033). A contract path: a change is a new numbered file through a `contract-change` issue. Never edit an applied file. |
 | `pnpm-workspace.yaml` | pnpm 11 reads dependency overrides only from this file. It has no `packages` key, so the repo stays a single package. |
 | `docs/adr` | Architecture decision records. |
+| `site` | The static landing page (plain HTML, one CSS file, a small script, mascot art in `site/assets/`). No build step. `.github/workflows/pages.yml` publishes it to GitHub Pages on a push to main. |
 
 ## Branches
 
