@@ -16,7 +16,6 @@ const list = {
     crossWorkspaceData: false,
     crossWorkspaceLocked: false,
     genieCallBudget: 10,
-    runProfile: null,
   },
 };
 
@@ -56,20 +55,10 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     ).toBeDefined();
   });
 
-  it('accepts the slice 2a agent actions', () => {
-    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: 'fin', x: 1 })).toEqual({
-      action: 'workspace.agent_profile',
-      profile: 'fin',
-    });
-    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: null })).toEqual({
-      action: 'workspace.agent_profile',
-      profile: null,
-    });
-  });
-
-  it('refuses a bad agent action', () => {
-    expect(asWorkspaceAction({ action: 'workspace.agent_profile' })).toBeUndefined();
-    expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: '' })).toBeUndefined();
+  it('refuses the removed agent profile action', () => {
+    expect(
+      asWorkspaceAction({ action: 'workspace.agent_profile', profile: 'fin' }),
+    ).toBeUndefined();
   });
 
   it('refuses bad shapes', () => {
@@ -98,14 +87,9 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(asHubWorkspaceList(pick)?.homePick).toEqual(pick.homePick);
   });
 
-  it('accepts a list from before the agent state: runProfile is optional', () => {
-    const old = {
-      crossWorkspaceData: false,
-      crossWorkspaceLocked: false,
-      genieCallBudget: 10,
-    };
-    const got = asHubWorkspaceList({ ...list, agent: old });
-    expect(got?.agent).toEqual(old);
+  it('drops a stale runProfile field from an older list', () => {
+    const got = asHubWorkspaceList({ ...list, agent: { ...list.agent, runProfile: 'x' } });
+    expect(got?.agent).toEqual(list.agent);
     expect(got?.agent).not.toHaveProperty('runProfile');
   });
 
@@ -139,8 +123,5 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       asHubWorkspaceList({ ...list, agent: { ...list.agent, genieCallBudget: 3 } }),
     ).toBeUndefined();
     expect(asHubWorkspaceList({ ...list, home: 5 })).toBeUndefined();
-    expect(
-      asHubWorkspaceList({ ...list, agent: { ...list.agent, runProfile: 5 } }),
-    ).toBeUndefined();
   });
 });

@@ -195,9 +195,10 @@ struct AgentData {
     endpoint: OrchestratorModel,
     #[serde(default = "default_clean_dictation")]
     clean_dictation: bool,
-    /// Slice 2a: the profile the agent runs on. Written only when it is not home.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    run_profile: Option<ProfileName>,
+    /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
+    /// kept and never written.
+    #[serde(default, skip_serializing, rename = "runProfile")]
+    _legacy_run_profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,7 +441,7 @@ impl WorkspaceStore {
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
-                run_profile: None,
+                _legacy_run_profile: None,
             },
         })
     }
@@ -547,7 +548,6 @@ impl WorkspaceStore {
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
-                run_profile: data.agent.run_profile.clone(),
             },
         })
     }
@@ -728,14 +728,6 @@ impl WorkspaceStore {
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
-        // The run profile must be a known, supported profile. A name that starts with `-` is
-        // never a profile: it could become a CLI flag in `--profile <P>`.
-        if let Some(Some(p)) = &a.run_profile {
-            if p.starts_with('-') {
-                return Err(refused("profile_invalid"));
-            }
-            self.supported(p)?;
-        }
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -750,10 +742,6 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.clean_dictation {
                 data.agent.clean_dictation = v;
-            }
-            if let Some(v) = &a.run_profile {
-                // Home is stored as "not set".
-                data.agent.run_profile = v.clone().filter(|p| data.home.as_deref() != Some(p));
             }
             self.save(&data)?;
             data

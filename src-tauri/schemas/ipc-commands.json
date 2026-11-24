@@ -198,10 +198,9 @@
           "type": "string"
         },
         "AgentAskMode": {
-          "description": "How the user asked: a new question, a question to other workspaces, or a follow-up in the\nopen session.",
+          "description": "How the user asked: a new question, or a follow-up in the open session.",
           "enum": [
             "ask",
-            "ask_others",
             "follow_up"
           ],
           "type": "string"
@@ -2252,13 +2251,6 @@
               "type": "null"
             }
           ]
-        },
-        "runProfile": {
-          "description": "Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "title": "WorkspaceSettingsWriteArgs",
@@ -2964,7 +2956,6 @@
     "agent_offline",
     "agent_timeout",
     "agent_failed",
-    "agent_lockdown_violation",
     "agent_refusals"
   ],
   "events": [

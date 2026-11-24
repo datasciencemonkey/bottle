@@ -45,8 +45,6 @@ export interface HubWorkspaceList {
     crossWorkspaceLocked: boolean;
     /** D2 "Genie calls per question". */
     genieCallBudget: HubGenieCallBudget;
-    /** Slice 2a: "Agent runs on". null means home. Absent until the brain sends the agent state. */
-    runProfile?: string | null;
   };
   /** A row with a sign-in or a switch change in progress: the view shows a spinner on it. */
   busyProfile?: string;
@@ -66,9 +64,7 @@ export type WorkspaceAction =
   /** Slice 1 (the agent loop) ships the control. */
   | { action: 'workspace.budget'; genieCallBudget: HubGenieCallBudget }
   /** Slice 2 (combine across workspaces) ships the control. */
-  | { action: 'workspace.cross'; crossWorkspaceData: boolean }
-  /** Slice 2a: "Agent runs on". null means home. */
-  | { action: 'workspace.agent_profile'; profile: string | null };
+  | { action: 'workspace.cross'; crossWorkspaceData: boolean };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -123,8 +119,6 @@ export function asWorkspaceAction(p: unknown): WorkspaceAction | undefined {
       return isBool(p['crossWorkspaceData'])
         ? { action, crossWorkspaceData: p['crossWorkspaceData'] }
         : undefined;
-    case 'workspace.agent_profile':
-      return profile === null || isProfile(profile) ? { action, profile } : undefined;
     default:
       return undefined;
   }
@@ -154,8 +148,6 @@ export function asHubWorkspaceList(p: unknown): HubWorkspaceList | undefined {
   const a = p['agent'];
   if (!isBool(a['crossWorkspaceData']) || !isBool(a['crossWorkspaceLocked'])) return undefined;
   if (!isBudget(a['genieCallBudget'])) return undefined;
-  const runProfile = a['runProfile'];
-  if (runProfile !== undefined && runProfile !== null && !isProfile(runProfile)) return undefined;
   const out: HubWorkspaceList = {
     rows,
     home,
@@ -163,7 +155,6 @@ export function asHubWorkspaceList(p: unknown): HubWorkspaceList | undefined {
       crossWorkspaceData: a['crossWorkspaceData'],
       crossWorkspaceLocked: a['crossWorkspaceLocked'],
       genieCallBudget: a['genieCallBudget'],
-      ...(runProfile !== undefined ? { runProfile } : {}),
     },
   };
   const pick = p['homePick'];

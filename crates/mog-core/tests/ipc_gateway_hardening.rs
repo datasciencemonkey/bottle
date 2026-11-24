@@ -510,7 +510,6 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::AgentOffline { command: s() },
         IpcError::AgentTimeout { command: s() },
         IpcError::AgentFailed { command: s() },
-        IpcError::AgentLockdownViolation { command: s() },
         IpcError::AgentRefusals { command: s() },
         IpcError::SecretRefused { command: s() },
     ];
@@ -943,8 +942,6 @@ fn slice_2a_agent_args_refuse_bad_values() {
             "agent_turn_submit",
             json!({"mogId": "m", "opId": "o", "question": " q ", "actionTicket": "t".repeat(36)}),
         ),
-        ("workspace_settings_write", json!({"runProfile": null})),
-        ("workspace_settings_write", json!({"runProfile": "p"})),
     ];
     for (command, args) in good {
         match handle("brain", command, args.clone()) {

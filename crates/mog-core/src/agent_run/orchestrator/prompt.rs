@@ -17,8 +17,6 @@ pub struct PromptInput<'a> {
     pub cross_workspace: bool,
     /// The alias of the home workspace that the user's agent runs on.
     pub agent_alias: Option<&'a str>,
-    /// True for `ask_others`: the home workspace is left out of this turn.
-    pub skip_home: bool,
 }
 
 /// A fresh random boundary: 16 hex characters.
@@ -38,9 +36,6 @@ pub fn system(i: &PromptInput<'_>) -> String {
     );
     p.push_str("Workspaces you may ask (use the alias in ask_genie):\n");
     for e in i.catalog {
-        if i.skip_home && e.is_home {
-            continue;
-        }
         let mark = if e.is_home {
             " (home)"
         } else if e.is_agent_workspace {
@@ -120,20 +115,19 @@ mod tests {
         ]
     }
 
-    fn input(c: &[CatalogEntry], d1: bool, skip_home: bool) -> PromptInput<'_> {
+    fn input(c: &[CatalogEntry], d1: bool) -> PromptInput<'_> {
         PromptInput {
             catalog: c,
             budget: 10,
             cross_workspace: d1,
             agent_alias: Some("sales"),
-            skip_home,
         }
     }
 
     #[test]
     fn each_turn_repeats_catalog_budget_d1_rule_and_data_rule() {
         let c = cat();
-        let p = system(&input(&c, false, false));
+        let p = system(&input(&c, false));
         assert!(p.contains("- sales = Sales (home)"));
         assert!(p.contains("- finance = Finance"));
         assert!(p.contains("at most 10 ask_genie calls"));
@@ -149,18 +143,10 @@ mod tests {
     #[test]
     fn d1_on_changes_the_visibility_rule() {
         let c = cat();
-        let p = system(&input(&c, true, false));
+        let p = system(&input(&c, true));
         assert!(p.contains("every workspace"));
         assert!(p.contains("combine answers"));
         assert!(!p.contains("receipt"));
-    }
-
-    #[test]
-    fn ask_others_leaves_home_out() {
-        let c = cat();
-        let p = system(&input(&c, false, true));
-        assert!(!p.contains("- sales ="));
-        assert!(p.contains("- finance ="));
     }
 
     #[test]

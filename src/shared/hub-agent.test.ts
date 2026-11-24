@@ -21,7 +21,7 @@ const session = {
   state: 'busy',
   sessionId: T2,
   startedAt: 1,
-  agentProfile: 'sales',
+  homeProfile: 'sales',
   turns: 2,
   queued: 1,
   tokens: 5,
@@ -65,7 +65,7 @@ describe('hub-agent shape checks (slice 2a)', () => {
 
   it('parses the empty panel (no session)', () => {
     const empty = {
-      session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
+      session: { state: 'none', homeProfile: null, turns: 0, queued: 0, tokens: 0 },
       waiting: [],
       earlier: [],
       threads: [],

@@ -250,7 +250,6 @@ struct Session {
 struct QTurn {
     id: String,
     question: String,
-    mode: AgentAskMode,
     /// A new question: it must not run on a tainted session.
     fresh: bool,
 }
@@ -398,7 +397,7 @@ impl Engine {
                 state: AgentSessionPhase::None,
                 session_id: None,
                 started_at: None,
-                agent_profile: profile,
+                home_profile: profile,
                 turns: 0,
                 queued: 0,
                 tokens: 0,
@@ -411,7 +410,7 @@ impl Engine {
                 },
                 session_id: Some(s.id.clone()),
                 started_at: u64::try_from(s.started_wall_ms).ok(),
-                agent_profile: s.fp.profile.clone(),
+                home_profile: s.fp.profile.clone(),
                 turns: s.turns,
                 queued: u32::try_from(self.waiting.len()).unwrap_or(u32::MAX),
                 tokens: s.tokens,
@@ -442,7 +441,6 @@ impl Engine {
         let turn = QTurn {
             id: id32(),
             question: req.question,
-            mode: req.mode,
             fresh: req.mode != AgentAskMode::FollowUp,
         };
         let turn_id = turn.id.clone();
@@ -571,12 +569,11 @@ impl Engine {
         };
         let (sid, catalog, cross) = (s.id.clone(), s.catalog.clone(), s.cross_workspace);
         let budget = snap.budget;
-        let (turn_id, question, mode, cancel) = {
+        let (turn_id, question, cancel) = {
             let l = self.live.as_ref().expect("checked above");
             (
                 l.turn.id.clone(),
                 l.turn.question.clone(),
-                l.turn.mode,
                 Arc::clone(&l.cancel),
             )
         };
@@ -603,7 +600,6 @@ impl Engine {
             budget,
             cross_workspace: cross,
             agent_alias: agent_alias.as_deref(),
-            skip_home: mode == AgentAskMode::AskOthers,
         });
         let mut input: Vec<Value> = Vec::new();
         if let Some(s) = self.session.as_ref() {
@@ -654,7 +650,7 @@ impl Engine {
     }
 
     /// Stop the live turn for `why`: cancel the worker, tell the guard (it cancels the open
-    /// Genie polls for `User`, `Lockdown`, `Failed` and `SessionEnded`), and end the turn.
+    /// Genie polls for `User`, `Failed` and `SessionEnded`), and end the turn.
     fn stop_live(&mut self, why: StopWhy) {
         let Some(l) = self.live.as_ref() else { return };
         l.cancel.store(true, Ordering::SeqCst);
@@ -1257,7 +1253,6 @@ fn outcome_of_stop(why: StopWhy) -> AgentTurnOutcome {
         StopWhy::User => AgentTurnOutcome::Stopped,
         StopWhy::Timeout => AgentTurnOutcome::Timeout,
         StopWhy::Offline => AgentTurnOutcome::Offline,
-        StopWhy::Lockdown => AgentTurnOutcome::Lockdown,
         StopWhy::SessionEnded => AgentTurnOutcome::SessionEnded,
         StopWhy::Failed => AgentTurnOutcome::Failed,
     }
@@ -1533,7 +1528,7 @@ impl OrchestratorHost {
             state: AgentSessionPhase::None,
             session_id: None,
             started_at: None,
-            agent_profile: None,
+            home_profile: None,
             turns: 0,
             queued: 0,
             tokens: 0,

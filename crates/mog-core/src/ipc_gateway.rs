@@ -189,7 +189,6 @@ pub const ERROR_CODES: &[&str] = &[
     "agent_offline",
     "agent_timeout",
     "agent_failed",
-    "agent_lockdown_violation",
     "agent_refusals",
 ];
 
@@ -288,7 +287,6 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::AgentOffline { .. } => "agent_offline",
         IpcError::AgentTimeout { .. } => "agent_timeout",
         IpcError::AgentFailed { .. } => "agent_failed",
-        IpcError::AgentLockdownViolation { .. } => "agent_lockdown_violation",
         IpcError::AgentRefusals { .. } => "agent_refusals",
     }
 }

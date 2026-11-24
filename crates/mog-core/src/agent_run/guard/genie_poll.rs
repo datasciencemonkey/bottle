@@ -71,7 +71,7 @@ pub struct PollEnv<'a> {
     pub profile: &'a str,
     /// The in-flight calls on `profile`, for the G-08 floor.
     pub inflight: &'a (dyn Fn() -> usize + Send + Sync),
-    /// Turns true when the call must stop (a user stop, a lockdown, the end of the session).
+    /// Turns true when the call must stop (a user stop, the end of the session).
     pub cancel: &'a AtomicBool,
 }
 
