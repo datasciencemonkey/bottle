@@ -7,6 +7,7 @@ import {
   cardWindowHeight,
   cardWindowWidth,
   createWindowFit,
+  watchCardSide,
   type CardPlace,
   type CardWindow,
 } from './fit-window';
@@ -207,5 +208,39 @@ describe('lamp-alive: the side mark', () => {
     applyCardSide('right');
     expect(document.documentElement.dataset['side']).toBe('right');
     delete document.documentElement.dataset['side'];
+  });
+});
+
+describe('lamp-alive: the side follows the MOG when the host moves the card', () => {
+  it('reads the title again after each move and stops when it is stopped', async () => {
+    let title = 'Bottle card (right)';
+    let moved: () => void = () => undefined;
+    const off = vi.fn();
+    const stop = watchCardSide(
+      {
+        onMoved: async (cb) => {
+          moved = cb;
+          return off;
+        },
+        title: async () => title,
+      },
+      document,
+    );
+    await Promise.resolve();
+    title = 'Bottle card (left)';
+    moved();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.documentElement.dataset['side']).toBe('left');
+    title = 'Bottle card (right)';
+    moved();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.documentElement.dataset['side']).toBe('right');
+    stop();
+    expect(off).toHaveBeenCalled();
+    delete document.documentElement.dataset['side'];
+  });
+
+  it('does nothing in a window without move events', () => {
+    expect(() => watchCardSide({})()).not.toThrow();
   });
 });

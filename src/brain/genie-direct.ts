@@ -57,7 +57,12 @@ export type GeniePhase = 'working' | 'answered' | 'failed' | 'cancelled';
 export interface GenieDirectDeps {
   /** T8. Only `submit` is used. */
   genie: Pick<GenieBridge, 'submit'>;
-  /** The card of the owner MOG. */
+  /**
+   * The card of the owner MOG. Close rules of the status pill: a close of the WORKING pill only
+   * hides the card window (no forget, no clear); the request runs on and the card shows again with
+   * its answer, through the arrival gate. A close of the READY pill is a real close: the card
+   * stays closed. A request that is not the newest of its MOG never shows the card window.
+   */
   cardFor(
     mogId: MogId,
   ): Pick<CardStack, 'add' | 'setExpanded'> &
@@ -103,9 +108,20 @@ function phaseOf(e: TerminalAskEvent): GeniePhase {
  * The `send` of the ask gate. It resolves when the request has ended; it rejects only when
  * `submit` throws before anything is sent (the gate then shows "Not sent.").
  */
-export function createGenieDirectSend(
-  deps: GenieDirectDeps,
-): (turn: AgentTurn, opts?: DirectSendOptions) => Promise<void> {
+export type GenieDirectSend = ((turn: AgentTurn, opts?: DirectSendOptions) => Promise<void>) & {
+  /**
+   * True while the request of `mogId` still works (no answer waits in a hold): a close of its
+   * pill then only hides the card. The request runs on, and its answer shows the card again.
+   */
+  isWorking(mogId: MogId, opId: string): boolean;
+  /**
+   * The user closed the pill of a request whose answer is ready (it waits for the end of the
+   * hold): the card stays closed when the answer applies, and its early sections go.
+   */
+  close(mogId: MogId, opId: string): void;
+};
+
+export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
   const safely = (fn: () => unknown) => {
     try {
       void Promise.resolve(fn()).catch(() => undefined);
@@ -115,6 +131,15 @@ export function createGenieDirectSend(
   };
   /** The chip owner of each MOG's newest R-8 chip, so a new request takes the old one away. */
   const moreOwner = new Map<MogId, string>();
+  /** The send number of the newest request that put its answer on each MOG's card (M4). */
+  const answerSeq = new Map<MogId, number>();
+  /** The number of the newest request that started on each MOG. */
+  const latestSend = new Map<MogId, number>();
+  let sends = 0;
+  /** The requests that have not shown their outcome yet: `working`, or `ready` in a hold. */
+  const live = new Map<string, { mogId: MogId; state: 'working' | 'ready' }>();
+  /** The requests whose ready pill the user closed: the card stays closed for them. */
+  const closed = new Set<string>();
   const send = (turn: AgentTurn, opts: DirectSendOptions = {}): Promise<void> => {
     const req: AskRequest = {
       opId: deps.newOpId(),
@@ -123,7 +148,11 @@ export function createGenieDirectSend(
       question: turn.question,
       tags: { app: 'bottle', mog: turn.mogId, op: 'genie' },
     };
+    const mySeq = ++sends;
+    // `submit` may throw: only a request that was sent takes the card.
     const { opId, events } = deps.genie.submit(req);
+    latestSend.set(turn.mogId, mySeq);
+    live.set(opId, { mogId: turn.mogId, state: 'working' });
     const card = deps.cardFor(turn.mogId);
     const id = genieBlurbId(opId);
     // The new status blurb goes on top first, then the old answer goes: the card never shows the
@@ -173,19 +202,38 @@ export function createGenieDirectSend(
       } catch {
         // The history logs its own fixed code; the answer on the card stays as it is.
       }
+      // Slice 2a: a fallback tells the user, in one line before the answer, why only one
+      // workspace was asked.
+      const putAnswer = (): void => {
+        if (outcome.t !== 'answer') return;
+        // The early put (ready pill) and the late put (`apply`) of an older request never
+        // overwrite the link and sections of a newer one. A request that started later owns the
+        // card, even if it has not answered yet. (A newer request that already put its answer
+        // has started later, so this one check covers both.)
+        if ((latestSend.get(turn.mogId) ?? 0) > mySeq) return;
+        answerSeq.set(turn.mogId, mySeq);
+        card.setExpanded({
+          answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
+          keyNumbers: outcome.keyNumbers.map((k) => k.text),
+          ...(outcome.deepLink ? { deepLink: outcome.deepLink } : {}),
+          ...(host ? { workspaceHost: host } : {}),
+          dataFlowText: GENIE_DATA_FLOW_TEXT,
+        });
+      };
       const apply = async (): Promise<void> => {
+        live.delete(opId);
+        // The user closed the ready pill: the card stays closed. The blurb ends empty.
+        if (closed.delete(opId)) {
+          // The early sections of this request go too, if they are still the card's.
+          if (answerSeq.get(turn.mogId) === mySeq) card.setExpanded(undefined);
+          card.add({ id, text: '', completed: true });
+          safely(() => deps.onPhase?.(turn.mogId, phaseOf(outcome), opId));
+          return;
+        }
         // The answer sections and the Try again control go on while the blurb still works, so the
         // card goes from the status pill to the answer or failure card in one step.
         if (outcome.t === 'answer') {
-          // Slice 2a: a fallback tells the user, in one line before the answer, why only one
-          // workspace was asked.
-          card.setExpanded({
-            answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
-            keyNumbers: outcome.keyNumbers.map((k) => k.text),
-            ...(outcome.deepLink ? { deepLink: outcome.deepLink } : {}),
-            ...(host ? { workspaceHost: host } : {}),
-            dataFlowText: GENIE_DATA_FLOW_TEXT,
-          });
+          putAnswer();
         } else if (phaseOf(outcome) === 'failed' && card.setControls) {
           // GL-5: one user action sends the same question again, as a new request (G-15b).
           const owner = `retry:${id}`;
@@ -208,7 +256,12 @@ export function createGenieDirectSend(
           });
         }
         if (outcome.t === 'answer' && card.setControls) {
-          const more = deps.offerOthers?.(turn, opId);
+          let more: ChipView | undefined;
+          try {
+            more = deps.offerOthers?.(turn, opId);
+          } catch {
+            // A fault in the chip offer never changes the card. `safely` cannot return a value.
+          }
           if (more) {
             const owner = `more:${id}`;
             moreOwner.set(turn.mogId, owner);
@@ -217,7 +270,10 @@ export function createGenieDirectSend(
         }
         // R11 places the card first, then the outcome goes on it, so the view grows the card from
         // its final place (no race between the view fit and the R11 move).
-        if (deps.showCard) {
+        // A request that started later owns the card (its pill may be closed): a late outcome of
+        // this one never shows an empty or foreign card window. The blurb and the phase still end.
+        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
+        if (deps.showCard && !newer) {
           try {
             await deps.showCard(turn.mogId);
           } catch {
@@ -229,8 +285,13 @@ export function createGenieDirectSend(
       };
       const arrivals = deps.arrivals;
       // The pill tells the user an answer is ready, and the card waits for the key-up.
-      if (arrivals?.isHeld() && phaseOf(outcome) === 'answered')
+      if (arrivals?.isHeld() && phaseOf(outcome) === 'answered') {
+        // The ready pill shows "Open in Databricks", so the deep link goes on with it. The blurb
+        // still works, so the view keeps the pill until the key-up.
+        putAnswer();
+        live.set(opId, { mogId: turn.mogId, state: 'ready' });
         card.add({ id, text: ANSWER_READY });
+      }
       await new Promise<void>((resolve, reject) => {
         const run = () => void apply().then(resolve, reject);
         if (arrivals) arrivals.whenClear(run);
@@ -238,5 +299,13 @@ export function createGenieDirectSend(
       });
     })();
   };
-  return send;
+  return Object.assign(send, {
+    isWorking: (mogId: MogId, opId: string) => {
+      const l = live.get(opId);
+      return l?.mogId === mogId && l.state === 'working';
+    },
+    close: (mogId: MogId, opId: string) => {
+      if (live.get(opId)?.mogId === mogId) closed.add(opId);
+    },
+  });
 }

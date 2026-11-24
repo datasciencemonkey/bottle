@@ -17,7 +17,13 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
+import {
+  applyCardSide,
+  createWindowFit,
+  tauriCardWindow,
+  watchCardSide,
+  widthMayChangeIn,
+} from './fit-window';
 import { AgentTurnCard } from './AgentTurnCard';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
@@ -228,9 +234,13 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // happened, the sections it left behind are orphaned: never treat them as the panel's answer
   // (no clamp, no close, no fade, no refit on that path), so the card never falls back to a raw,
   // unbounded legacy panel for a Genie answer with no Genie blurb backing it any more.
-  const liveGenieBlurbId = card?.blurbs.find((b) => isGenieBlurbId(b.id))?.id;
+  const liveGenieBlurb = card?.blurbs.find((b) => isGenieBlurbId(b.id));
+  const liveGenieBlurbId = liveGenieBlurb?.id;
+  // The sections never count as an answer while the live Genie blurb still works. A pill that
+  // says "Answer ready" in a talk-key hold already has the sections (the link reads the deep
+  // link from them), but no answer shows before the key-up (UX slice 1, the arrival gate).
   const hasAnswer =
-    liveGenieBlurbId !== undefined &&
+    liveGenieBlurb?.completed === true &&
     (card?.sections !== undefined || card?.answerMd !== undefined);
   const panel =
     card !== undefined &&
@@ -239,15 +249,20 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // Slice 2a: a payload that does not pass the shape check shows no agent card.
   const agentTurn = card?.agentTurn ? asAgentTurnView(card.agentTurn) : undefined;
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
-  // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
-  const genie = card !== undefined && isGenieBlurbId(newest?.id);
-  // UX slice 1: a pending Genie pill stays when a newer pop-up (a dictation) comes. The pill is
-  // on top and the pop-up under it, in the one card window. A closed stacked pop-up leaves the pill.
-  const [closedPopup, setClosedPopup] = useState<string | undefined>(undefined);
-  const pending = useMemo(
+  // The user closed the working or ready pill (×). It stays out of sight until its request ends
+  // (the answer then shows as a normal card), and a pop-up under it stays.
+  const [closedPill, setClosedPill] = useState<string | undefined>(undefined);
+  const livePending = useMemo(
     () => card?.blurbs.find((b) => isGenieBlurbId(b.id) && !b.completed),
     [card],
   );
+  const pillClosed = livePending !== undefined && livePending.id === closedPill;
+  const pending = pillClosed ? undefined : livePending;
+  // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
+  const genie = card !== undefined && isGenieBlurbId(newest?.id) && !pillClosed;
+  // UX slice 1: a pending Genie pill stays when a newer pop-up (a dictation) comes. The pill is
+  // on top and the pop-up under it, in the one card window. A closed stacked pop-up leaves the pill.
+  const [closedPopup, setClosedPopup] = useState<string | undefined>(undefined);
   const pillCard = useMemo(
     () =>
       card && pending && !genie
@@ -258,6 +273,8 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
   // the tail (card.css) toward the MOG.
   const fit = useMemo(() => createWindowFit(tauriCardWindow, { onSide: applyCardSide }), []);
+  // The host moves the card with its MOG; the side may flip: read it again after each move.
+  useEffect(() => watchCardSide(), []);
   const lastPx = useRef<number | undefined>(undefined);
   const onSize = useCallback(
     (px: number) => {
@@ -338,6 +355,9 @@ export function CardView({ mogId }: { mogId: MogId }) {
         />
       </section>
     );
+  // The user closed the pill and nothing else is on the card: the window is hidden, show nothing.
+  if (pillClosed && newest?.id === livePending?.id)
+    return <section ref={frame} aria-label="MOG card" className="card card-popup" />;
   if ((genie && newest) || (stack && pending && pillCard))
     return (
       <section ref={stackFrame} aria-label="MOG card" className="card card-genie">
@@ -348,6 +368,8 @@ export function CardView({ mogId }: { mogId: MogId }) {
           onSize={onSize}
           identity={identity}
           saved={saved}
+          stacked={!genie}
+          onClosePill={() => setClosedPill((genie ? newest : pending)?.id)}
         />
         {!genie && popupOn && shown && popup && (
           <Popup

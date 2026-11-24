@@ -373,6 +373,16 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+            // The lamp moved: a card that is on screen goes with it, at the same place beside it.
+            if let tauri::WindowEvent::Moved(_) = event {
+                if let Some(windows::WindowKind::Mog(id)) =
+                    windows::WindowKind::from_label(window.label())
+                {
+                    if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_mog(&id);
+                    }
+                }
+            }
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
                 // ADR 0118: a closed MOG keeps no paste target.
@@ -395,6 +405,13 @@ pub fn run() {
                 let mtm = objc2::MainThreadMarker::new()
                     .ok_or("Bottle setup is not on the main thread")?;
                 macos_panel::install_drag_monitor(mtm);
+                // The end of a lamp drag puts each card in its place, move event or not.
+                let drag_end = handle.clone();
+                macos_panel::set_drag_end_hook(move || {
+                    if let Some(host) = drag_end.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_all();
+                    }
+                });
                 app.manage(TauriWindowHost::with_style(
                     handle.clone(),
                     Box::new(macos_panel::MacPanelStyle),

@@ -105,6 +105,45 @@ export function applyCardSide(side: CardSide, doc: Document = document): void {
   doc.documentElement.dataset['side'] = side;
 }
 
+/** The part of the Tauri window that `watchCardSide` needs. Tests give a fake. */
+export interface SideWindow {
+  onMoved?: (cb: () => void) => Promise<() => void>;
+  title?: () => Promise<string>;
+}
+
+/**
+ * The host moves the card with its MOG (`follow_mog`) and may put it on the other side: it sets
+ * the title first, then moves. Each move reads the title again, so the tail and the alignment
+ * follow the side. It needs no new permission (the card already reads its title and listens).
+ * Returns the stop function.
+ */
+export function watchCardSide(
+  w: SideWindow = getCurrentWindow(),
+  doc: Document = document,
+): () => void {
+  if (typeof w.onMoved !== 'function' || typeof w.title !== 'function') return () => undefined;
+  const title = w.title.bind(w);
+  let stopped = false;
+  let off: (() => void) | undefined;
+  void w
+    .onMoved(() => {
+      void title()
+        .then((t) => {
+          if (!stopped) applyCardSide(sideFromTitle(t), doc);
+        })
+        .catch(() => undefined);
+    })
+    .then((un) => {
+      if (stopped) un();
+      else off = un;
+    })
+    .catch(() => undefined);
+  return () => {
+    stopped = true;
+    off?.();
+  };
+}
+
 /**
  * The natural width (px) of the compact pill on screen (the pop-up or the Genie status pill), or
  * `undefined` for the answer card, which keeps the full width. The pill is measured without the

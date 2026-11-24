@@ -538,8 +538,11 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       await new Promise((r) => setTimeout(r, 0));
       expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, ANSWER_READY]);
       expect(c.log.every((x) => !x.completed)).toBe(true);
-      // Only the clearing at the send: no sections, no outcome blurb, no show, no mood phase.
-      expect(c.expanded).toEqual([undefined]);
+      // The clearing at the send, then the answer sections (the ready pill needs the deep link).
+      // No outcome blurb, no show, no mood phase: the view keeps the pill while the blurb works.
+      expect(c.expanded).toHaveLength(2);
+      expect(c.expanded[0]).toBeUndefined();
+      expect(c.expanded[1]).toMatchObject({ answerMd: 'Churn was 4.2%.' });
       expect(shows).toEqual([]);
       expect(phases).toEqual(['working']);
       // #40: the history write is no arrival. It runs at the terminal event.
@@ -597,6 +600,74 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       await both;
       expect(order).toEqual(['op-1', 'op-2']);
       expect(c.log.at(-1)?.text).toBe('answer 2');
+    });
+
+    it('an older request that applies after a newer one never overwrites its link and sections', async () => {
+      const c = fakeCard();
+      const g = gateDouble(true);
+      let n = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                yield { ...ANSWER, md: `answer ${k}`, deepLink: `https://x.test/${k}` } as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        arrivals: g.arrivals,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      // Both answered in the hold: the newer request put its link last.
+      expect(c.expanded.at(-1)).toMatchObject({ answerMd: 'answer 2' });
+      // The older request applies after the newer one.
+      g.waiting.reverse();
+      g.release();
+      await both;
+      const puts = c.expanded.filter((x) => x !== undefined);
+      expect(puts.at(-1)).toMatchObject({ answerMd: 'answer 2', deepLink: 'https://x.test/2' });
+      expect(puts.some((x, i) => i > 1 && x?.answerMd === 'answer 1')).toBe(false);
+    });
+
+    it('an answer of request 1 while request 2 still works puts no sections on request 2', async () => {
+      const c = fakeCard();
+      let n = 0;
+      let failSecond: () => void = () => undefined;
+      const send = createGenieDirectSend({
+        genie: {
+          submit(req) {
+            const k = ++n;
+            return {
+              opId: req.opId,
+              events: (async function* () {
+                if (k === 2) await new Promise<void>((r) => (failSecond = r));
+                yield (
+                  k === 1
+                    ? { ...ANSWER, deepLink: 'https://x.test/1' }
+                    : { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' }
+                ) as AskEvent;
+              })(),
+            };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${n + 1}`,
+        hostOf: async () => 'x.test',
+        showCard: () => undefined,
+      });
+      const both = Promise.all([send(turn()), send(turn())]);
+      await new Promise((r) => setTimeout(r, 0));
+      failSecond();
+      await both;
+      expect(c.expanded.filter((x) => x !== undefined)).toEqual([]);
     });
 
     it('[AC-1.11] a failure waits for the gate too, and keeps the working pill', async () => {

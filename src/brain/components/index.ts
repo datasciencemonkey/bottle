@@ -665,6 +665,8 @@ export function startBrain(): Brain {
           // Not a valid window label: nothing to hold or fade.
         }
       },
+      isWorking: (mogId, requestId) => directSend.isWorking(mogId, requestId),
+      closePending: (mogId, requestId) => directSend.close(mogId, requestId),
       lastOpId: (mogId) => lastGenieOp.get(mogId),
       // #103: show the hub, then open Conversations on this exchange. The wiring holds the open
       // until the hub acks it or asks for the list, so a hub that was not listening still gets it.

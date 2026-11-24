@@ -7,6 +7,12 @@
  *   requestId }`. The brain then hides the card window and clears that answer (its text, its
  *   sections and its Try again), so a card window that loads again later never shows it again.
  *   (Not `cancel`: a fade is no user Esc, so it never stops hands-free listening.)
+ * - A close (x) of the status pill sends the same `card_done`. A close of the WORKING pill (the
+ *   brain knows the request still works, or the view says `phase: 'working'`) only hides the card
+ *   window: no clear, no forget. The request runs on and its answer shows the card again, through
+ *   the arrival gate. A close of the READY pill is a real close (the path above), and the card
+ *   stays closed for that request. A pill closed over a pop-up sends `pillOnly: true` (ready
+ *   pill) or nothing (working pill), so the pop-up stays.
  * - A double-click on the MOG or on the card sends `click { target: 'open_conversations' }`. A
  *   double-click is a user action: the hub opens and takes focus on Conversations, with the
  *   exchange of that card selected. A double-click on the MOG fades its card at once.
@@ -37,6 +43,10 @@ export interface GenieCardWiringDeps {
   forget(mogId: MogId, requestId: string): void;
   /** Send an event to the card window of `mogId` only. */
   sendToCard(mogId: MogId, event: string, payload: Record<string, unknown>): void;
+  /** True while the request `requestId` still works (not ready, no outcome yet). */
+  isWorking?(mogId: MogId, requestId: string): boolean;
+  /** The user closed the pill of a request that has not shown its outcome: it stays closed. */
+  closePending?(mogId: MogId, requestId: string): void;
   /** The operation ID of the newest Genie request of `mogId`. */
   lastOpId(mogId: MogId): string | undefined;
   /** Show and focus the hub on Conversations; `requestId` selects one exchange. */
@@ -91,6 +101,21 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
       return;
     }
     if (p.target === CARD_DONE && fromCard) {
+      // A close of the working pill only hides the card. The request runs on, its blurb and
+      // answer stay, and the card shows again when the answer lands (owner decision).
+      // The view says `phase: 'working'` when the pill it closed was working: if the answer
+      // landed just after, this is still a hide, never a forget.
+      const closedWorking = (p as { phase?: unknown }).phase === 'working';
+      if (closedWorking || (requestId !== undefined && deps.isWorking?.(mogId, requestId))) {
+        deps.hideCard(mogId);
+        return;
+      }
+      // The stacked pill closed by the view: the pop-up stays, only the request is marked.
+      if ((p as { pillOnly?: unknown }).pillOnly === true) {
+        if (requestId !== undefined) deps.closePending?.(mogId, requestId);
+        return;
+      }
+      if (requestId !== undefined) deps.closePending?.(mogId, requestId);
       // A late `card_done` of an older request never hides the card of a newer one.
       const current = deps.lastOpId(mogId);
       if (requestId !== undefined && current !== undefined && requestId !== current) {
