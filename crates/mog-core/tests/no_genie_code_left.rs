@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// This file: it holds the pieces, not the words, but it is left out of the scan anyway.
-const OWN: &str = "no_genie_code_left.rs";
+/// This file and its TypeScript twin hold the pattern, so they are left out of the scan.
+const OWN: [&str; 2] = ["no_genie_code_left.rs", "no-genie-code.test.ts"];
 
 /// The lower-case words that must not occur. A match is case-insensitive.
 fn banned() -> Vec<String> {
@@ -45,7 +45,7 @@ fn scan(dir: &Path, banned: &[String], hits: &mut Vec<String>) {
             scan(&path, banned, hits);
             continue;
         }
-        if name == OWN || name == "Cargo.lock" {
+        if OWN.contains(&name.as_str()) || name == "Cargo.lock" {
             continue;
         }
         // Binary and unreadable files are skipped: only text can name a feature.

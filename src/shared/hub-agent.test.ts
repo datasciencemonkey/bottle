@@ -1,4 +1,4 @@
-import { asAgentAction, asAgentTurnView, asGenieCodeStatus, asHubAgentView } from './hub-agent';
+import { asAgentAction, asAgentTurnView, asHubAgentView } from './hub-agent';
 
 const T1 = 'a'.repeat(32);
 const T2 = 'b'.repeat(32);
@@ -17,13 +17,6 @@ const turn = {
   summary: { md: 'Note', kind: 'note', workspaces: [chip] },
   tokens: 1200,
 };
-const genieCode = {
-  binary: 'ready',
-  version: '0.5.0',
-  pinned: '0.5.0',
-  agentProfile: 'sales',
-  agentProfileState: 'ready',
-};
 const session = {
   state: 'busy',
   sessionId: T2,
@@ -38,7 +31,6 @@ const view = {
   live: { ...turn, state: 'running' },
   waiting: [{ ...turn, turnId: T2, state: 'queued', position: 1, calls: [], parts: [] }],
   earlier: [turn],
-  genieCode,
   threads: [{ turnId: T1, threadId: '0b5c1c58-6a0e-4f0e-9b62-1d2f3a4b5c6d' }],
 };
 
@@ -77,7 +69,6 @@ describe('hub-agent shape checks (slice 2a)', () => {
       waiting: [],
       earlier: [],
       threads: [],
-      genieCode: { ...genieCode, binary: 'not_installed', agentProfile: null },
     };
     expect(asHubAgentView({ ...empty, version: 'x' })).toEqual(empty);
   });
@@ -119,7 +110,6 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(asHubAgentView({ ...view, session: { ...session, state: 'x' } })).toBeUndefined();
     expect(asHubAgentView({ ...view, session: { ...session, turns: 1.5 } })).toBeUndefined();
     expect(asHubAgentView({ ...view, earlier: [{}] })).toBeUndefined();
-    expect(asHubAgentView({ ...view, genieCode: { binary: 'ready' } })).toBeUndefined();
     expect(asHubAgentView(undefined)).toBeUndefined();
   });
 
@@ -164,11 +154,5 @@ describe('hub-agent shape checks (slice 2a)', () => {
     ).toBeUndefined();
     expect(asHubAgentView({ ...view, threads: 'x' })).toBeUndefined();
     expect(asHubAgentView({ ...view, threads: undefined })).toBeUndefined();
-  });
-
-  it('checks the Genie Code status', () => {
-    expect(asGenieCodeStatus(genieCode)).toEqual(genieCode);
-    expect(asGenieCodeStatus({ ...genieCode, binary: 'maybe' })).toBeUndefined();
-    expect(asGenieCodeStatus({ ...genieCode, agentProfileState: 'x' })).toBeUndefined();
   });
 });

@@ -97,13 +97,6 @@ const genieRow = (n: number, over: Partial<ConversationRow> = {}): ConversationR
   ...over,
 });
 
-const READY = {
-  binary: 'ready',
-  pinned: '0.5.0',
-  version: '0.5.0',
-  agentProfile: null,
-  agentProfileState: 'ready',
-} as const;
 const SESSION: HubAgentView['session'] = {
   state: 'busy',
   sessionId: T('d'),
@@ -117,7 +110,6 @@ const view = (o: Partial<HubAgentView> = {}): HubAgentView => ({
   session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
   waiting: [],
   earlier: [],
-  genieCode: READY,
   threads: [],
   ...o,
 });
