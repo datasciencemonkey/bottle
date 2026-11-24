@@ -252,6 +252,25 @@ fn arc_4_dbx_http_takes_route_ids_only() {
     ));
 }
 
+/// ADR 0122: the Responses route belongs to the Rust model client only. The brain cannot send a
+/// model call through `dbx_http`, so it cannot call the model with tools.
+#[test]
+fn adr_0122_dbx_http_refuses_the_mlflow_responses_route() {
+    let args = |route: &str| {
+        json!({"profile": "p", "routeId": route, "params": {},
+               "tags": {"app": "bottle", "mog": "a1", "op": "genie"}})
+    };
+    for route in ["mlflow.responses", "mlflow.chat_completions"] {
+        assert!(
+            matches!(
+                ipc::handle("brain", "dbx_http", args(route)).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{route}"
+        );
+    }
+}
+
 #[test]
 fn arc_5_capture_subscribe_takes_two_channels() {
     let schemas = ipc::schemas();
