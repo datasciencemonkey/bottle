@@ -31,7 +31,6 @@ import type {
   AppSetting,
   AppSettingKey,
   CardUpdate,
-  GenieCodeStatus,
   OrchestratorModels,
   OrchestratorState,
   OrchestratorStatus,
@@ -288,7 +287,7 @@ const CARD_UPDATE = {
   sttBadge: 'STT: local',
 } satisfies CardUpdate;
 
-// Slice 2a: the MOG agent on one live Genie Code session, and the workspace list (ADR 0117).
+// The ask loop (ADR 0122), and the workspace list (ADR 0117).
 const TURN_A = '0123456789abcdef0123456789abcdef';
 const TURN_B = 'fedcba9876543210fedcba9876543210';
 const SALES = { name: 'Sales', colorVariant: 'teal' };
@@ -397,19 +396,6 @@ const WORKSPACE_ROW = {
   signIn: 'signed_in',
 } satisfies WorkspaceRow;
 const agentTyped: Record<string, unknown> = {
-  GenieCodeStatus: {
-    binary: 'ready',
-    version: '0.5.0',
-    pinned: '0.5.0',
-    agentProfile: 'DEFAULT',
-    agentProfileState: 'ready',
-  } satisfies GenieCodeStatus,
-  'GenieCodeStatus.minimal': {
-    binary: 'not_installed',
-    pinned: '0.5.0',
-    agentProfile: null,
-    agentProfileState: 'no_home',
-  } satisfies GenieCodeStatus,
   AgentTurnAccepted: {
     turnId: TURN_A,
     sessionId: TURN_B,

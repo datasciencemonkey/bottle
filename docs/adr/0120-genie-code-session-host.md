@@ -1,5 +1,7 @@
 # ADR 0120: The Genie Code session host (slice 2a, R1)
 
+Superseded by ADR 0122. The session host is removed.
+
 Status: accepted (drafted to STE100 rules; the official dictionary check was not done).
 
 Superseded in part by ADR 0121: the turn text (the question and the combined answer) now also

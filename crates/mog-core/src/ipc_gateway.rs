@@ -175,7 +175,7 @@ pub const ERROR_CODES: &[&str] = &[
     // The host-side code for a build with no `local-stt` feature (#534, #414): the hub shows
     // "Local speech setup is not available in this build yet."
     "stt_setup_unavailable",
-    // Slice 2a (the MOG agent on one live Genie Code session). `timeout` and `offline` also apply.
+    // The ask loop (ADR 0122). `timeout` and `offline` also apply.
     // The model-facing codes `budget_reached`, `cross_workspace_off`, `no_active_turn` and
     // `run_stopped` are Rust strings in tool results, never IPC codes.
     "ask_not_approved",
@@ -183,8 +183,6 @@ pub const ERROR_CODES: &[&str] = &[
     "agent_turn_unknown",
     "agent_session_unavailable",
     "agent_rate_limited",
-    "genie_code_missing",
-    "genie_code_version",
     "agent_profile_unsupported",
     "agent_signed_out",
     "agent_not_eligible",
@@ -193,8 +191,6 @@ pub const ERROR_CODES: &[&str] = &[
     "agent_failed",
     "agent_lockdown_violation",
     "agent_refusals",
-    "install_failed",
-    "checksum_mismatch",
 ];
 
 /// The fixed, content-free code of an [`IpcError`] (its serde tag). It never holds the
@@ -286,8 +282,6 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::AgentTurnUnknown { .. } => "agent_turn_unknown",
         IpcError::AgentSessionUnavailable { .. } => "agent_session_unavailable",
         IpcError::AgentRateLimited { .. } => "agent_rate_limited",
-        IpcError::GenieCodeMissing { .. } => "genie_code_missing",
-        IpcError::GenieCodeVersion { .. } => "genie_code_version",
         IpcError::AgentProfileUnsupported { .. } => "agent_profile_unsupported",
         IpcError::AgentSignedOut { .. } => "agent_signed_out",
         IpcError::AgentNotEligible { .. } => "agent_not_eligible",
@@ -296,8 +290,6 @@ pub fn ipc_error_code(e: &IpcError) -> &'static str {
         IpcError::AgentFailed { .. } => "agent_failed",
         IpcError::AgentLockdownViolation { .. } => "agent_lockdown_violation",
         IpcError::AgentRefusals { .. } => "agent_refusals",
-        IpcError::InstallFailed { .. } => "install_failed",
-        IpcError::ChecksumMismatch { .. } => "checksum_mismatch",
     }
 }
 

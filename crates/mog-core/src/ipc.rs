@@ -190,12 +190,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("workspace_set_available", B),
     row("workspace_make_home", B),
     row("workspace_settings_write", B),
-    // Slice 2a (the MOG agent on one live Genie Code session). All brain-only: the hub uses
+    // ADR 0122: the orchestrator model and the ask loop. All brain-only: the hub uses
     // `view_emit` only (ARC-4).
-    row("genie_code_status", B),
-    row("genie_code_install", B),
-    // ADR 0122: the orchestrator model replaces Genie Code. Brain only; contract only until
-    // the gateway lane gives them a host.
     row("orchestrator_models", B),
     row("orchestrator_status", B),
     row("agent_turn_submit", B),
@@ -541,7 +537,7 @@ pub enum IpcError {
     SttSetupUnavailable {
         command: String,
     },
-    // Slice 2a (the MOG agent on one live Genie Code session).
+    // The ask loop (ADR 0122).
     /// `agent_turn_submit`: no talk-key latch and no valid Ask ticket approved the question.
     AskNotApproved {
         command: String,
@@ -554,20 +550,12 @@ pub enum IpcError {
     AgentTurnUnknown {
         command: String,
     },
-    /// `agent_turn_submit`: the Genie Code session cannot start or is ending.
+    /// `agent_turn_submit`: the agent session cannot start or is ending.
     AgentSessionUnavailable {
         command: String,
     },
     /// `agent_turn_submit`: more than 6 turns a minute.
     AgentRateLimited {
-        command: String,
-    },
-    /// `agent_turn_submit`: the Genie Code binary is not installed.
-    GenieCodeMissing {
-        command: String,
-    },
-    /// `agent_turn_submit`: the Genie Code binary is not the pinned version.
-    GenieCodeVersion {
         command: String,
     },
     /// `agent_turn_submit`: the agent profile does not use U2M sign-in.
@@ -578,7 +566,7 @@ pub enum IpcError {
     AgentSignedOut {
         command: String,
     },
-    /// `agent_turn_submit`: the workspace does not offer Genie Code to this user.
+    /// `agent_turn_submit`: the orchestrator model is not set or not served.
     AgentNotEligible {
         command: String,
     },
@@ -600,14 +588,6 @@ pub enum IpcError {
     },
     /// The turn ended after repeated refused tool calls.
     AgentRefusals {
-        command: String,
-    },
-    /// `genie_code_install`: the download or the unpack failed.
-    InstallFailed {
-        command: String,
-    },
-    /// `genie_code_install`: the SHA-256 of the download is not the pinned one.
-    ChecksumMismatch {
         command: String,
     },
 }
@@ -802,12 +782,6 @@ impl std::fmt::Display for IpcError {
             IpcError::AgentRateLimited { command } => {
                 write!(f, "{command}: too many agent turns a minute")
             }
-            IpcError::GenieCodeMissing { command } => {
-                write!(f, "{command}: Genie Code is not installed")
-            }
-            IpcError::GenieCodeVersion { command } => {
-                write!(f, "{command}: Genie Code is not the pinned version")
-            }
             IpcError::AgentProfileUnsupported { command } => {
                 write!(f, "{command}: the agent profile is not a U2M profile")
             }
@@ -816,7 +790,7 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::AgentNotEligible { command } => write!(
                 f,
-                "{command}: the agent profile is not eligible for Genie Code"
+                "{command}: the orchestrator model is not set or not served"
             ),
             IpcError::AgentOffline { command } => {
                 write!(f, "{command}: the agent turn ended offline")
@@ -829,13 +803,6 @@ impl std::fmt::Display for IpcError {
             IpcError::AgentRefusals { command } => {
                 write!(f, "{command}: the agent turn ended after repeated refusals")
             }
-            IpcError::InstallFailed { command } => {
-                write!(f, "{command}: the Genie Code install failed")
-            }
-            IpcError::ChecksumMismatch { command } => write!(
-                f,
-                "{command}: the Genie Code download does not match its SHA-256"
-            ),
             IpcError::Offline { command } => {
                 write!(f, "{command}: the host did not accept a connection")
             }
@@ -1510,7 +1477,7 @@ args!(
     }
 );
 
-// ---------- the MOG agent on one live Genie Code session (slice 2a) ----------
+// ---------- the ask loop (ADR 0122) ----------
 
 /// A string with a fixed wire rule, also stated in the JSON Schema. `check` is the rule.
 macro_rules! checked_string {
@@ -1630,23 +1597,11 @@ pub enum AgentAskMode {
 }
 
 args!(
-    /// `genie_code_status`. `recheck` clears the `not_eligible` cache.
-    GenieCodeStatusArgs {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        recheck: Option<bool>,
-    }
-);
-args!(
     /// `orchestrator_status` (ADR 0122). `recheck` clears the cached state.
     OrchestratorStatusArgs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recheck: Option<bool>,
     }
-);
-args!(
-    /// `genie_code_install`. Must be `true`: the user gave consent. Rust downloads the pinned
-    /// source and checks the pinned SHA-256.
-    GenieCodeInstallArgs { consent: bool }
 );
 
 /// `agent_turn_submit`. It needs the talk-key latch or an Ask ticket. `question` is user
@@ -1765,8 +1720,6 @@ macro_rules! for_command {
             "workspace_set_available" => Some($f::<WorkspaceSetAvailableArgs>()),
             "workspace_make_home" => Some($f::<WorkspaceMakeHomeArgs>()),
             "workspace_settings_write" => Some($f::<WorkspaceSettingsWriteArgs>()),
-            "genie_code_status" => Some($f::<GenieCodeStatusArgs>()),
-            "genie_code_install" => Some($f::<GenieCodeInstallArgs>()),
             "orchestrator_models" => Some($f::<NoArgs>()),
             "orchestrator_status" => Some($f::<OrchestratorStatusArgs>()),
             "agent_turn_submit" => Some($f::<AgentTurnSubmitArgs>()),
@@ -1884,15 +1837,6 @@ pub fn handle(window_label: &str, command_name: &str, args: Value) -> Result<Han
     let validate = for_command!(spec.name, check).expect("every row has an argument type");
     validate(spec.name, args.clone())?;
     match spec.name {
-        "genie_code_install" => {
-            let a: GenieCodeInstallArgs = parse(spec.name, args)?;
-            if !a.consent {
-                return Err(IpcError::InvalidArgs {
-                    command: spec.name.to_owned(),
-                    reason: "consent must be true".to_owned(),
-                });
-            }
-        }
         "cli_install" => {
             let a: CliInstallArgs = parse(spec.name, args)?;
             if !a.consent {

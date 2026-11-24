@@ -93,8 +93,6 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("workspace_set_available", &[B]),
         ("workspace_make_home", &[B]),
         ("workspace_settings_write", &[B]),
-        ("genie_code_status", &[B]),
-        ("genie_code_install", &[B]),
         ("orchestrator_models", &[B]),
         ("orchestrator_status", &[B]),
         ("agent_turn_submit", &[B]),
@@ -302,7 +300,7 @@ fn arc_5_event_names_are_valid_tauri_names() {
         "hotkey.record_toggle",
         "recording.state",
         "recording.job",
-        // Slice 2a: the one Genie Code session and its turns (core to brain only).
+        // The ask loop: the one agent session and its turns (core to brain only).
         "agent.session",
         "agent.turn",
     ];

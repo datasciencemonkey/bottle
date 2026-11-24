@@ -81,8 +81,6 @@
     "allow-workspace-set-available",
     "allow-workspace-make-home",
     "allow-workspace-settings-write",
-    "allow-genie-code-status",
-    "allow-genie-code-install",
     "allow-orchestrator-models",
     "allow-orchestrator-status",
     "allow-agent-turn-submit",

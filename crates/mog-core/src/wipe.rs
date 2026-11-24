@@ -162,9 +162,9 @@ impl WipeService for StubWipeService {
 }
 
 /// The agent session host, as Wipe sees it (slice 2a, plan A3.7): every Wipe scope ends the
-/// session, kills the Genie Code process and deletes GENIE_HOME.
+/// session and drops its in-memory history.
 pub trait AgentWipeHook: Send + Sync {
-    /// End the session and wait until GENIE_HOME is gone. It never fails: a Wipe goes on.
+    /// End the session and wait until it is gone. It never fails: a Wipe goes on.
     fn end_for_wipe(&self);
 }
 
@@ -245,7 +245,7 @@ fn conversation_of(mog_id: &str, r: &Value) -> Option<WipeConversation> {
 impl WipeService for LocalWipeService {
     fn wipe(&self, scope: WipeScope) -> CoreResult<WipeReport> {
         // Plan A3.7: each scope ends the agent session first. The transcript of a session lives
-        // only in memory and in GENIE_HOME, so no scope may leave it.
+        // only in memory, so no scope may leave it.
         if let Some(h) = &self.agent {
             h.end_for_wipe();
         }

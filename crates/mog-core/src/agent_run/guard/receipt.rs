@@ -21,7 +21,7 @@ pub const WITHHELD_NOTE: &str = "Held back as suspicious. The user can decide ab
 /// The longest answer text that goes to the model, in chars.
 pub const MAX_TEXT_CHARS: usize = 4_000;
 
-/// A tool result for the shim. `Debug` shows the size only.
+/// A tool result for the model. `Debug` shows the size only.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ToolOut {
     pub text: String,

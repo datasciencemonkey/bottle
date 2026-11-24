@@ -138,8 +138,6 @@ fn sample(command: &str) -> (&'static str, Value) {
         "workspace_set_available" => json!({"profile": "p", "available": true}),
         "workspace_make_home" => json!({"profile": "p"}),
         "workspace_settings_write" => json!({"genieCallBudget": 10}),
-        "genie_code_status" => json!({"recheck": true}),
-        "genie_code_install" => json!({"consent": true}),
         "orchestrator_models" => json!({}),
         "orchestrator_status" => json!({"recheck": true}),
         "agent_turn_submit" => json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
@@ -506,8 +504,6 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::AgentTurnUnknown { command: s() },
         IpcError::AgentSessionUnavailable { command: s() },
         IpcError::AgentRateLimited { command: s() },
-        IpcError::GenieCodeMissing { command: s() },
-        IpcError::GenieCodeVersion { command: s() },
         IpcError::AgentProfileUnsupported { command: s() },
         IpcError::AgentSignedOut { command: s() },
         IpcError::AgentNotEligible { command: s() },
@@ -516,8 +512,6 @@ fn sec_03_each_ipc_error_maps_to_a_fixed_code() {
         IpcError::AgentFailed { command: s() },
         IpcError::AgentLockdownViolation { command: s() },
         IpcError::AgentRefusals { command: s() },
-        IpcError::InstallFailed { command: s() },
-        IpcError::ChecksumMismatch { command: s() },
         IpcError::SecretRefused { command: s() },
     ];
     assert_eq!(all.len(), ERROR_CODES.len(), "one code per variant");
@@ -920,9 +914,6 @@ fn slice_2a_agent_args_refuse_bad_values() {
         ("agent_session_end", json!({"reason": "quit"})),
         ("agent_session_end", json!({})),
         ("agent_session_state", json!({"x": 1})),
-        ("genie_code_install", json!({"consent": false})),
-        ("genie_code_install", json!({})),
-        ("genie_code_status", json!({"recheck": "yes"})),
         ("orchestrator_status", json!({"recheck": "yes"})),
         ("orchestrator_models", json!({"profile": "p"})),
         ("workspace_settings_write", json!({"runProfile": 5})),
@@ -968,7 +959,6 @@ fn slice_2a_agent_args_refuse_bad_values() {
 fn slice_2a_agent_commands_are_brain_only() {
     use mog_core::ipc::handle;
     for (command, args) in [
-        ("genie_code_status", json!({})),
         ("orchestrator_status", json!({})),
         ("orchestrator_models", json!({})),
         ("agent_turn_stop", json!({"turnId": TURN})),

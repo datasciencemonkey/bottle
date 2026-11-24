@@ -87,11 +87,8 @@ export const CALL_CLASS = {
   workspace_set_available: 'local',
   workspace_make_home: 'local',
   workspace_settings_write: 'local',
-  // Slice 2a: the status can run `auth token` (cloud); the install downloads the pinned build;
-  // a turn reaches the model and the workspaces through the agent session.
-  genie_code_status: 'cloud',
-  genie_code_install: 'cloud',
-  // ADR 0122: both ask the home AI Gateway.
+  // ADR 0122: both ask the home AI Gateway. A turn reaches the model and the workspaces
+  // through the agent session.
   orchestrator_models: 'cloud',
   orchestrator_status: 'cloud',
   agent_turn_submit: 'cloud',
