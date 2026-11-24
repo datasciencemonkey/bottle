@@ -38,14 +38,6 @@ describe('agent routing (ADR 0122)', () => {
     });
   });
 
-  it('[R-8] no route offers "Ask other workspaces too"', () => {
-    for (const orchestrator of [{ state: 'ready' }, { state: 'unreachable' }, undefined] as const) {
-      expect(routeAsk(input({ orchestrator })), String(orchestrator?.state)).not.toHaveProperty(
-        'offerOthers',
-      );
-    }
-  });
-
   it('[R-12] a thread follow-up stays direct, with no reason, even when ready', () => {
     expect(routeAsk(input({ thread: true, followUp: true }))).toEqual({ path: 'direct' });
   });

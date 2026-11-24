@@ -5,6 +5,12 @@ export interface FakeRow extends Partial<WorkspaceRow> {
   profile: string;
 }
 
+/**
+ * A field that the contract is dropping (ADR 0122). Spread, so this file compiles with the field
+ * required (before) and removed (after). Delete it when the contract lane has landed.
+ */
+const REMOVED_FIELDS = { runProfile: null };
+
 export function workspaceRow(r: FakeRow): WorkspaceRow {
   return {
     host: `https://${r.profile}.example.test`,
@@ -33,7 +39,7 @@ export function workspaceList(
       genieCallBudget: 10,
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
-      runProfile: null,
+      ...REMOVED_FIELDS,
     },
     ...over,
   };

@@ -471,12 +471,9 @@ export function startBrain(): Brain {
     const routeNames = () => {
       const cat = workspaces.catalog();
       const home = cat.find((c) => c.isHome);
-      const run = workspaces.last()?.agent.runProfile;
-      const agent = (run ? cat.find((c) => c.profile === run) : undefined) ?? home;
-      return {
-        agent: agent?.name ?? 'your home workspace',
-        home: home?.name ?? 'your home workspace',
-      };
+      // ADR 0122: the orchestrator runs on the home workspace, always.
+      const name = home?.name ?? 'your home workspace';
+      return { agent: name, home: name };
     };
     /** A one-line pop-up (queue full, "Not sent."): it takes the card and waits for the hold gate. */
     const showNote = (mogId: MogId, text: string) => {

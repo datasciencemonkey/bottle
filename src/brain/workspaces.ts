@@ -93,8 +93,6 @@ export interface WorkspacesDeps {
   settingsWrite(args: {
     crossWorkspaceData?: boolean;
     genieCallBudget?: 5 | 10 | 20;
-    /** Slice 2a: the profile the agent runs on. `null` means home. */
-    runProfile?: ProfileName | null;
     /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. */
     agentEndpoint?: string;
     /** ADR 0122: "Clean up dictation". */
@@ -248,7 +246,6 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         crossWorkspaceData: l.agent.crossWorkspaceData,
         crossWorkspaceLocked: l.agent.crossWorkspaceLocked,
         genieCallBudget: l.agent.genieCallBudget,
-        ...(l.agent.runProfile !== undefined ? { runProfile: l.agent.runProfile } : {}),
       },
     };
     if (l.home === null) {
@@ -440,9 +437,6 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(
           keep(await deps.settingsWrite({ crossWorkspaceData: a.crossWorkspaceData })),
         );
-      case 'workspace.agent_profile':
-        // Rust ends the session after the live turn.
-        return publish(keep(await deps.settingsWrite({ runProfile: a.profile })));
       default:
         return;
     }
