@@ -1126,12 +1126,63 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
     await r.settle();
     expect(r.history).toEqual([]);
-    // The Wipe failed: a turn that starts after the lift writes its row.
+    // The Wipe failed: the held row is written, and a turn that starts after the lift writes too.
     lift();
     r.script.submit.push(accepted(T2, { newSession: false }));
     await r.client.submit(turn('After?'), 'ask');
     r.ev({ kind: 'ended', turnId: T2, outcome: 'answered', calls: 0 });
     await r.settle();
-    expect(turnRows(r).map((h) => h.question)).toEqual(['After?']);
+    expect(turnRows(r).map((h) => h.question)).toEqual(['Wiping?', 'After?']);
+  });
+
+  it('[L-1b] a turn that ended in the fence of a failed Wipe gets its row once, at the lift', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Kept?'), 'ask');
+    const lift = r.client.fence();
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(r.history).toEqual([]);
+    lift();
+    lift();
+    await r.settle();
+    expect(turnRows(r).map((h) => h.question)).toEqual(['Kept?']);
+  });
+
+  it('[L-1c] a turn submitted in the fence writes nothing in it, nothing after a good Wipe, a row after a lift', async () => {
+    for (const wiped of [true, false]) {
+      const r = rig();
+      const lift = r.client.fence();
+      r.script.submit.push(accepted(T1));
+      await r.client.submit(turn('Inside?'), 'ask');
+      r.script.result = NOTE;
+      r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+      await r.settle();
+      expect(r.history).toEqual([]);
+      if (wiped) {
+        r.client.clear();
+        lift();
+        await r.settle();
+        expect(r.history).toEqual([]);
+      } else {
+        lift();
+        await r.settle();
+        expect(turnRows(r).map((h) => h.question)).toEqual(['Inside?']);
+      }
+    }
+  });
+
+  it('[L-1d] a lift does not undo a Wipe fence of the core that came meanwhile', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Gone?'), 'ask');
+    const lift = r.client.fence();
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    lift();
+    await r.settle();
+    expect(r.history).toEqual([]);
   });
 });
