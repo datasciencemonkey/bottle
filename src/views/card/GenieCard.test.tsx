@@ -650,6 +650,72 @@ describe('Genie card links (#523)', () => {
   });
   const linkClicks = () => clicks().filter((c) => c.payload.target === 'link_open');
 
+  describe('the pill shows the question and the link', () => {
+    const LONG =
+      'Which customers in the northern region renewed their annual contract after the second price change last quarter, and what share of them moved to the new plan?';
+    const pillWith = (text: string, q: string, sections?: unknown[]) => ({
+      mogId: ID,
+      blurbs: [
+        { id: G, text, pinned: false, completed: false },
+        { id: 'ask:u1', text: `"${q}"`, pinned: false, completed: true },
+      ],
+      chips: [],
+      ...(sections ? { sections } : {}),
+    });
+    const footer = { id: 'footer', deepLink: DEEP, workspaceHost: WS };
+
+    it('shows the whole long question, wrapped, with no ellipsis and no truncation', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith('Running the query', LONG));
+      const q = el.querySelector('[data-genie="working"] [data-genie-pill-question]');
+      expect(q?.textContent).toBe(LONG);
+      const css = readFileSync(join(__dirname, 'genie-card.css'), 'utf8');
+      const rule = /\.genie-pill-question \{([^}]*)\}/.exec(css)?.[1] ?? '';
+      expect(rule).toContain('white-space: normal');
+      expect(rule).toContain('overflow-wrap: anywhere');
+      expect(rule).not.toMatch(/text-overflow|line-clamp|nowrap|overflow: hidden/);
+    });
+
+    it('shows no link before the answer is ready, and none without a deep link', async () => {
+      const el = await mount();
+      await tauri.emitTo(
+        `card-${ID}`,
+        'card:update',
+        pillWith('Running the query', 'Q?', [footer]),
+      );
+      expect(
+        el.querySelector('[data-genie="working"] [data-action="open-in-databricks"]'),
+      ).toBeNull();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?'));
+      expect(
+        el.querySelector('[data-genie="working"] [data-action="open-in-databricks"]'),
+      ).toBeNull();
+      await tauri.emitTo(
+        `card-${ID}`,
+        'card:update',
+        pillWith(ANSWER_READY, 'Q?', [{ id: 'footer', deepLink: '', workspaceHost: WS }]),
+      );
+      expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
+    });
+
+    it('shows a focusable link on the ready pill and sends the same link_open click', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', pillWith(ANSWER_READY, 'Q?', [footer]));
+      const a = el.querySelector(
+        '[data-genie="working"] a[data-action="open-in-databricks"]',
+      ) as HTMLAnchorElement;
+      expect(a.textContent).toBe('Open in Databricks');
+      expect(a.getAttribute('href')).toBe(DEEP);
+      expect(a.tabIndex).toBeGreaterThanOrEqual(0);
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+      await act(async () => void a.dispatchEvent(ev));
+      expect(ev.defaultPrevented).toBe(true);
+      expect(linkClicks()).toHaveLength(1);
+      expect(linkClicks()[0]?.payload).toEqual({ target: 'link_open', url: DEEP });
+      expect(clicks().some((c) => c.payload.target === 'open_conversations')).toBe(false);
+    });
+  });
+
   it('[#523] shows Open in Databricks for a trusted deep_link and sends one link_open click', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', withLinks('Hello.'));

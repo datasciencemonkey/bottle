@@ -612,6 +612,30 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
             live={ready && identity ? `${identity.name}: ${ANSWER_READY}` : undefined}
           />
           {ready ? <span className="genie-ready-dot" aria-hidden="true" /> : <Timer />}
+          {question !== undefined && (
+            <p className="genie-pill-question" data-genie-pill-question>
+              {question}
+            </p>
+          )}
+          {ready && databricksUrl !== undefined && (
+            <a
+              className="genie-toggle genie-databricks genie-pill-link"
+              data-action="open-in-databricks"
+              href={databricksUrl}
+              rel="noopener noreferrer"
+              title={databricksUrl}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.detail > 1) return;
+                openLink(databricksUrl);
+              }}
+            >
+              {OPEN_IN_DATABRICKS_LABEL}
+              <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+            </a>
+          )}
         </>
       )}
       {kind !== 'working' && (

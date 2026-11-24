@@ -104,6 +104,33 @@
   animation: genie-in 180ms var(--mog-ease-out) both;
 }
 
+/* The pill shows the whole question, wrapped under the stage line (never an ellipsis), and in
+   the ready state the quiet "Open in Databricks" link. The window grows to fit (`fit-window.ts`).
+   A pill with no question stays one line. */
+.genie-working:has(.genie-pill-question) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.genie-pill-question {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* It takes its own last line (`.genie-databricks`); only the size is smaller than in the footer. */
+.genie-toggle.genie-pill-link {
+  font-size: var(--mog-text-xs);
+}
+
 .genie-stage-slot {
   display: grid;
   min-width: 0;

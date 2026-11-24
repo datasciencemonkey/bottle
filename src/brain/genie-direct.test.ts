@@ -538,8 +538,11 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       await new Promise((r) => setTimeout(r, 0));
       expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, ANSWER_READY]);
       expect(c.log.every((x) => !x.completed)).toBe(true);
-      // Only the clearing at the send: no sections, no outcome blurb, no show, no mood phase.
-      expect(c.expanded).toEqual([undefined]);
+      // The clearing at the send, then the answer sections (the ready pill needs the deep link).
+      // No outcome blurb, no show, no mood phase: the view keeps the pill while the blurb works.
+      expect(c.expanded).toHaveLength(2);
+      expect(c.expanded[0]).toBeUndefined();
+      expect(c.expanded[1]).toMatchObject({ answerMd: 'Churn was 4.2%.' });
       expect(shows).toEqual([]);
       expect(phases).toEqual(['working']);
       // #40: the history write is no arrival. It runs at the terminal event.

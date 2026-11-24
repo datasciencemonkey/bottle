@@ -173,19 +173,23 @@ export function createGenieDirectSend(
       } catch {
         // The history logs its own fixed code; the answer on the card stays as it is.
       }
+      // Slice 2a: a fallback tells the user, in one line before the answer, why only one
+      // workspace was asked.
+      const putAnswer = (): void => {
+        if (outcome.t !== 'answer') return;
+        card.setExpanded({
+          answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
+          keyNumbers: outcome.keyNumbers.map((k) => k.text),
+          ...(outcome.deepLink ? { deepLink: outcome.deepLink } : {}),
+          ...(host ? { workspaceHost: host } : {}),
+          dataFlowText: GENIE_DATA_FLOW_TEXT,
+        });
+      };
       const apply = async (): Promise<void> => {
         // The answer sections and the Try again control go on while the blurb still works, so the
         // card goes from the status pill to the answer or failure card in one step.
         if (outcome.t === 'answer') {
-          // Slice 2a: a fallback tells the user, in one line before the answer, why only one
-          // workspace was asked.
-          card.setExpanded({
-            answerMd: opts.notice ? `*${opts.notice}*\n\n${outcome.md}` : outcome.md,
-            keyNumbers: outcome.keyNumbers.map((k) => k.text),
-            ...(outcome.deepLink ? { deepLink: outcome.deepLink } : {}),
-            ...(host ? { workspaceHost: host } : {}),
-            dataFlowText: GENIE_DATA_FLOW_TEXT,
-          });
+          putAnswer();
         } else if (phaseOf(outcome) === 'failed' && card.setControls) {
           // GL-5: one user action sends the same question again, as a new request (G-15b).
           const owner = `retry:${id}`;
@@ -229,8 +233,12 @@ export function createGenieDirectSend(
       };
       const arrivals = deps.arrivals;
       // The pill tells the user an answer is ready, and the card waits for the key-up.
-      if (arrivals?.isHeld() && phaseOf(outcome) === 'answered')
+      if (arrivals?.isHeld() && phaseOf(outcome) === 'answered') {
+        // The ready pill shows "Open in Databricks", so the deep link goes on with it. The blurb
+        // still works, so the view keeps the pill until the key-up.
+        putAnswer();
         card.add({ id, text: ANSWER_READY });
+      }
       await new Promise<void>((resolve, reject) => {
         const run = () => void apply().then(resolve, reject);
         if (arrivals) arrivals.whenClear(run);
