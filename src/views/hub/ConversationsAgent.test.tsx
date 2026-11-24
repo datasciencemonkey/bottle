@@ -956,3 +956,26 @@ describe('review fixes (needs you, queued only, toast, composer, list line)', ()
     expect(d.querySelector('[data-action="fold"]')).toBeNull();
   });
 });
+
+describe('the note of a stored turn (ADR 0122)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[owner bug] a link in the stored note opens through link_open with the part of its host', async () => {
+    const { el } = await mount();
+    const url = 'https://example.cloud.databricks.test/one/chat/threads/t1';
+    const other = 'https://elsewhere.example/x';
+    const t = stored('a', { summaryMd: `See [the thread](${url}) and [that](${other}).` });
+    await feed([thread(THREAD_A, [t])]);
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    const links = [...note.querySelectorAll<HTMLAnchorElement>('a.md-link')];
+    expect(links).toHaveLength(1);
+    // A host that is no workspace of the turn stays plain text.
+    expect(note.querySelector('.md-link--blocked')).not.toBeNull();
+    await click(links[0]);
+    expect(payloads(CONVERSATIONS_VIEW_ID)).toContainEqual({
+      target: 'link_open',
+      url,
+      requestId: t.parts[0]?.requestId,
+    });
+  });
+});

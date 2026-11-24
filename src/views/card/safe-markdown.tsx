@@ -65,6 +65,7 @@ interface Ctx {
   locale: string | undefined;
   maxTableRows: number;
   overflowHint: string | undefined;
+  renderMarker: ((n: number) => ReactNode | undefined) | undefined;
 }
 
 /** The last characters of a link label that stay on one line with the icon. */
@@ -124,12 +125,29 @@ function linkNode(label: string, raw: string, ctx: Ctx, key: string): ReactNode 
   );
 }
 
+/** Plain text with the `[n]` markers that the caller knows drawn by `renderMarker`. */
+function plain(text: string, ctx: Ctx, key: string): ReactNode[] {
+  const draw = ctx.renderMarker;
+  if (!draw) return [text];
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
+    const node = draw(Number(m[1]));
+    if (node === undefined) continue;
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(<Fragment key={`${key}-${m.index}`}>{node}</Fragment>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 function inline(text: string, ctx: Ctx, key: string): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let i = 0;
   for (const m of text.matchAll(INLINE)) {
-    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m.index > last) out.push(...plain(text.slice(last, m.index), ctx, `${key}-t${i}`));
     const k = `${key}-${i++}`;
     let end = m.index + m[0].length;
     if (m[4] !== undefined) out.push(<code key={k}>{m[4]}</code>);
@@ -144,7 +162,7 @@ function inline(text: string, ctx: Ctx, key: string): ReactNode[] {
     else out.push(linkNode(m[2] ?? '', m[3] ?? '', ctx, k));
     last = end;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(...plain(text.slice(last), ctx, `${key}-e`));
   return out;
 }
 
@@ -295,6 +313,11 @@ export interface SafeMarkdownProps {
   maxTableRows?: number;
   /** What the "N more rows" line adds, for example "Open in Bottle to see all of them". */
   overflowHint?: string;
+  /**
+   * ADR 0122: draws one `[n]` of the text. It returns undefined for an `n` the caller does not
+   * know; the text `[n]` then stays as it is. The marker is a React node, never raw HTML.
+   */
+  renderMarker?: (n: number) => ReactNode | undefined;
 }
 
 const LIST = /^\s*([-*]|\d+\.)\s+/;
@@ -306,8 +329,9 @@ export function SafeMarkdown({
   locale,
   maxTableRows = MAX_TABLE_ROWS,
   overflowHint,
+  renderMarker,
 }: SafeMarkdownProps) {
-  const ctx: Ctx = { trust, onOpenLink, locale, maxTableRows, overflowHint };
+  const ctx: Ctx = { trust, onOpenLink, locale, maxTableRows, overflowHint, renderMarker };
   const lines = text.slice(0, MAX_ANSWER_CHARS).split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let n = 0;

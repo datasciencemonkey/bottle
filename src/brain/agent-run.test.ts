@@ -442,6 +442,26 @@ describe('a finished call and a finished turn', () => {
     expect(r.phases.at(-1)).toBe('answered');
   });
 
+  it('[AC-2a.12] the summary carries the citations of its valid, shown markers only', async () => {
+    const r = rig();
+    await answered(r);
+    r.script.result = {
+      answer: 'Sales [1] and finance [2], not [3] or [x].',
+      answerKind: 'note',
+      sources: [
+        { workspaceId: 'ws-a', callId: C1, turnId: T1 },
+        { workspaceId: 'ws-b', callId: C2, turnId: T1 },
+      ],
+    };
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    const s = r.client.panel().earlier[0]?.summary as { md: string; citations?: unknown[] };
+    expect(s.md).toBe('Sales [1] and finance [2], not [3] or [x].');
+    // D1 is off: the Finance part is withheld from the agent, so [2] gets no link.
+    expect(s.citations).toMatchObject([{ n: 1, callId: C1, workspace: { name: SALES.name } }]);
+    expect(s.citations).toHaveLength(1);
+  });
+
   it('[AC-2a.12] a hidden summary shows no note and folds nothing', async () => {
     const r = rig();
     await answered(r);
