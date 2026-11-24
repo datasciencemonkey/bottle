@@ -30,11 +30,16 @@ export interface OrchestratorDeps {
   /** `orchestrator_status`. `recheck` asks the gateway again. */
   status(recheck?: boolean): Promise<OrchestratorStatus>;
   /** The agent settings of the last workspace list, if any. */
-  settings(): Pick<WorkspaceList['agent'], 'endpoint' | 'cleanDictation'> | undefined;
+  settings():
+    Pick<WorkspaceList['agent'], 'endpoint' | 'cleanDictation' | 'cloudDictation'> | undefined;
   /** The name of the home workspace, or null. */
   homeName(): string | null;
   /** `workspace_settings_write` for the model or the switch. It sends the workspace list. */
-  write(args: { agentEndpoint?: string; cleanDictation?: boolean }): Promise<void>;
+  write(args: {
+    agentEndpoint?: string;
+    cleanDictation?: boolean;
+    cloudDictation?: boolean;
+  }): Promise<void>;
   /** Send the view to the hub window only. */
   send(view: HubOrchestratorView): Promise<unknown>;
 }
@@ -46,6 +51,8 @@ export interface Orchestrator {
   refresh(recheck?: boolean): Promise<void>;
   /** The "Clean up dictation" setting. On until the list says otherwise. */
   cleanDictation(): boolean;
+  /** ADR 0123: the "Dictation engine" setting. Off (this Mac) until the list says otherwise. */
+  cloudDictation(): boolean;
   /**
    * An agent turn ended with `outcome`. A failed, signed-out or offline end may mean that the
    * model is no longer ready (M3), so the status is read again. Any other outcome does nothing.
@@ -87,6 +94,7 @@ export function wireOrchestrator(bus: BrainBus, deps: OrchestratorDeps): Orchest
       models: list,
       selected: selected ?? '',
       cleanDictation: s?.cleanDictation ?? true,
+      cloudDictation: s?.cloudDictation ?? false,
       ...(status ? { state: status.state } : {}),
       homeName: deps.homeName(),
     };
@@ -118,6 +126,8 @@ export function wireOrchestrator(bus: BrainBus, deps: OrchestratorDeps): Orchest
           .then(push);
       case 'orchestrator.clean_dictation':
         return void deps.write({ cleanDictation: a.on }).then(push);
+      case 'orchestrator.cloud_dictation':
+        return void deps.write({ cloudDictation: a.on }).then(push);
     }
   });
 
@@ -128,6 +138,7 @@ export function wireOrchestrator(bus: BrainBus, deps: OrchestratorDeps): Orchest
       await push();
     },
     cleanDictation: () => deps.settings()?.cleanDictation ?? true,
+    cloudDictation: () => deps.settings()?.cloudDictation ?? false,
     turnEnded: (outcome) => {
       if (STATUS_REFRESH_OUTCOMES.has(outcome)) void api.refresh();
     },

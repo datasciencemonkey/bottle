@@ -7,6 +7,7 @@
 - Deviates from: CAP-07b ("never mix"), #116 (local STT for sessions) and AGENTS.md section 1
   ("Meeting recording" was out of scope)
 - Amended by: ADR 0109 (parts during capture, one transcription at the end; decisions 7, 8 and 9)
+- Amended by: ADR 0123 (the model defaults are `system.ai.gemini-3-8-flash` and `system.ai.claude-sonnet-5-5`; a saved old default id reads as the new one)
 - Refers to: ADR 0098 (the ⌥G key), ADR 0101 d7 (ask for a permission at once), ADR 0063
   (app settings), ADR 0091 (hub models outside the contract)
 

@@ -16,7 +16,7 @@ Bottle is a Tauri desktop app (macOS first, Windows second) for Databricks users
 
 | Key action | What happens |
 |---|---|
-| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. The orchestrator model cleans up the text. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie** (PRs #572, #571). |
+| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device, or, if the user sets Dictation engine to Databricks, a `system.ai` Gemini model on the home AI Gateway transcribes it (ADR 0123). The orchestrator model cleans up the text. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie** (PRs #572, #571). |
 | Hold **Right Option**, tap **G** (⌥G) during the hold, release | **Ask.** Nothing is pasted. The orchestrator model asks **Genie One** in the switched-on workspaces, then shows the answer (markdown, key numbers, citations) in the MOG card. |
 
 The user always knows whether they dictate or ask, so the key decides. Bottle does not guess the intent. The pop-up's
@@ -35,6 +35,11 @@ Binding decisions for the MVP:
   - **Dictation:** local Parakeet, then a local filler pre-pass, then the model cleans the text (1.5 s budget, no
     retry, no tools). Bottle pastes the model text only when its words match the speaker's words. Otherwise it pastes
     the local text. The setting "Clean up dictation" switches this off.
+  - **Dictation engine (ADR 0123, owner decision 2026-11-24).** The setting "Dictation engine" is "On this Mac" (the
+    default) or "Databricks". With Databricks, the audio of the talk-key hold goes to `system.ai.gemini-3-8-flash` on
+    the home AI Gateway (chat completions, FLAC, 3.5 s deadline). The text then goes through the same pre-pass, cleanup
+    switch, word check and paste. On any error, Bottle uses the local Parakeet text of the same audio and the MOG shows
+    a short notice. Local Parakeet stays the default and the fallback.
   - **Ask (⌥G):** the model runs a tool loop in Rust (`agent_run::orchestrator`). It has two tools:
     `ask_genie(workspace, question)` and `submit_answer`. Every `ask_genie` call goes through the guard
     (`agent_run/guard`): switched-on workspaces only, a budget, quarantine, and receipts when "Combine across
@@ -59,7 +64,7 @@ Binding decisions for the MVP:
 ### Out of scope for now ("we'll consider later")
 
 UC Pages, Lakebase sync, memory recall and embeddings, the R16 main agent and `bottle-mcp` tools,
-mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR for dictation (call recording uses cloud transcription, ADR 0103), Linux,
+mascot artwork work, admin/MDM, telemetry export, audit log, cloud ASR as the default for dictation (the opt-in Dictation engine "Databricks" is in scope, ADR 0123; call recording uses cloud transcription, ADR 0103), Linux,
 signed public installers, and most spikes. Code for some of these is already on main. Leave it alone unless an MVP
 change needs it. Do not open new issues for this work. The non-core issues are being closed with "We'll consider this
 later".
@@ -113,7 +118,7 @@ Re-check with `gh pr list` before you rely on this table.
 Two flows use the model (ADR 0122):
 
 ```
- Dictation:  Parakeet ─► local filler pre-pass ─► model_invoke (role router, no tools, 1.5 s) ─► word check ─► insert_text
+ Dictation:  Parakeet (or Databricks Gemini, ADR 0123) ─► local filler pre-pass ─► model_invoke (role router, no tools, 1.5 s) ─► word check ─► insert_text
                                                       └─ timeout, refusal or mismatch ─► insert_text with the local text
  Ask (⌥G):   local text ─► agent_run/orchestrator ─► model (Responses) ⇄ ask_genie(workspace, question) ─► guard ─► Genie One
                                                       └─ submit_answer ─► answer card with [n] citations

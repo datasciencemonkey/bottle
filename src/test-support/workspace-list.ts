@@ -33,6 +33,7 @@ export function workspaceList(
       genieCallBudget: 10,
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
+      cloudDictation: false,
     },
     ...over,
   };

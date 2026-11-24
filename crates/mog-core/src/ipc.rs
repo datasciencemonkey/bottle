@@ -1033,6 +1033,14 @@ args!(
         )]
         #[schemars(with = "bool")]
         clean_dictation: Option<bool>,
+        /// ADR 0123: "Dictation engine: Databricks".
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "bool")]
+        cloud_dictation: Option<bool>,
     }
 );
 

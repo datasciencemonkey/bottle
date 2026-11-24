@@ -939,6 +939,10 @@ pub struct AgentSettings {
     /// ADR 0122: "Clean up dictation". Default true. A file from before ADR 0122 reads as true.
     #[serde(default = "default_clean_dictation")]
     pub clean_dictation: bool,
+    /// ADR 0123: "Dictation engine: Databricks". The talk-key audio goes to a `system.ai` Gemini
+    /// model on the home AI Gateway. Default false (local Parakeet).
+    #[serde(default)]
+    pub cloud_dictation: bool,
 }
 
 /// The default of [`AgentSettings::clean_dictation`].
@@ -1433,10 +1437,14 @@ impl std::fmt::Debug for AgentTurnView {
 // ---------- call recording (ADR 0103) ----------
 
 /// The default notes model of a new install (ADR 0103). A Settings value.
-pub const RECORDING_DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+pub const RECORDING_DEFAULT_ENDPOINT: &str = "system.ai.claude-sonnet-5-5";
+/// The notes default before ADR 0123. A saved value that is exactly this reads as the default.
+pub const RECORDING_LEGACY_NOTES_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The transcribe default before ADR 0123. A saved value that is exactly this reads as the default.
+pub const RECORDING_LEGACY_TRANSCRIBE_ENDPOINT: &str = "databricks-gemini-3-8-flash";
 /// The default transcribe model of a new install (ADR 0103): a chat model that takes audio
 /// (`audio_url` data URLs). A Settings value.
-pub const RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT: &str = "databricks-gemini-3-8-flash";
+pub const RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT: &str = "system.ai.gemini-3-8-flash";
 /// The default recording length in minutes. The recording stops by itself at this length.
 pub const RECORDING_DEFAULT_LENGTH_MIN: u16 = 60;
 /// The shortest and the longest recording length that Settings accepts, in minutes.
@@ -1546,10 +1554,10 @@ checked_string!(
 
 checked_string!(
     /// A model endpoint name (the `model` of an AI Gateway chat call): 1-128 characters of
-    /// `[A-Za-z0-9_-]`.
+    /// `[A-Za-z0-9_.-]`. The dot is for `system.ai.<name>` ids (ADR 0123).
     EndpointName,
-    "^[A-Za-z0-9_-]{1,128}$",
-    |s| ascii_id(s, 128, &['_', '-'])
+    "^[A-Za-z0-9_.-]{1,128}$",
+    |s| ascii_id(s, 128, &['_', '.', '-'])
 );
 
 checked_string!(

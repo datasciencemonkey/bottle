@@ -27,6 +27,8 @@ export interface HubOrchestratorView {
   selected: string;
   /** "Clean up dictation". */
   cleanDictation: boolean;
+  /** ADR 0123: "Dictation engine": true is Databricks, false is this Mac. */
+  cloudDictation: boolean;
   /** The last known status. Undefined until the brain has read it. */
   state?: OrchestratorState;
   /** The name of the home workspace, or null when there is none. */
@@ -38,6 +40,7 @@ export type OrchestratorAction =
   | { action: 'orchestrator.ready' }
   | { action: 'orchestrator.model'; model: string }
   | { action: 'orchestrator.clean_dictation'; on: boolean }
+  | { action: 'orchestrator.cloud_dictation'; on: boolean }
   | { action: 'orchestrator.recheck' };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -70,6 +73,10 @@ export function asOrchestratorAction(p: unknown): OrchestratorAction | undefined
       return typeof p['on'] === 'boolean'
         ? { action: 'orchestrator.clean_dictation', on: p['on'] }
         : undefined;
+    case 'orchestrator.cloud_dictation':
+      return typeof p['on'] === 'boolean'
+        ? { action: 'orchestrator.cloud_dictation', on: p['on'] }
+        : undefined;
     default:
       return undefined;
   }
@@ -84,6 +91,7 @@ export function asHubOrchestratorView(p: unknown): HubOrchestratorView | undefin
     models.push({ id: m['id'], label: m['label'] });
   }
   if (!isModelId(p['selected']) || typeof p['cleanDictation'] !== 'boolean') return undefined;
+  if (typeof p['cloudDictation'] !== 'boolean') return undefined;
   const home = p['homeName'];
   if (home !== null && !isStr(home)) return undefined;
   const state = p['state'];
@@ -92,6 +100,7 @@ export function asHubOrchestratorView(p: unknown): HubOrchestratorView | undefin
     models,
     selected: p['selected'],
     cleanDictation: p['cleanDictation'],
+    cloudDictation: p['cloudDictation'],
     ...(state !== undefined ? { state: state as OrchestratorState } : {}),
     homeName: home,
   };

@@ -49,6 +49,8 @@ export const SEC_DISC: readonly Disclosure[] = [
       'Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.',
       'Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.',
       'Then audio goes to your home workspace in short chunks, and Bottle does not store it there.',
+      'If you set Dictation engine to Databricks, the audio of each talk-key hold goes to your home workspace to be transcribed.',
+      'Bottle sends it as one audio file, and does not store it there. If that call fails, Bottle uses the local model.',
       'The STT badge on each MOG shows which one is on.',
     ],
   },

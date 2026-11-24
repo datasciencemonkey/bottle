@@ -86,8 +86,8 @@ fn job(parts: Vec<LocalPart>) -> RecordingJob {
         name: NAME.into(),
         started_at: "2026-11-19T14:05:00Z".into(),
         instructions: "Write short notes.".into(),
-        transcribe_endpoint: "databricks-gemini-3-8-flash".into(),
-        notes_endpoint: "databricks-claude-sonnet-5-5".into(),
+        transcribe_endpoint: "system.ai.gemini-3-8-flash".into(),
+        notes_endpoint: "system.ai.claude-sonnet-5-5".into(),
         mog: "m1".into(),
         parts,
     }
@@ -298,12 +298,12 @@ fn files_ok(http: &ScriptedHttp) {
 }
 
 fn gemini(text: &str) -> Value {
-    json!({"model":"databricks-gemini-3-8-flash","choices":[{"message":{"role":"assistant",
+    json!({"model":"system.ai.gemini-3-8-flash","choices":[{"message":{"role":"assistant",
         "content":[{"type":"text","text":text,"thoughtSignature":"AY89a1-fake"}]},"index":0,"finish_reason":"stop"}]})
 }
 
 fn claude(text: &str) -> Value {
-    json!({"model":"databricks-claude-sonnet-5-5","choices":[{"message":{"role":"assistant","content":text},"index":0}]})
+    json!({"model":"system.ai.claude-sonnet-5-5","choices":[{"message":{"role":"assistant","content":text},"index":0}]})
 }
 
 const LINES: &str = "[00:00] Speaker 1: Hello team.\n[00:05] Speaker 2: Hi.";
@@ -360,7 +360,7 @@ fn rec_pipeline_uploads_deletes_temp_transcribes_and_writes_notes() {
     let calls = http.seen_on(MODEL);
     assert_eq!(calls.len(), 2);
     let t = calls[0].json.as_ref().unwrap();
-    assert_eq!(t["model"], "databricks-gemini-3-8-flash");
+    assert_eq!(t["model"], "system.ai.gemini-3-8-flash");
     let url = t["messages"][0]["content"][1]["audio_url"]["url"]
         .as_str()
         .unwrap();
@@ -368,7 +368,7 @@ fn rec_pipeline_uploads_deletes_temp_transcribes_and_writes_notes() {
     assert_eq!(calls[0].tags.as_ref().unwrap().op, TagOp::Asr);
     assert_eq!(calls[0].tags.as_ref().unwrap().mog, "m1");
     let n = calls[1].json.as_ref().unwrap();
-    assert_eq!(n["model"], "databricks-claude-sonnet-5-5");
+    assert_eq!(n["model"], "system.ai.claude-sonnet-5-5");
     let prompt = n["messages"][0]["content"].as_str().unwrap();
     assert!(
         prompt.starts_with("Write short notes.\n\nTranscript:\n"),
@@ -570,8 +570,8 @@ fn rec_pipeline_retries_a_429_with_backoff() {
 fn manifest(name: &str, started: &str, status: &str) -> Value {
     json!({"version":1,"id":name,"name":name,"started_at":started,"duration_s":30.0,
         "parts":[{"file":format!("{name}.opus"),"duration_s":30.0,"uploaded":true}],
-        "status":status,"transcribe_endpoint":"databricks-gemini-3-8-flash",
-        "notes_endpoint":"databricks-claude-sonnet-5-5","updated_at":started})
+        "status":status,"transcribe_endpoint":"system.ai.gemini-3-8-flash",
+        "notes_endpoint":"system.ai.claude-sonnet-5-5","updated_at":started})
 }
 
 #[test]

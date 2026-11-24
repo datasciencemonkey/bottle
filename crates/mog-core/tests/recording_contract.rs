@@ -30,12 +30,9 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert!(!s.enabled);
     assert!(!s.consent_ack);
     assert!(s.storage.is_none());
-    assert_eq!(
-        s.transcribe_endpoint.as_str(),
-        "databricks-gemini-3-8-flash"
-    );
-    assert_eq!(s.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
-    assert_eq!(RECORDING_DEFAULT_ENDPOINT, "databricks-claude-sonnet-5-5");
+    assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    assert_eq!(RECORDING_DEFAULT_ENDPOINT, "system.ai.claude-sonnet-5-5");
     assert_eq!(s.length_min.get(), 60);
     assert_eq!(
         s.preset_instructions.as_str(),
@@ -46,7 +43,7 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert_eq!(wire["storage"], Value::Null);
     assert_eq!(
         wire["transcribeEndpoint"],
-        json!("databricks-gemini-3-8-flash")
+        json!("system.ai.gemini-3-8-flash")
     );
     assert_eq!(wire["lengthMin"], json!(60));
 }

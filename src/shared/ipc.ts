@@ -477,6 +477,8 @@ export interface CommandArgs {
     agentEndpoint?: string;
     /** ADR 0122: "Clean up dictation". A bool only. */
     cleanDictation?: boolean;
+    /** ADR 0123: "Dictation engine: Databricks". A bool only. */
+    cloudDictation?: boolean;
   };
   /** ADR 0122: always the home profile. Bottle never picks one. */
   orchestrator_models: NoArgs;
@@ -528,6 +530,8 @@ export interface AgentSettings {
   endpoint: string;
   /** ADR 0122: "Clean up dictation". Default true. */
   cleanDictation: boolean;
+  /** ADR 0123: "Dictation engine: Databricks". Default false (on this Mac). */
+  cloudDictation: boolean;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -1098,9 +1102,9 @@ export interface RecordingSettings {
   /** The user acknowledged the first-use consent notice. Default false. */
   consentAck: boolean;
   storage: RecordingStorage | null;
-  /** The model that transcribes the audio. Default `databricks-gemini-3-8-flash`. */
+  /** The model that transcribes the audio. Default `system.ai.gemini-3-8-flash`. */
   transcribeEndpoint: string;
-  /** The model that writes the notes. Default `databricks-claude-sonnet-5-5`. */
+  /** The model that writes the notes. Default `system.ai.claude-sonnet-5-5`. */
   notesEndpoint: string;
   /** The preset prompt. Default: the ADR 0103 prompt. */
   presetInstructions: string;

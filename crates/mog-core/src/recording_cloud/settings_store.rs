@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
 use crate::recording::RecordingSettingsStore;
-use crate::types::RecordingSettings;
+use crate::types::{
+    EndpointName, RecordingSettings, RecordingSettingsPatch, RECORDING_DEFAULT_ENDPOINT,
+    RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT, RECORDING_LEGACY_NOTES_ENDPOINT,
+    RECORDING_LEGACY_TRANSCRIBE_ENDPOINT,
+};
 
 use super::layout::is_uc_name;
 
@@ -44,12 +48,22 @@ pub enum Storage {
     },
 }
 
-/// A model endpoint name: `[A-Za-z0-9_-]{1,128}` (same rule as `types::EndpointName`).
+/// A model endpoint name: `[A-Za-z0-9_.-]{1,128}` (same rule as `types::EndpointName`).
 pub fn is_endpoint_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+}
+
+/// The model id to call (ADR 0123): the two old default ids (`databricks-*`) map to the
+/// `system.ai.*` defaults. Any other value stays as it is.
+pub fn current_endpoint(s: &str) -> &str {
+    match s {
+        RECORDING_LEGACY_TRANSCRIBE_ENDPOINT => RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT,
+        RECORDING_LEGACY_NOTES_ENDPOINT => RECORDING_DEFAULT_ENDPOINT,
+        other => other,
+    }
 }
 
 /// Instructions the pipeline accepts: not blank, at most [`MAX_INSTRUCTIONS_BYTES`].
@@ -81,6 +95,14 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     f.write_all(bytes)?;
     f.sync_all()
+}
+
+/// The new default as an endpoint, when `saved` is an old default; else `None` (keep it).
+fn legacy_to_current(saved: &str) -> Option<EndpointName> {
+    let now = current_endpoint(saved);
+    (now != saved)
+        .then(|| EndpointName::try_from(now.to_owned()).ok())
+        .flatten()
 }
 
 fn failed() -> CoreError {
@@ -119,10 +141,18 @@ impl RecordingSettingsStore for JsonSettingsStore {
         let Some(p) = self.path.get() else {
             return Ok(RecordingSettings::default());
         };
-        Ok(std::fs::read(p)
+        let mut s = std::fs::read(p)
             .ok()
             .and_then(|b| serde_json::from_slice::<RecordingSettings>(&b).ok())
-            .unwrap_or_default())
+            .unwrap_or_default();
+        // ADR 0123: a saved old default id reads as the new default.
+        let patch = RecordingSettingsPatch {
+            transcribe_endpoint: legacy_to_current(s.transcribe_endpoint.as_str()),
+            notes_endpoint: legacy_to_current(s.notes_endpoint.as_str()),
+            ..Default::default()
+        };
+        s = s.apply(patch);
+        Ok(s)
     }
 
     fn save(&self, settings: &RecordingSettings) -> CoreResult<()> {

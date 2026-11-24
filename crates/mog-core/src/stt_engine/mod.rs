@@ -39,7 +39,7 @@ mod store;
 pub mod vad;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{compiler_fence, AtomicU64, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -52,10 +52,13 @@ pub use vad::{
 };
 
 use crate::audio_device::normalize::normalize_peak;
-use crate::audio_device::ptt_buffer::{Utterance, UtteranceSink};
+use crate::audio_device::ptt_buffer::{cap_samples, Utterance, UtteranceSink};
 use crate::audio_device::sink::{FrameSink, MicFrame, SinkEvent};
-use crate::capture::{parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped};
+use crate::capture::{
+    parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped, HOLD_MAX_MS,
+};
 use crate::clock::{MonotonicClock, SystemClock};
+use crate::cloud_dictation::{self, CloudStt};
 use crate::stt::{LOCAL_STT_MODEL, LOCAL_STT_RUNTIME};
 use crate::types::{CaptureMode, CaptureState, MogId, Transcript, TranscriptProvider};
 
@@ -204,6 +207,8 @@ pub struct EngineParts {
     pub vad: VadFactory,
     /// The settings.
     pub config: EngineConfig,
+    /// Cloud dictation (ADR 0123). `None`: every take decodes locally only.
+    pub cloud: Option<Arc<dyn CloudStt>>,
 }
 
 impl EngineParts {
@@ -216,6 +221,7 @@ impl EngineParts {
             clock: Arc::new(SystemClock::new()),
             vad: Arc::new(|| Box::new(EnergyVad::default()) as Box<dyn Vad>),
             config: EngineConfig::default(),
+            cloud: None,
         }
     }
 }
@@ -471,7 +477,17 @@ struct Take {
     texts: Vec<String>,
     samples: u64,
     failed: Option<&'static str>,
+    /// Cloud dictation (ADR 0123): the whole take at 16 kHz, kept in RAM for one upload. `None`
+    /// when the Databricks engine is off and for a take over [`CLOUD_MAX_SAMPLES`] (the buffer
+    /// never grows). Zeroed when it drops.
+    kept: Option<Wiped>,
+    /// A closed segment held sound (the cloud model never hears silence).
+    heard: bool,
 }
+
+/// The longest take that goes to the cloud (ADR 0123), for every capture mode: the PTT hold cap
+/// (CAP-04a), regardless of whether the take is PTT or hands-free.
+const CLOUD_MAX_SAMPLES: usize = (HOLD_MAX_MS as usize) * STT_SAMPLE_RATE as usize / 1_000;
 
 impl Take {
     fn new(lease: LeaseNo, mog_id: MogId, mode: CaptureMode, parts: &Shared) -> Self {
@@ -493,6 +509,14 @@ impl Take {
             texts: Vec::new(),
             samples: 0,
             failed: None,
+            // The cap is the PTT hold cap (CAP-04a) for every mode, not the mode's own, longer
+            // cap (hands-free is 5 min): a 5-min buffer would be about 19 MB, most of it unused
+            // on the common, short take. A take over the cap uses the local text (no upload).
+            kept: cap_samples(mode, STT_SAMPLE_RATE)
+                .map(|n| n.min(CLOUD_MAX_SAMPLES))
+                .filter(|_| parts.cloud.as_ref().is_some_and(|c| c.enabled()))
+                .map(Wiped::with_capacity),
+            heard: false,
         }
     }
 
@@ -510,7 +534,13 @@ struct Shared {
     vad: VadFactory,
     config: EngineConfig,
     identity: SttIdentity,
+    cloud: Option<Arc<dyn CloudStt>>,
+    /// The cancel flags of the cloud calls in flight, by lease (ADR 0123).
+    cloud_jobs: CloudJobs,
 }
+
+/// The cancel flags of the cloud calls in flight, by lease.
+type CloudJobs = Arc<Mutex<Vec<(LeaseNo, Arc<AtomicBool>)>>>;
 
 /// The model slot and its residency state.
 struct Model {
@@ -591,6 +621,8 @@ impl Worker {
                 vad: parts.vad,
                 config: parts.config,
                 identity,
+                cloud: parts.cloud,
+                cloud_jobs: Arc::default(),
             },
             model: Model {
                 slot: None,
@@ -673,10 +705,12 @@ impl Worker {
                     self.current = None;
                 }
                 self.takes.retain(|t| t.lease != lease);
+                self.cancel_cloud(Some(lease));
             }
             Cmd::DiscardAll => {
                 self.current = None;
                 self.takes.clear();
+                self.cancel_cloud(None);
             }
             Cmd::Tick => self.residency(false),
             Cmd::Sync(done) => {
@@ -723,6 +757,15 @@ impl Worker {
             let take = &mut self.takes[at];
             take.window.0.push(s);
             take.samples += 1;
+            if let Some(k) = take.kept.as_mut() {
+                // A full buffer never grows (no unwiped copy): the take is too long for the
+                // cloud and the local text stands.
+                if k.0.len() < k.0.capacity() {
+                    k.0.push(s);
+                } else {
+                    take.kept = None;
+                }
+            }
             if take.window.0.len() < VAD_WINDOW {
                 continue;
             }
@@ -754,6 +797,7 @@ impl Worker {
         let take = &mut self.takes[at];
         let sound = take.segment_speech
             || crate::audio_device::normalize::peak_dbfs(&take.segment.0) > SILENCE_PEAK_DBFS;
+        take.heard |= sound && !take.segment.0.is_empty();
         if sound && !take.segment.0.is_empty() && take.failed.is_none() {
             match self.model.decode(&self.shared, &mut take.segment.0) {
                 Ok(text) => take.texts.push(text),
@@ -784,7 +828,8 @@ impl Worker {
             drop(part);
         }
         self.close_segment(pos);
-        let take = self.takes.remove(pos);
+        let mut take = self.takes.remove(pos);
+        let kept = take.kept.take().filter(|_| take.heard);
         let duration_ms = take.samples * 1_000 / u64::from(STT_SAMPLE_RATE);
         let result = match take.failed {
             Some(code) => Err(code),
@@ -817,10 +862,98 @@ impl Worker {
             duration_ms,
             result,
         };
-        let out = &self.shared.out;
-        // A panic in the sink loses this one result; the worker lives on.
-        let _ = catch_unwind(AssertUnwindSafe(|| out.done(done)));
+        match (kept, self.shared.cloud.as_ref()) {
+            // Re-checked here, not only at key-down: a mid-take switch to "On this Mac" must
+            // not upload (ADR 0123).
+            (Some(audio), Some(cloud)) if cloud.enabled() => {
+                self.finish_in_cloud(done, audio, Arc::clone(cloud), at);
+            }
+            _ => deliver(&self.shared.out, done),
+        }
     }
+
+    /// Cloud dictation (ADR 0123): on a thread of its own, send the whole take to the cloud and
+    /// give the cloud text as the result. On any error, including a panic, the local result
+    /// goes out unchanged (the take was decoded locally during speech), so the user sees no
+    /// gap. A cancel (Wipe, zero buffers) gives no result. The audio is zeroed when the thread
+    /// ends.
+    ///
+    /// The job's entry in `cloud_jobs` is removed, and its cancel flag read, under the one lock
+    /// that [`Self::cancel_cloud`] also takes: a cancel set in the instant between the call
+    /// returning and this thread taking that lock is still seen, so a result from a call that
+    /// was cancelled a moment before it finished is never delivered.
+    fn finish_in_cloud(&self, done: SttDone, audio: Wiped, cloud: Arc<dyn CloudStt>, at: Duration) {
+        let lease = done.lease_id;
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&self.shared.cloud_jobs).push((lease, Arc::clone(&cancel)));
+        let job = Arc::new(Mutex::new(Some((done, audio))));
+        let spawned = std::thread::Builder::new()
+            .name("bottle-r4-cloud-stt".into())
+            .spawn({
+                let (job, out, clock, jobs) = (
+                    Arc::clone(&job),
+                    Arc::clone(&self.shared.out),
+                    Arc::clone(&self.shared.clock),
+                    Arc::clone(&self.shared.cloud_jobs),
+                );
+                let cancel = Arc::clone(&cancel);
+                move || {
+                    let Some((mut done, mut audio)) = lock(&job).take() else {
+                        return;
+                    };
+                    // A panic in the cloud call is an error like any other: the local text
+                    // stands. `audio` is still zeroed below either way.
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| cloud.transcribe(&mut audio.0, &cancel)))
+                            .unwrap_or(Err("stt_engine_failed"));
+                    drop(audio);
+                    let mut jobs = lock(&jobs);
+                    jobs.retain(|(_, c)| !Arc::ptr_eq(c, &cancel));
+                    if cancel.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    match result {
+                        Ok(text) => {
+                            let latency = clock.now().saturating_sub(at);
+                            done.result = Ok(Transcript {
+                                segment_id: segment_id(lease),
+                                text: text.clone(),
+                                raw: text,
+                                lang: None,
+                                provider: TranscriptProvider::DbxGemini,
+                                model: cloud_dictation::MODEL.to_owned(),
+                                runtime: cloud_dictation::RUNTIME.to_owned(),
+                                latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
+                                remember: None,
+                            });
+                            deliver(&out, done);
+                        }
+                        Err(_) => deliver(&out, done),
+                    }
+                    drop(jobs);
+                }
+            });
+        if spawned.is_err() {
+            lock(&self.shared.cloud_jobs).retain(|(_, c)| !Arc::ptr_eq(c, &cancel));
+            if let Some((done, _audio)) = lock(&job).take() {
+                deliver(&self.shared.out, done);
+            }
+        }
+    }
+
+    /// Cancel the cloud calls of `lease`, or every one (`None`).
+    fn cancel_cloud(&self, lease: Option<LeaseNo>) {
+        for (l, c) in lock(&self.shared.cloud_jobs).iter() {
+            if lease.is_none_or(|x| x == *l) {
+                c.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+/// Give a result to the sink. A panic in the sink loses this one result; the worker lives on.
+fn deliver(out: &Arc<dyn TranscriptSink>, done: SttDone) {
+    let _ = catch_unwind(AssertUnwindSafe(|| out.done(done)));
 }
 
 /// The `segmentId` of the transcript of a PTT or hands-free lease: one segment per lease.

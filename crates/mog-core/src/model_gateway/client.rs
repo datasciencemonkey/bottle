@@ -25,6 +25,8 @@ const ID: &str = "model_gateway";
 const CANCEL_POLL: Duration = Duration::from_millis(20);
 /// The route ID of the Unity AI Gateway Responses call.
 pub const RESPONSES_ROUTE: &str = "mlflow.responses";
+/// The route ID of the Unity AI Gateway chat completions call (cloud dictation, ADR 0123).
+pub const CHAT_COMPLETIONS_ROUTE: &str = "mlflow.chat_completions";
 
 /// The sign-in is missing or expired.
 pub const SIGNED_OUT: &str = "signed_out";
@@ -146,63 +148,16 @@ impl GatewayChatClient {
         let Value::Object(mut body) = req.body else {
             return Err(err(REFUSED));
         };
-        if req.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
-            return Err(err(CANCELLED));
-        }
-        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
-            self.in_flight.fetch_sub(1, Ordering::SeqCst);
-            return Err(err(RATE_LIMITED));
-        }
-        let slot = Slot(Arc::clone(&self.in_flight));
         body.insert("model".to_owned(), Value::String(req.model.to_owned()));
         body.insert("store".to_owned(), Value::Bool(false));
-        let body = Value::Object(body);
-        let profile = req.profile.to_owned();
-        let http = Arc::clone(&self.http);
-        let abandoned = Arc::new(AtomicBool::new(false));
-        let _abandon = Abandon(Arc::clone(&abandoned));
-        let deadline = req.deadline;
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("model-gateway-chat".to_owned())
-            .spawn({
-                let abandoned = Arc::clone(&abandoned);
-                move || {
-                    let _slot = slot;
-                    if abandoned.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let r = http.send_bounded(
-                        &profile,
-                        RESPONSES_ROUTE,
-                        &JsonObject::new(),
-                        ReqBody::Json(&body),
-                        Some(&tags),
-                        CallBounds {
-                            budget: deadline,
-                            abandoned: &abandoned,
-                        },
-                    );
-                    let _ = tx.send(r);
-                }
-            })
-            .map_err(|_| err(OFFLINE))?;
-        // Wait in short slices so a cancel is seen promptly.
-        let end = Instant::now() + deadline;
-        let reply = loop {
-            if req.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
-                return Err(err(CANCELLED));
-            }
-            let left = end.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(err(TIMEOUT));
-            }
-            match rx.recv_timeout(left.min(CANCEL_POLL)) {
-                Ok(r) => break r.map_err(|e| from_transport(&e))?,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(err(OFFLINE)),
-            }
-        };
+        let reply = self.call_route(
+            RESPONSES_ROUTE,
+            req.profile,
+            Value::Object(body),
+            tags,
+            req.deadline,
+            req.cancel,
+        )?;
         if !reply.ok() {
             return Err(from_status(reply.status, reply.error_code()));
         }
@@ -219,6 +174,96 @@ impl GatewayChatClient {
         match json.get("output").and_then(Value::as_array) {
             Some(_) if finished => Ok(json.clone()),
             _ => Err(err(BAD_REPLY)),
+        }
+    }
+
+    /// One call on the chat completions route (`mlflow.chat_completions`) with a ready `body`
+    /// (it holds the `model`), for cloud dictation (ADR 0123). The same in-flight cap, deadline,
+    /// cancel and content-free codes as [`Self::chat_tagged`]. Returns the JSON of a 2xx reply.
+    pub fn chat_completions(
+        &self,
+        profile: &str,
+        body: Value,
+        tags: Tags,
+        deadline: Duration,
+        cancel: Option<&AtomicBool>,
+    ) -> CoreResult<Value> {
+        let reply = self.call_route(
+            CHAT_COMPLETIONS_ROUTE,
+            profile,
+            body,
+            tags,
+            deadline,
+            cancel,
+        )?;
+        if !reply.ok() {
+            return Err(from_status(reply.status, reply.error_code()));
+        }
+        Ok(reply.json().clone())
+    }
+
+    /// One bounded call on `route` on a worker thread, and its reply of any status.
+    fn call_route(
+        &self,
+        route: &'static str,
+        profile: &str,
+        body: Value,
+        tags: Tags,
+        deadline: Duration,
+        cancel: Option<&AtomicBool>,
+    ) -> CoreResult<crate::recording_cloud::http::Reply> {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            return Err(err(CANCELLED));
+        }
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return Err(err(RATE_LIMITED));
+        }
+        let slot = Slot(Arc::clone(&self.in_flight));
+        let profile = profile.to_owned();
+        let http = Arc::clone(&self.http);
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let _abandon = Abandon(Arc::clone(&abandoned));
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("model-gateway-chat".to_owned())
+            .spawn({
+                let abandoned = Arc::clone(&abandoned);
+                move || {
+                    let _slot = slot;
+                    if abandoned.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let r = http.send_bounded(
+                        &profile,
+                        route,
+                        &JsonObject::new(),
+                        ReqBody::Json(&body),
+                        Some(&tags),
+                        CallBounds {
+                            budget: deadline,
+                            abandoned: &abandoned,
+                        },
+                    );
+                    let _ = tx.send(r);
+                }
+            })
+            .map_err(|_| err(OFFLINE))?;
+        // Wait in short slices so a cancel is seen promptly.
+        let end = Instant::now() + deadline;
+        loop {
+            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                return Err(err(CANCELLED));
+            }
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(err(TIMEOUT));
+            }
+            match rx.recv_timeout(left.min(CANCEL_POLL)) {
+                Ok(r) => return r.map_err(|e| from_transport(&e)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(err(OFFLINE)),
+            }
         }
     }
 }

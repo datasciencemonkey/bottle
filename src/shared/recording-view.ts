@@ -26,10 +26,10 @@ export const DEFAULT_LENGTH_MIN = 60;
 export const LENGTH_MIN = 5;
 export const LENGTH_MAX = 120;
 
-/** The serving endpoint that transcribes the audio (ADR 0103 update 4). */
-export const DEFAULT_TRANSCRIBE_ENDPOINT = 'databricks-gemini-3-8-flash';
-/** The serving endpoint that writes the notes from the transcript. */
-export const DEFAULT_NOTES_ENDPOINT = 'databricks-claude-sonnet-5-5';
+/** The model that transcribes the audio (ADR 0103 update 4, ADR 0123). */
+export const DEFAULT_TRANSCRIBE_ENDPOINT = 'system.ai.gemini-3-8-flash';
+/** The model that writes the notes from the transcript. */
+export const DEFAULT_NOTES_ENDPOINT = 'system.ai.claude-sonnet-5-5';
 /** The longest instructions text Bottle keeps. */
 export const INSTRUCTIONS_MAX = 8000;
 
@@ -57,7 +57,7 @@ export const RECORDING_TEXT = {
     "My Files isn't available on this workspace. Pick a volume, or a catalog and schema.",
   badVolume: 'Use a volume path like /Volumes/catalog/schema/volume.',
   badSchema: 'Use a catalog and schema like main.default.',
-  badEndpoint: 'Use the name of a serving endpoint: letters, digits, dashes and underscores.',
+  badEndpoint: 'Use a model id: letters, digits, dots, dashes and underscores.',
   badLength: `Use a length from ${LENGTH_MIN} to ${LENGTH_MAX} minutes.`,
   volumeCreateFailed:
     "Bottle couldn't create the volume. Check that you can create volumes in this schema.",
@@ -374,8 +374,8 @@ export const VOLUME_PATH =
   /^\/Volumes\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/?$/;
 /** A `catalog.schema` pair. */
 export const CATALOG_SCHEMA = /^([A-Za-z0-9_-]{1,255})\.([A-Za-z0-9_-]{1,255})$/;
-/** A serving endpoint name (`/serving-endpoints/<name>/invocations`). */
-export const ENDPOINT_NAME = /^[A-Za-z0-9_-]{1,63}$/;
+/** A model id for the AI Gateway chat route, such as `system.ai.gemini-3-8-flash` (ADR 0123). */
+export const ENDPOINT_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
 function isNotice(v: unknown): v is RecordingNotice {
   if (!isObj(v) || !isStr(v['text'])) return false;

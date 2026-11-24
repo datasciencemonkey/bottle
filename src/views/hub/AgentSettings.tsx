@@ -6,6 +6,8 @@
  * - "Orchestrator model [▾]": the chat model that cleans dictation and answers ⌥G. It lists the
  *   models of the home AI Gateway by their plain label. It shows no test label.
  * - "Clean up dictation": a switch, on by default. It sends `orchestrator.clean_dictation`.
+ * - "Dictation engine [On this Mac | Databricks]" (ADR 0123): On this Mac by default. It sends
+ *   `orchestrator.cloud_dictation`. With Databricks it shows the disclosure line.
  * - A quiet line with the reason when the orchestrator model is not ready.
  * - "Genie calls per question [5 | 10 | 20]": D2, the most Genie calls for one question.
  * - "Combine across workspaces" (D1, slice 2b): off by default. It sends `workspace.cross`. When the
@@ -34,6 +36,11 @@ function send(action: WorkspaceAction | OrchestratorAction): void {
 
 export const ORCHESTRATOR_LABEL = 'Orchestrator model';
 export const CLEAN_DICTATION_LABEL = 'Clean up dictation';
+export const DICTATION_ENGINE_LABEL = 'Dictation engine';
+/** ADR 0123: shown when "Databricks" is chosen. */
+export const DICTATION_ENGINE_DISCLOSURE =
+  "Databricks: your voice is sent to your home workspace's AI Gateway to transcribe it.";
+export const DICTATION_ENGINE_LOCAL = 'On this Mac: your voice stays on this Mac.';
 export const COMBINE_LABEL = 'Combine across workspaces';
 export const COMBINE_LOCKED = 'Set by your admin';
 export const COMBINE_APPLIES = 'Applies to your next question.';
@@ -76,6 +83,7 @@ export function AgentSettings({
   const combineId = useId();
   const modelId = useId();
   const cleanId = useId();
+  const engineId = useId();
   if (!list) return null;
   const home = list.rows.find((r) => r.isHome);
   const homeName = home?.name ?? 'your home workspace';
@@ -150,6 +158,40 @@ export function AgentSettings({
                   className={HIT}
                   onCheckedChange={(on) => send({ action: 'orchestrator.clean_dictation', on })}
                 />
+              }
+            />
+            <SettingsRow
+              className="items-start"
+              descriptionOutsideLabel
+              label={<span id={`${engineId}-label`}>{DICTATION_ENGINE_LABEL}</span>}
+              description={
+                <span id={`${engineId}-help`} data-dictation-engine-help>
+                  {orchestrator.cloudDictation
+                    ? DICTATION_ENGINE_DISCLOSURE
+                    : DICTATION_ENGINE_LOCAL}
+                </span>
+              }
+              control={
+                <RadioGroup
+                  aria-labelledby={`${engineId}-label`}
+                  aria-describedby={`${engineId}-help`}
+                  value={orchestrator.cloudDictation ? 'databricks' : 'local'}
+                  orientation="horizontal"
+                  className="flex gap-[var(--mog-space-4)]"
+                  data-dictation-engine
+                  onValueChange={(v) =>
+                    send({ action: 'orchestrator.cloud_dictation', on: v === 'databricks' })
+                  }
+                >
+                  <label className="flex items-center gap-[var(--mog-space-2)] text-[var(--mog-text-md)]">
+                    <RadioGroupItem value="local" data-engine="local" />
+                    On this Mac
+                  </label>
+                  <label className="flex items-center gap-[var(--mog-space-2)] text-[var(--mog-text-md)]">
+                    <RadioGroupItem value="databricks" data-engine="databricks" />
+                    Databricks
+                  </label>
+                </RadioGroup>
               }
             />
             {reason !== undefined && (

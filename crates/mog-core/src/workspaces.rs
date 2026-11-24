@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -200,6 +201,9 @@ struct AgentData {
     endpoint: OrchestratorModel,
     #[serde(default = "default_clean_dictation")]
     clean_dictation: bool,
+    /// ADR 0123: dictation goes to the home AI Gateway. A file from before reads as false.
+    #[serde(default)]
+    cloud_dictation: bool,
     /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
     /// kept and never written.
     #[serde(default, skip_serializing, rename = "runProfile")]
@@ -342,6 +346,10 @@ pub struct WorkspaceStore {
     /// The parsed file, so the home, the model and the catalog reads of each call do not read
     /// the disk again. Only this store writes the file: `save` empties the cache.
     cache: Mutex<Option<Data>>,
+    /// A copy of `agent.cloud_dictation` (ADR 0123), kept by [`Self::load`] and
+    /// [`Self::settings_write`], so a key-down reads one atomic instead of the file-backed cache
+    /// (no lock, no clone, no disk).
+    cloud_dictation_flag: AtomicBool,
 }
 
 impl std::fmt::Debug for WorkspaceStore {
@@ -367,6 +375,7 @@ impl WorkspaceStore {
             slots: Slots::new(PROBE_PARALLEL),
             lock: Mutex::new(()),
             cache: Mutex::new(None),
+            cloud_dictation_flag: AtomicBool::new(false),
         }
     }
 
@@ -389,10 +398,14 @@ impl WorkspaceStore {
     /// there but bad is an error and stays on disk. The caller holds `lock`.
     fn load(&self) -> CoreResult<Data> {
         if let Some(d) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+            self.cloud_dictation_flag
+                .store(d.agent.cloud_dictation, Ordering::SeqCst);
             return Ok(d);
         }
         let data = self.load_from_disk()?;
         *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(data.clone());
+        self.cloud_dictation_flag
+            .store(data.agent.cloud_dictation, Ordering::SeqCst);
         Ok(data)
     }
 
@@ -459,6 +472,7 @@ impl WorkspaceStore {
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
+                cloud_dictation: false,
                 _legacy_run_profile: None,
             },
         })
@@ -510,6 +524,21 @@ impl WorkspaceStore {
     pub fn orchestrator_model(&self) -> Option<String> {
         let _g = self.guard();
         Some(self.load().ok()?.agent.endpoint.as_str().to_owned())
+    }
+
+    /// "Dictation engine: Databricks" (ADR 0123), read only. `false` when the file cannot be
+    /// read: dictation then stays on the Mac.
+    pub fn cloud_dictation(&self) -> bool {
+        let _g = self.guard();
+        self.load().is_ok_and(|d| d.agent.cloud_dictation)
+    }
+
+    /// As [`Self::cloud_dictation`], but one atomic load: no guard, no cache lock, no disk
+    /// (ADR 0123). Used at key-down, where a key-down must not wait on a settings write. The
+    /// flag is set by [`Self::load`] (so it starts correct on the first real read) and by
+    /// [`Self::settings_write`] (so a write is visible at once, with no extra load).
+    pub fn cloud_dictation_fast(&self) -> bool {
+        self.cloud_dictation_flag.load(Ordering::SeqCst)
     }
 
     /// `workspace_list`.
@@ -568,6 +597,7 @@ impl WorkspaceStore {
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
+                cloud_dictation: data.agent.cloud_dictation,
             },
         })
     }
@@ -762,6 +792,10 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.clean_dictation {
                 data.agent.clean_dictation = v;
+            }
+            if let Some(v) = a.cloud_dictation {
+                data.agent.cloud_dictation = v;
+                self.cloud_dictation_flag.store(v, Ordering::SeqCst);
             }
             self.save(&data)?;
             data

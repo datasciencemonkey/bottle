@@ -156,11 +156,8 @@ fn rec_settings_json_file_round_trip_and_bad_file_falls_back() {
     let file = JsonSettingsStore::new(dir.join(SETTINGS_FILE));
     let d = file.load().unwrap();
     assert!(!d.enabled && !d.consent_ack && d.storage.is_none());
-    assert_eq!(
-        d.transcribe_endpoint.as_str(),
-        "databricks-gemini-3-8-flash"
-    );
-    assert_eq!(d.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
+    assert_eq!(d.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(d.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
     assert_eq!(d.length_min.get(), 60);
     let patch: RecordingSettingsPatch = serde_json::from_value(json!({
         "enabled": true,
@@ -179,9 +176,47 @@ fn rec_settings_json_file_round_trip_and_bad_file_falls_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// ADR 0123: a saved settings file that still holds the two old default ids reads as the
+/// `system.ai.*` defaults. Any other value (even a `databricks-*` one) is kept as the user set it.
+#[test]
+fn adr_0123_saved_old_default_endpoints_read_as_the_system_ai_defaults() {
+    use mog_core::recording::RecordingSettingsStore;
+    let dir = std::env::temp_dir().join(format!("bottle-rec-legacy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = JsonSettingsStore::new(dir.join(SETTINGS_FILE));
+    let mut v = serde_json::to_value(mog_core::types::RecordingSettings::default()).unwrap();
+    v["transcribeEndpoint"] = json!("databricks-gemini-3-8-flash");
+    v["notesEndpoint"] = json!("databricks-claude-sonnet-5-5");
+    std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec(&v).unwrap()).unwrap();
+    let s = file.load().unwrap();
+    assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    v["transcribeEndpoint"] = json!("my-own-model");
+    v["notesEndpoint"] = json!("system.ai.gpt-oss-20b");
+    std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec(&v).unwrap()).unwrap();
+    let s = file.load().unwrap();
+    assert_eq!(s.transcribe_endpoint.as_str(), "my-own-model");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.gpt-oss-20b");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ADR 0123: a retry of an old recording job (its manifest holds the old default ids) calls
+/// the `system.ai.*` models, never a `databricks-*` endpoint.
+#[test]
+fn adr_0123_the_requests_never_send_an_old_default_endpoint() {
+    let t = transcribe_request("databricks-gemini-3-8-flash", OGG, None).unwrap();
+    assert_eq!(t["model"], "system.ai.gemini-3-8-flash");
+    let n = notes_request("databricks-claude-sonnet-5-5", "i", "t").unwrap();
+    assert_eq!(n["model"], "system.ai.claude-sonnet-5-5");
+    // A custom id stays as given.
+    let c = notes_request("my-model", "i", "t").unwrap();
+    assert_eq!(c["model"], "my-model");
+}
+
 #[test]
 fn rec_settings_validators() {
-    assert!(is_endpoint_name("databricks-gemini-3-8-flash"));
+    assert!(is_endpoint_name("system.ai.gemini-3-8-flash"));
     assert!(!is_endpoint_name("bad'name"));
     assert!(!is_endpoint_name("a/../b"));
     assert!(valid_instructions("Write notes."));
@@ -197,8 +232,8 @@ const OGG: &[u8] = b"OggS\x00\x02fake-opus-bytes";
 
 #[test]
 fn rec_model_transcribe_request_is_an_inline_audio_url_on_the_gateway_shape() {
-    let b = transcribe_request("databricks-gemini-3-8-flash", OGG, None).unwrap();
-    assert_eq!(b["model"], "databricks-gemini-3-8-flash");
+    let b = transcribe_request("system.ai.gemini-3-8-flash", OGG, None).unwrap();
+    assert_eq!(b["model"], "system.ai.gemini-3-8-flash");
     assert_eq!(b["max_tokens"], 64000);
     let content = b["messages"][0]["content"].as_array().unwrap();
     assert_eq!(b["messages"][0]["role"], "user");
@@ -255,12 +290,12 @@ fn rec_model_base64_is_standard() {
 #[test]
 fn rec_model_notes_request_and_reply_text() {
     let b = notes_request(
-        "databricks-claude-sonnet-5-5",
+        "system.ai.claude-sonnet-5-5",
         "Write notes.",
         "**Speaker 1** [00:00:00]\nHi.",
     )
     .unwrap();
-    assert_eq!(b["model"], "databricks-claude-sonnet-5-5");
+    assert_eq!(b["model"], "system.ai.claude-sonnet-5-5");
     assert_eq!(
         b["messages"][0]["content"],
         "Write notes.\n\nTranscript:\n**Speaker 1** [00:00:00]\nHi."
@@ -426,8 +461,8 @@ fn rec_job_manifest_shape_and_transitions() {
         "2026-11-19_0905",
         "2026-11-19T14:05:00Z",
         vec![PartEntry::new("2026-11-19_0905.opus", 61.5)],
-        "databricks-gemini-3-8-flash",
-        "databricks-claude-sonnet-5-5",
+        "system.ai.gemini-3-8-flash",
+        "system.ai.claude-sonnet-5-5",
         "2026-11-19T15:05:00Z",
     );
     assert_eq!(j.status, Status::Uploading);
@@ -445,8 +480,8 @@ fn rec_job_manifest_shape_and_transitions() {
     assert_eq!(v["updated_at"], "2026-11-19T15:06:00Z");
     assert_eq!(v["parts"][0]["file"], "2026-11-19_0905.opus");
     assert_eq!(v["parts"][0]["uploaded"], false);
-    assert_eq!(v["transcribe_endpoint"], "databricks-gemini-3-8-flash");
-    assert_eq!(v["notes_endpoint"], "databricks-claude-sonnet-5-5");
+    assert_eq!(v["transcribe_endpoint"], "system.ai.gemini-3-8-flash");
+    assert_eq!(v["notes_endpoint"], "system.ai.claude-sonnet-5-5");
     assert!(
         v.get("engine").is_none() && v.get("warehouse_id").is_none(),
         "{v}"
@@ -528,8 +563,8 @@ fn adr_0118_a_settings_file_from_before_held_note_loads_and_saves_with_the_flag_
         "enabled": true,
         "consentAck": true,
         "storage": {"kind": "volume", "root": "/Volumes/c/s/v"},
-        "transcribeEndpoint": "databricks-gemini-3-8-flash",
-        "notesEndpoint": "databricks-claude-sonnet-5-5",
+        "transcribeEndpoint": "system.ai.gemini-3-8-flash",
+        "notesEndpoint": "system.ai.claude-sonnet-5-5",
         "presetInstructions": "Write short notes in Markdown.",
         "lengthMin": 45
     });

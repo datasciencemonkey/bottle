@@ -134,7 +134,7 @@ fn manifest(status: &str) -> Value {
     json!({"version":1,"id":"r1","name":NAME,"started_at":"2026-11-19T14:05:00Z","duration_s":61.6,
         "parts":[{"file":"2026-11-19_0905.opus","duration_s":61.6,"uploaded":true}],
         "status":status,"error_kind":"notes_endpoint_missing","error_stage":"writing_notes",
-        "transcribe_endpoint":"databricks-gemini-3-8-flash","notes_endpoint":"databricks-claude-sonnet-5-5",
+        "transcribe_endpoint":"system.ai.gemini-3-8-flash","notes_endpoint":"system.ai.claude-sonnet-5-5",
         "updated_at":"2026-11-19T14:07:00Z"})
 }
 
