@@ -309,7 +309,7 @@ export function AgentSettings({
         />
         <SettingsRow
           label={<span id={`${combineId}-label`}>{COMBINE_LABEL}</span>}
-          htmlFor={locked ? undefined : combineId}
+          {...(locked ? {} : { htmlFor: combineId })}
           description={
             <span
               id={`${combineId}-help`}
