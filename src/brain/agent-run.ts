@@ -660,12 +660,15 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       try {
         const d = await deps.api.callDetail(s.turnId, s.callId);
         // The D1 value of the turn that made the call, not of this turn.
-        const src = recs.get(s.turnId) ?? r;
+        const known = recs.get(s.turnId);
+        const src = known ?? r;
         const ws = src.catalog.get(d.workspaceId);
+        // A turn that is forgotten has no D1 value: fail closed, as if D1 were off.
+        const d1 = known !== undefined || s.turnId === r.view.turnId ? src.crossWorkspace : false;
         const part = partOf(d, {
           chip: deps.chipOf(d.profile),
           fromEarlier: s.turnId !== r.view.turnId,
-          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !src.crossWorkspace,
+          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !d1,
         });
         if (part) r.parts.set(s.callId, part);
       } catch {

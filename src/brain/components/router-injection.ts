@@ -93,13 +93,19 @@ const ZERO_WIDTH = new RegExp(
 export const ANGLE_LOOKALIKES = /[‹〈❮❬❰⟨⧼《˂ᐸ]/g;
 
 /** A numeric character reference, with or without the closing `;`. */
-const NUMERIC_ENTITY = /&#(?:x([0-9a-f]{1,6})|([0-9]{1,7}));?/gi;
+const NUMERIC_ENTITY = /&#(?:x([0-9a-f]+)|([0-9]+));?/gi;
 
-/** Decodes each numeric entity once. A value that is no scalar value stays as it is. */
+/**
+ * Decodes each numeric entity once. The whole digit run matches. Leading zeros do not count; a
+ * run that is then empty (zero) or too long (more than 6 hex or 7 decimal digits), or that is no
+ * scalar value, stays as it is.
+ */
 function decodeNumericEntities(text: string): string {
   return text.replace(NUMERIC_ENTITY, (whole, hex: string | undefined, dec: string | undefined) => {
-    const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec ?? '', 10);
-    const scalar = cp >= 1 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
+    const digits = (hex ?? dec ?? '').replace(/^0+/, '');
+    if (digits === '' || digits.length > (hex !== undefined ? 6 : 7)) return whole;
+    const cp = parseInt(digits, hex !== undefined ? 16 : 10);
+    const scalar = cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
     return scalar ? String.fromCodePoint(cp) : whole;
   });
 }
@@ -110,12 +116,15 @@ function decodeNumericEntities(text: string): string {
  * `local_store/quarantine.rs`.
  */
 export function normalize(text: string): string {
-  return decodeNumericEntities(text)
-    .normalize('NFKC')
-    .replace(ANGLE_LOOKALIKES, '<')
-    .replace(ZERO_WIDTH, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  return (
+    decodeNumericEntities(text)
+      .normalize('NFKC')
+      .replace(ANGLE_LOOKALIKES, '<')
+      .replace(ZERO_WIDTH, '')
+      .toLowerCase()
+      // U+0085 is white space in Rust (`char::is_whitespace`) but not in JS `\s`: collapse it here.
+      .replace(/[\s\u0085]+/g, ' ')
+  );
 }
 
 /** The RTR-INJ categories that `text` matches, in table order. */

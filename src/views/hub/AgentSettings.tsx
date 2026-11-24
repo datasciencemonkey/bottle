@@ -48,7 +48,7 @@ export const COMBINE_OFF_HELP =
   "When off, each workspace's answer is shown to you, and the agent sees only a receipt.";
 /** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
 export const combineHelp = (agentName: string): string =>
-  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. With the switch on, Genie Code can see them and combine them. Genie Code can put an answer from one workspace into a question to another workspace.`;
+  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. With the switch on, Genie Code can see them and combine them. With the switch on, Genie Code can also put an answer from one workspace into a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 

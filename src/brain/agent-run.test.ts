@@ -331,6 +331,44 @@ describe('a finished call and a finished turn', () => {
     }
   });
 
+  it('[AC-2b.5] an earlier source takes the D1 value of its own turn; a forgotten turn fails closed', async () => {
+    const r = rig();
+    // T1 ran with D1 off and ended; it stays known.
+    await answered(r);
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    // T2 runs with D1 on and cites the Finance call of T1 (D1 off), and one of a forgotten turn.
+    r.script.submit.push(accepted(T2, { crossWorkspace: true }));
+    await r.client.submit(turn(), 'ask');
+    const GONE = 'e'.repeat(32);
+    r.script.details.set(
+      `${GONE}:c-0000000e`,
+      detail(GONE, 'c-0000000e', FIN, 'answered', 'Old finance.'),
+    );
+    r.script.details.set(`${T2}:c-00000003`, detail(T2, 'c-00000003', FIN, 'answered', 'New.'));
+    r.script.result = {
+      answer: 'Finance is higher.',
+      answerKind: 'combined',
+      sources: [
+        { workspaceId: 'ws-b', callId: C2, turnId: T1 },
+        { workspaceId: 'ws-b', callId: 'c-0000000e', turnId: GONE },
+        { workspaceId: 'ws-b', callId: 'c-00000003', turnId: T2 },
+      ],
+    };
+    r.ev(callEv(T2, 'c-00000003', FIN, 'answered', 1));
+    r.ev({ kind: 'ended', turnId: T2, outcome: 'answered', calls: 1 });
+    await r.settle();
+    const done = r.client.panel().earlier.find((t) => t.turnId === T2);
+    expect(done?.summary?.kind).toBe('combined');
+    const byCall = Object.fromEntries((done?.parts ?? []).map((p) => [p.callId, p]));
+    // (a) the earlier turn is present and had D1 off: the agent never saw it.
+    expect(byCall[C2]?.notShownToAgent).toBe(true);
+    // (b) the earlier turn is forgotten: fail closed.
+    expect(byCall['c-0000000e']?.notShownToAgent).toBe(true);
+    // The current turn has D1 on: the agent saw it.
+    expect(byCall['c-00000003']?.notShownToAgent).toBeUndefined();
+  });
+
   it('[AC-2a.12] [AC-2a.28] the note and the sources decide which part folds and which is from earlier', async () => {
     const r = rig();
     await answered(r);

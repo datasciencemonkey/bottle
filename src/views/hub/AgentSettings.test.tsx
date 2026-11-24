@@ -134,7 +134,7 @@ describe('AgentSettings', () => {
     ).toBe(true);
     expect(help?.textContent).toContain('Genie Code can see them and combine them.');
     expect(help?.textContent).toContain(
-      'put an answer from one workspace into a question to another workspace',
+      'With the switch on, Genie Code can also put an answer from one workspace into a question to another workspace.',
     );
     expect(help?.textContent).toContain(
       "When off, each workspace's answer is shown to you, and the agent sees only a receipt.",
