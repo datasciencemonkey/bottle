@@ -933,11 +933,20 @@ pub struct AgentSettings {
     pub cross_workspace_locked: bool,
     /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
     pub genie_call_budget: GenieCallBudget,
-    /// D9: the agent's model endpoint name. Default `databricks-claude-sonnet-5-5`.
-    pub endpoint: EndpointName,
+    /// D9, ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default
+    /// `model_gateway::DEFAULT_ORCHESTRATOR_MODEL`. The field keeps its old name `endpoint`.
+    pub endpoint: OrchestratorModel,
+    /// ADR 0122: "Clean up dictation". Default true. A file from before ADR 0122 reads as true.
+    #[serde(default = "default_clean_dictation")]
+    pub clean_dictation: bool,
     /// Slice 2a: the profile the agent runs on. `None` means home. Required and nullable.
     #[serde(deserialize_with = "nullable")]
     pub run_profile: Option<ProfileName>,
+}
+
+/// The default of [`AgentSettings::clean_dictation`].
+pub fn default_clean_dictation() -> bool {
+    true
 }
 
 /// The answer of every `workspace_*` command.
@@ -1399,6 +1408,22 @@ pub struct AgentSummaryView {
     pub md: String,
     pub kind: AgentSummaryKind,
     pub workspaces: Vec<AgentWsChip>,
+    /// ADR 0122: the `[n]` markers of `md`. Absent when the summary cites nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citations: Option<Vec<AgentCitation>>,
+}
+
+/// ADR 0122: one `[n]` citation in a combined summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentCitation {
+    /// The number in the summary text, 1-based (an index into the turn result `sources`).
+    pub n: u32,
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    /// The Open in Databricks link of that part, already checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deep_link: Option<String>,
 }
 
 impl std::fmt::Debug for AgentSummaryView {
@@ -1570,6 +1595,56 @@ checked_string!(
     "^[A-Za-z0-9_-]{1,128}$",
     |s| ascii_id(s, 128, &['_', '-'])
 );
+
+checked_string!(
+    /// The orchestrator model (ADR 0122): `system.ai.` plus a name of 1-128 characters of
+    /// `[A-Za-z0-9_-]` (the rule of `EndpointName`).
+    OrchestratorModel,
+    "^system\\.ai\\.[A-Za-z0-9_-]{1,128}$",
+    |s| s
+        .strip_prefix("system.ai.")
+        .is_some_and(|n| ascii_id(n, 128, &['_', '-']))
+);
+
+/// One chat model the home AI Gateway serves, for the picker (ADR 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorModelInfo {
+    pub id: OrchestratorModel,
+    pub label: String,
+    /// There is an eval record for the model (NFR-22a).
+    pub tested: bool,
+    /// The model supports tool calls.
+    pub tools: bool,
+}
+
+/// The `orchestrator_models` reply. No token, no profile name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorModels {
+    pub models: Vec<OrchestratorModelInfo>,
+    pub selected: OrchestratorModel,
+    pub default_model: OrchestratorModel,
+}
+
+/// The state of the orchestrator for routing (ADR 0122).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorState {
+    Ready,
+    NoHome,
+    SignedOut,
+    NoModel,
+    Unreachable,
+}
+
+/// The `orchestrator_status` reply. Content-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorStatus {
+    pub state: OrchestratorState,
+    pub model: OrchestratorModel,
+}
 
 checked_string!(
     /// A Unity Catalog catalog or schema name for `recording_volume_create`: 1-255 characters

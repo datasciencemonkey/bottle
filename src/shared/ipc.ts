@@ -141,6 +141,9 @@ export const COMMANDS = {
   // `view_emit` only (ARC-4).
   genie_code_status: B,
   genie_code_install: B,
+  // ADR 0122: the orchestrator model replaces Genie Code. Brain only.
+  orchestrator_models: B,
+  orchestrator_status: B,
   agent_turn_submit: B,
   agent_turn_stop: B,
   agent_turn_call: B,
@@ -470,12 +473,19 @@ export interface CommandArgs {
   workspace_settings_write: {
     crossWorkspaceData?: boolean;
     genieCallBudget?: GenieCallBudget;
+    /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Anything else is refused. */
     agentEndpoint?: string;
+    /** ADR 0122: "Clean up dictation". A bool only. */
+    cleanDictation?: boolean;
     /** Slice 2a: the profile the agent runs on. `null` means home. Absent changes nothing. */
     runProfile?: ProfileName | null;
   };
   /** `recheck` clears the `not_eligible` cache. */
   genie_code_status: { recheck?: boolean };
+  /** ADR 0122: always the home profile. Bottle never picks one. */
+  orchestrator_models: NoArgs;
+  /** ADR 0122: `recheck` clears the cached state. */
+  orchestrator_status: { recheck?: boolean };
   /** Pinned source plus SHA-256. */
   genie_code_install: { consent: true };
   /**
@@ -515,12 +525,15 @@ export interface WorkspaceRow {
   isHome: boolean;
   signIn: WorkspaceSignIn;
 }
-/** D1, the SEC-28b admin lock, D2 and the D9 agent endpoint. */
+/** D1, the SEC-28b admin lock, D2, the D9 orchestrator model and "Clean up dictation". */
 export interface AgentSettings {
   crossWorkspaceData: boolean;
   crossWorkspaceLocked: boolean;
   genieCallBudget: GenieCallBudget;
+  /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default `system.ai.claude-haiku-5-5`. */
   endpoint: string;
+  /** ADR 0122: "Clean up dictation". Default true. */
+  cleanDictation: boolean;
   /** Slice 2a: the profile the agent runs on. `null` means home. */
   runProfile: ProfileName | null;
 }
@@ -530,6 +543,30 @@ export interface WorkspaceList {
   lampMogId: MogId | null;
   workspaces: WorkspaceRow[];
   agent: AgentSettings;
+}
+
+// ---------- the orchestrator model (ADR 0122; Rust mirror in `mog_core::types`) ----------
+
+/** One chat model the home AI Gateway serves. `id` is a `system.ai.<name>` id. */
+export interface OrchestratorModelInfo {
+  id: string;
+  label: string;
+  /** There is an eval record for the model (NFR-22a). */
+  tested: boolean;
+  /** The model supports tool calls. */
+  tools: boolean;
+}
+/** The `orchestrator_models` reply. */
+export interface OrchestratorModels {
+  models: OrchestratorModelInfo[];
+  selected: string;
+  defaultModel: string;
+}
+export type OrchestratorState = 'ready' | 'no_home' | 'signed_out' | 'no_model' | 'unreachable';
+/** The `orchestrator_status` reply. Content-free. */
+export interface OrchestratorStatus {
+  state: OrchestratorState;
+  model: string;
 }
 
 // ---------- the MOG agent on one live Genie Code session (slice 2a; Rust mirror in `mog_core::types`) ----------
@@ -666,6 +703,15 @@ export interface AgentWsChip {
   name: string;
   colorVariant: string;
 }
+/** ADR 0122: one `[n]` citation in a combined summary. */
+export interface AgentCitation {
+  /** The number in the summary text, 1-based (an index into the turn result `sources`). */
+  n: number;
+  callId: string;
+  workspace: AgentWsChip;
+  /** The Open in Databricks link of that part, already checked with `openInDatabricksUrl`. */
+  deepLink?: string;
+}
 export interface AgentCallView {
   callId: string;
   workspace: AgentWsChip;
@@ -703,7 +749,13 @@ export interface AgentTurnView {
   agentWorkspace: AgentWsChip;
   calls: AgentCallView[];
   parts: AgentPartView[];
-  summary?: { md: string; kind: 'note' | 'combined'; workspaces: AgentWsChip[] };
+  summary?: {
+    md: string;
+    kind: 'note' | 'combined';
+    workspaces: AgentWsChip[];
+    /** ADR 0122: the `[n]` markers of `md`. Absent when the summary cites nothing. */
+    citations?: AgentCitation[];
+  };
   notice?: string;
   tokens?: number;
   /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
@@ -1271,6 +1323,8 @@ export interface CommandReturns {
   workspace_settings_write: WorkspaceList;
   genie_code_status: GenieCodeStatus;
   genie_code_install: GenieCodeStatus;
+  orchestrator_models: OrchestratorModels;
+  orchestrator_status: OrchestratorStatus;
   agent_turn_submit: AgentTurnAccepted;
   agent_turn_stop: Empty;
   agent_turn_call: AgentTurnCall;
