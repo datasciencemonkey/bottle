@@ -608,10 +608,17 @@ fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
         w.list(false).unwrap();
         let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
         data["agent"]["endpoint"] = json!(old);
-        data["agent"].as_object_mut().unwrap().remove("cleanDictation");
+        data["agent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanDictation");
         fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
         let l = w.list(false).unwrap();
-        assert_eq!(l.agent.endpoint.as_str(), "system.ai.claude-haiku-5-5", "{old}");
+        assert_eq!(
+            l.agent.endpoint.as_str(),
+            "system.ai.claude-haiku-5-5",
+            "{old}"
+        );
         assert!(l.agent.clean_dictation);
     }
     let s = Scratch::new();
