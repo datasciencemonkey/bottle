@@ -810,12 +810,105 @@
     min-height: 0;
   }
 
+  /* The list column: the toolbar (Clear failed) above the listbox, one border on the right. */
+  .conv-listcol {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--mog-edge);
+  }
+
   .conv-list {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 0 12px 24px 20px;
-    border-right: 1px solid var(--mog-edge);
     overscroll-behavior: contain;
+  }
+
+  .conv-toolbar {
+    display: flex;
+    flex: none;
+    justify-content: flex-end;
+  }
+
+  .conv-list-bar {
+    padding: 8px 12px 0 20px;
+  }
+
+  .conv-detail-bar {
+    padding: 12px 24px 0;
+  }
+
+  /* An agent thread that runs: a dot that breathes (the keyframes are in agent-run.css). */
+  .conv-live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--mog-eye);
+    vertical-align: middle;
+    animation: agent-breathe 2s ease-in-out infinite alternate;
+  }
+
+  .conv-row-meta .agent-pill {
+    margin-right: 4px;
+  }
+
+  .conv-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  /* The turns that wait, under the live one: a muted row with a quiet × (24 px target). */
+  .conv-queued {
+    margin: 12px 0 0;
+  }
+
+  .conv-queued .agent-queued-row {
+    justify-content: space-between;
+  }
+
+  .conv-queued-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  /* The Undo toast of Delete and Clear failed, centred at the foot of the area. */
+  .conv {
+    position: relative;
+  }
+
+  .conv-toast-live {
+    position: absolute;
+    right: 0;
+    bottom: 20px;
+    left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .conv-toast {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+    padding: 4px 6px 4px 14px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+    font-size: var(--mog-text-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .conv-live-dot {
+      animation: none;
+    }
   }
 
   /* The listbox takes focus; the ring goes on the active option, not round the whole pane. */
