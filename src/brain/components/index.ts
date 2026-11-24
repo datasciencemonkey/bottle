@@ -55,7 +55,7 @@ import {
   type ThreadStatus,
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
-import { createAgentCard, wireAgentChips } from '../agent-card';
+import { createAgentCard, openTurnInConversations, wireAgentChips } from '../agent-card';
 import {
   asTurnEvent,
   createAgentClient,
@@ -605,11 +605,12 @@ export function startBrain(): Brain {
     wireAgentChips(bus, {
       stop: (turnId) => void agentClient.stop(turnId),
       // ADR 0121: the thread of the turn opens in hub Conversations, also before it is stored.
-      openAgent: (turnId) => {
-        void showHub();
-        const threadId = agentClient.threadOf(turnId);
-        if (threadId !== undefined) void conversations.openThread(threadId);
-      },
+      openAgent: (turnId) =>
+        void openTurnInConversations(turnId, {
+          showHub: () => showHub(),
+          threadOf: (id) => agentClient.threadOf(id),
+          openThread: (id) => conversations.openThread(id),
+        }).catch(() => undefined),
       openSettings: () => {
         void showHub();
         void workspaces.showSettings();

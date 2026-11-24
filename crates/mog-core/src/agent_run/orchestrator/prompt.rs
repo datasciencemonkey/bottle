@@ -80,10 +80,17 @@ pub fn system(i: &PromptInput<'_>) -> String {
          In answer, cite a source inline as [n], where n is the 1-based position of that source \
          in sources.\n",
     );
+    // The owner rule of the answer (`src/shared/agent-answer-rule.ts`): when the answers come
+    // from one workspace, the user sees that Genie answer as it is and the model text is hidden.
+    // A copy of it would cost a long model step (seconds per thousand tokens) for nothing.
+    p.push_str(
+        "One workspace: when every answer that you use comes from one workspace, Bottle shows \
+         that Genie answer to the user as it is. Then call submit_answer at once with answer \
+         \"\" (an empty string) and that source. Do not copy, rewrite or sum up that answer.\n",
+    );
     p.push_str(
         "Format: write answer in Markdown. Keep the formatting of the Genie answer, its tables \
-         and its hyperlinks exactly. Never drop or rewrite a URL. When only one workspace \
-         answered, return that answer in full with its formatting, not a summary. \
+         and its hyperlinks exactly. Never drop or rewrite a URL. \
          Never invent a URL. Use only URLs that appear in the genie_answer blocks.\n",
     );
     p.push_str(
@@ -157,9 +164,21 @@ mod tests {
         let p = system(&input(&c, true));
         assert!(p.contains("Markdown"));
         assert!(p.contains("Never drop or rewrite a URL"));
-        assert!(p.contains("in full with its formatting"));
         assert!(p.contains("Never invent a URL"));
         assert!(!p.contains("Keep answer short"));
+    }
+
+    #[test]
+    fn a_one_workspace_answer_is_not_copied_by_the_model() {
+        // The view shows a one-workspace Genie answer as it is and hides the model text, so the
+        // model submits an empty answer instead of a slow copy.
+        let c = cat();
+        for d1 in [false, true] {
+            let p = system(&input(&c, d1));
+            assert!(p.contains("with answer \"\" (an empty string) and that source"));
+            assert!(p.contains("Do not copy, rewrite or sum up that answer"));
+            assert!(!p.contains("in full with its formatting"));
+        }
     }
 
     #[test]

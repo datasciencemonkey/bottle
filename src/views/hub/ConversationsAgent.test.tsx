@@ -939,6 +939,22 @@ describe('Delete, Clear failed and Undo', () => {
   });
 });
 
+describe('Open in Conversations (card chip)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('an open by thread id switches the hub from Home to Conversations and selects that thread', async () => {
+    const { el } = await render(<Hub />);
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Home');
+    await feed([thread(THREAD_B, [stored('e')]), thread(THREAD_C, [stored('f')])], [], running);
+    await tauri.emitTo('hub', HUB_CONVERSATIONS_OPEN_EVENT, { threadId: THREAD_A.toUpperCase() });
+    expect(el.querySelector('.hub-area-title')?.textContent).toBe('Conversations');
+    expect(el.querySelector('[aria-selected="true"]')?.getAttribute('data-request')).toBe(
+      `a:${THREAD_A}`,
+    );
+    expect(payloads(CONVERSATIONS_VIEW_ID)).toContainEqual({ action: 'conversations.opened' });
+  });
+});
+
 describe('the hub has no Agent area (AC-C6)', () => {
   beforeEach(() => tauri.reset());
 

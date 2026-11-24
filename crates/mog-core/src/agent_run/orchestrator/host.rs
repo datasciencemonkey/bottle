@@ -573,14 +573,23 @@ impl Engine {
         };
         let (sid, catalog, cross) = (s.id.clone(), s.catalog.clone(), s.cross_workspace);
         let budget = snap.budget;
-        let (turn_id, question, cancel) = {
+        let (turn_id, question, cancel, fresh) = {
             let l = self.live.as_ref().expect("checked above");
             (
                 l.turn.id.clone(),
                 l.turn.question.clone(),
                 Arc::clone(&l.cancel),
+                l.turn.fresh,
             )
         };
+        // A new ask starts a new thread: the earlier threads do not go to the model. Their
+        // answers (up to `HISTORY_BYTES`) would make every step of this turn slower, and the
+        // model would answer them again. A follow-up keeps the history of its thread.
+        if fresh {
+            if let Some(s) = self.session.as_mut() {
+                s.history.clear();
+            }
+        }
         if self
             .d
             .guard
@@ -617,6 +626,11 @@ impl Engine {
         if let Some(l) = self.live.as_mut() {
             l.began = true;
             l.started_at = now;
+        }
+        // The question counts when it starts, so the thread header never says "0 questions"
+        // while its first answer shows.
+        if let Some(s) = self.session.as_mut() {
+            s.turns += 1;
         }
         let ctx = LoopCtx {
             chat: Arc::clone(&self.d.chat),
@@ -755,9 +769,7 @@ impl Engine {
         }
         let tokens = live.usage.input + live.usage.output;
         if let Some(s) = self.session.as_mut() {
-            if live.began {
-                s.turns += 1;
-            }
+            // A turn that began was counted at its start (`pump`).
             s.tokens += tokens;
         }
         self.last_activity = self.now();

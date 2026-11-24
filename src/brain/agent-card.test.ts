@@ -10,6 +10,7 @@ import {
   cardChips,
   createAgentCard,
   fallbackNotice,
+  openTurnInConversations,
   parseAgentChip,
   partOf,
   whyOfOutcome,
@@ -378,6 +379,41 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     });
     expect(() => card.show(MOG, view())).not.toThrow();
     expect(faults).toBe(1);
+  });
+});
+
+describe('Open in Conversations', () => {
+  const THREAD = '51111111-2222-4333-8444-00000000000a';
+
+  it('shows the hub first, then opens Conversations on the thread of the turn', async () => {
+    const log: string[] = [];
+    let shown!: () => void;
+    const showing = new Promise<void>((res) => (shown = res));
+    const done = openTurnInConversations(T1, {
+      showHub: async () => {
+        log.push('show');
+        await showing;
+      },
+      threadOf: (t) => (t === T1 ? THREAD : undefined),
+      openThread: async (id) => void log.push(`open:${id}`),
+    });
+    await Promise.resolve();
+    // The open waits for the hub.
+    expect(log).toEqual(['show']);
+    shown();
+    await done;
+    expect(log).toEqual(['show', `open:${THREAD}`]);
+  });
+
+  it('opens the thread even when the hub could not be shown, and nothing for no thread', async () => {
+    const opened: string[] = [];
+    const deps = {
+      showHub: () => Promise.reject(new Error('no hub')),
+      openThread: async (id: string) => void opened.push(id),
+    };
+    await openTurnInConversations(T1, { ...deps, threadOf: () => THREAD });
+    await openTurnInConversations(T1, { ...deps, threadOf: () => undefined });
+    expect(opened).toEqual([THREAD]);
   });
 });
 

@@ -422,6 +422,26 @@ export interface AgentChipDeps {
   cardDone(mogId: MogId): void;
 }
 
+/** What "Open in Conversations" needs. */
+export interface OpenTurnDeps {
+  /** Show and focus the hub window. */
+  showHub(): Promise<unknown>;
+  /** The thread of a turn (`AgentClient.threadOf`). */
+  threadOf(turnId: string): string | undefined;
+  /** Open hub Conversations on a thread (`hub:conversations.open`, held until the hub acks). */
+  openThread(threadId: string): Promise<void>;
+}
+
+/**
+ * "Open in Conversations" on the card: show the hub first, then open its Conversations area on
+ * the thread of the turn. The open goes after the show, so the hub is up when it arrives.
+ */
+export async function openTurnInConversations(turnId: string, deps: OpenTurnDeps): Promise<void> {
+  await deps.showHub().catch(() => undefined);
+  const threadId = deps.threadOf(turnId);
+  if (threadId !== undefined) await deps.openThread(threadId);
+}
+
 /**
  * Feed the agent chips of a card from the brain Channel. Only the card of the MOG speaks for its
  * chips.

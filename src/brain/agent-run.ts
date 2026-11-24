@@ -301,7 +301,10 @@ export interface AgentClient {
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
-  /** The thread (root UUID) of `turnId`, if the client holds the turn. */
+  /**
+   * The thread (root UUID) of `turnId`. A turn that the client no longer holds (a session end
+   * forgot it) gives the thread that it started as a new ask; a bad turn id gives undefined.
+   */
   threadOf(turnId: string): string | undefined;
   /** The MOG that asked in a thread of the panel, if the client holds one of its turns. */
   threadMog(threadId: string): MogId | undefined;
@@ -672,6 +675,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (recs.get(id) !== r) return;
     } else {
       update(r);
+      // The core counted the turn before `ended`: the header shows the new count now, not
+      // after the pulls and the row below.
+      void refresh();
     }
     // The calls that ended just before the turn finish their pulls first.
     await Promise.allSettled([...r.pending]);
@@ -967,7 +973,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       };
     },
     turn: (turnId) => recs.get(turnId)?.view,
-    threadOf: (turnId) => recs.get(turnId)?.threadId,
+    threadOf: (turnId) =>
+      recs.get(turnId)?.threadId ?? (TURN_ID.test(turnId) ? uuidOfTurn(turnId) : undefined),
     threadMog: (threadId) => [...recs.values()].find((r) => r.threadId === threadId)?.origin.mogId,
     turns: () => {
       const { live, waiting, earlier } = shown();

@@ -837,6 +837,25 @@ describe('needs you, and the session events', () => {
     expect(r.client.panel().session).toMatchObject({ turns: 3, tokens: 124_000 });
   });
 
+  it('an answered turn shows done and the new question count at once, before its row is saved', async () => {
+    const r = rig();
+    const home = gate();
+    // The row write waits (the await of `recordTurn`): the header must not wait for it.
+    r.script.homeGate = home.p;
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    await r.settle();
+    r.script.session = sessionOf({ turns: 1, tokens: 900 });
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    const p = r.client.panel();
+    expect(p.live).toBeUndefined();
+    expect(p.earlier[0]).toMatchObject({ turnId: T1, state: 'done' });
+    expect(p.session).toMatchObject({ turns: 1, tokens: 900 });
+    home.open();
+    await r.settle();
+  });
+
   it('keeps at most 20 earlier turns', async () => {
     const r = rig();
     for (let i = 0; i < 22; i++) {
@@ -1175,6 +1194,13 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     ]);
     expect(r.client.threadOf(T2)).toBe(uuidOfTurn(T1));
     expect(r.client.threadMog(uuidOfTurn(T1))).toBe(MOG);
+  });
+
+  it('threadOf a turn that the client forgot is the thread it started; a bad id has none', () => {
+    const r = rig();
+    const gone = 'c'.repeat(32);
+    expect(r.client.threadOf(gone)).toBe(uuidOfTurn(gone));
+    expect(r.client.threadOf('not-a-turn')).toBeUndefined();
   });
 
   it('[AC-C15] turns() marks a live or queued turn as in progress, a finished one not', async () => {

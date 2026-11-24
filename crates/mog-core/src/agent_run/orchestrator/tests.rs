@@ -1109,6 +1109,40 @@ fn a_follow_up_sends_the_history_of_the_thread() {
 }
 
 #[test]
+fn a_new_ask_in_an_open_session_sends_no_earlier_thread() {
+    // D1 on: the session is not tainted, so the new ask runs in the same session.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        ask_then_cite(&["sales"]),
+    );
+    let (t1, _) = r.run("first question");
+    assert!(r.host.turn_result(&t1).is_some());
+    *r.chat.script.lock().unwrap() = Box::new(|_, _| no_source_final());
+    let calls_before = r.chat.calls();
+    let a = r.host.submit(&args("the latest news today", None)).unwrap();
+    assert!(!a.new_session, "the session stays open");
+    r.wait_outcome(&a.turn_id);
+    let input = r.chat.body(calls_before)["input"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(input.len(), 1, "only the new question: {input:?}");
+    assert!(input[0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("the latest news today"));
+    // A follow-up of the new thread sees the new thread only.
+    let calls_before = r.chat.calls();
+    let f = r.host.submit(&args("and why?", Some("follow_up"))).unwrap();
+    r.wait_outcome(&f.turn_id);
+    let text = r.chat.body(calls_before)["input"].to_string();
+    assert!(text.contains("the latest news today"), "{text}");
+    assert!(!text.contains("first question"), "{text}");
+}
+
+#[test]
 fn wipe_drops_every_history_and_the_guard_ledger() {
     let r = rig(
         false,
@@ -1176,6 +1210,25 @@ fn the_fifth_submit_is_refused_when_one_runs_and_three_wait() {
         let s = r.host.session_state();
         s.queued == 0 && s.state == AgentSessionPhase::Idle
     });
+}
+
+#[test]
+fn a_question_counts_in_the_session_when_it_starts_and_once() {
+    let g = gate();
+    let r = rig(false, 10, FakeR8::answering(by_profile), blocked(&g));
+    let a = r.submit("q0").unwrap();
+    // The first turn runs (the model call waits): it counts already.
+    assert_eq!(r.host.session_state().turns, 1);
+    // A waiting turn does not count until it starts.
+    r.submit("q1").unwrap();
+    assert_eq!(r.host.session_state().turns, 1);
+    release(&g);
+    r.wait_outcome(&a.turn_id);
+    eventually("both turns ran", || {
+        let s = r.host.session_state();
+        s.queued == 0 && s.state == AgentSessionPhase::Idle
+    });
+    assert_eq!(r.host.session_state().turns, 2);
 }
 
 #[test]
