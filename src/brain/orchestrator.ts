@@ -46,7 +46,15 @@ export interface Orchestrator {
   refresh(recheck?: boolean): Promise<void>;
   /** The "Clean up dictation" setting. On until the list says otherwise. */
   cleanDictation(): boolean;
+  /**
+   * An agent turn ended with `outcome`. A failed, signed-out or offline end may mean that the
+   * model is no longer ready (M3), so the status is read again. Any other outcome does nothing.
+   */
+  turnEnded(outcome: string): void;
 }
+
+/** The turn outcomes after which the orchestrator status is read again. */
+const STATUS_REFRESH_OUTCOMES: ReadonlySet<string> = new Set(['failed', 'signed_out', 'offline']);
 
 export function wireOrchestrator(bus: BrainBus, deps: OrchestratorDeps): Orchestrator {
   let status: OrchestratorStatus | undefined;
@@ -113,14 +121,18 @@ export function wireOrchestrator(bus: BrainBus, deps: OrchestratorDeps): Orchest
     }
   });
 
-  return {
+  const api: Orchestrator = {
     status: () => status,
     refresh: async (recheck) => {
       await readStatus(recheck);
       await push();
     },
     cleanDictation: () => deps.settings()?.cleanDictation ?? true,
+    turnEnded: (outcome) => {
+      if (STATUS_REFRESH_OUTCOMES.has(outcome)) void api.refresh();
+    },
   };
+  return api;
 }
 
 /** The production deps: `call` and `emitTo('hub', …)`. */

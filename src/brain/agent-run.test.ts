@@ -749,7 +749,11 @@ describe('needs you, and the session events', () => {
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
     await r.settle();
-    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'unlisted' as never });
+    r.client.onSessionEvent({
+      kind: 'ended',
+      sessionId: 'd'.repeat(32),
+      reason: 'unlisted' as never,
+    });
     expect(r.client.panel().earlier).toHaveLength(1);
     r.client.onSessionEvent({ kind: 'started', sessionId: 'f'.repeat(32) });
     expect(r.client.panel().earlier).toEqual([]);
@@ -860,7 +864,9 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'signed_out', calls: 0 });
     await r.settle();
     expect(r.directs).toHaveLength(1);
-    expect(r.client.panel().earlier[0]?.notice).toBe('Your sign-in to Sales expired. Asked Sales only.');
+    expect(r.client.panel().earlier[0]?.notice).toBe(
+      'Your sign-in to Sales expired. Asked Sales only.',
+    );
   });
 
   it('[H3] a call that ends after its turn ended updates its row only, never the state', async () => {
@@ -892,7 +898,11 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     await r.client.submit(turn(), 'ask');
     r.ev({ kind: 'ended', turnId: T1, outcome: 'failed', calls: 1 });
     await r.settle();
-    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'unlisted' as never });
+    r.client.onSessionEvent({
+      kind: 'ended',
+      sessionId: 'd'.repeat(32),
+      reason: 'unlisted' as never,
+    });
     expect(r.client.panel().earlier).toHaveLength(1);
     r.client.clear();
     expect(r.client.panel().earlier).toEqual([]);

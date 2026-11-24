@@ -56,7 +56,13 @@ import {
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
-import { createAgentClient, ipcAgentApi, uuidOfTurn, type AgentClient } from '../agent-run';
+import {
+  asTurnEvent,
+  createAgentClient,
+  ipcAgentApi,
+  uuidOfTurn,
+  type AgentClient,
+} from '../agent-run';
 import { wireOrchestrator, ipcOrchestratorDeps } from '../orchestrator';
 import { createAskRouter, createFollowUpWindow, threadReplyMog } from '../agent-route';
 import {
@@ -560,7 +566,12 @@ export function startBrain(): Brain {
       void hubRef.current?.push();
     };
     agentClear.fence = () => agentClient.fence();
-    bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
+    bus.on(EVENTS['agent.turn'].name, (p) => {
+      agentClient.onTurnEvent(p);
+      // M3: a turn that ends failed, signed out or offline may mean the model is not ready.
+      const e = asTurnEvent(p);
+      if (e?.kind === 'ended') orchestrator.turnEnded(e.outcome);
+    });
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({
       context: () => ({ orchestrator: orchestrator.status() }),

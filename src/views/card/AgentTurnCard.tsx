@@ -192,7 +192,8 @@ function CiteChip({
   onReveal: (callId: string) => void;
   onOpenLink?: ((url: string) => void) | undefined;
 }) {
-  const url = onOpenLink ? cite.deepLink : undefined;
+  // L1: the link is checked again against the host of its workspace before it is a link.
+  const url = onOpenLink ? openInDatabricksUrl(cite.deepLink, cite.workspaceHost) : undefined;
   const hintId = useId();
   // The link goes through the same trusted path as every link: the brain checks it again.
   return (

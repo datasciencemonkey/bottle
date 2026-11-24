@@ -162,10 +162,7 @@ export function cardChips(t: AgentTurnView): ChipView[] {
 export type FallbackWhy =
   'no_home' | 'signed_out' | 'no_model' | 'unreachable' | 'timeout' | 'offline' | 'failed';
 
-export function fallbackNotice(
-  why: FallbackWhy,
-  ws: { agent: string; home: string },
-): string {
+export function fallbackNotice(why: FallbackWhy, ws: { agent: string; home: string }): string {
   const asked = ` Asked ${ws.home} only.`;
   switch (why) {
     case 'no_home':

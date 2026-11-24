@@ -36,6 +36,10 @@ export function citationsOf(
       callId: source.callId,
       workspace: part.workspace,
       ...(deepLink !== undefined ? { deepLink } : {}),
+      // L1: the view checks the link again against this host.
+      ...(deepLink !== undefined && footer?.id === 'footer' && footer.workspaceHost !== undefined
+        ? { workspaceHost: footer.workspaceHost }
+        : {}),
     });
   }
   return out;

@@ -332,7 +332,11 @@ describe('the ⌥G ask (RTR-17a)', () => {
     for (const forceAsk of [false, true]) {
       const h = harness(answer('A model text.', { intent: 'question' }));
       const r = await routeUtterance(
-        utterance({ forceAsk, text: 'um what was the revenue uh', input: input('home', 'session') }),
+        utterance({
+          forceAsk,
+          text: 'um what was the revenue uh',
+          input: input('home', 'session'),
+        }),
         withDictationCleanup(h.base),
       );
       expect(r).toMatchObject({

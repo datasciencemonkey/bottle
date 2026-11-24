@@ -30,6 +30,7 @@ describe('citationsOf', () => {
         callId: 'c-1',
         workspace: sales,
         deepLink: 'https://sales.cloud.databricks.com/one/chat/threads/c-1',
+        workspaceHost: 'sales.cloud.databricks.com',
       },
     ]);
   });
