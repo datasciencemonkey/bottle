@@ -1070,6 +1070,7 @@ args!(
             deserialize_with = "present_bool",
             skip_serializing_if = "Option::is_none"
         )]
+        #[schemars(with = "bool")]
         clean_dictation: Option<bool>,
         /// Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.
         #[serde(

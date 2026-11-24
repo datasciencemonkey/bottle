@@ -267,16 +267,22 @@ export function asAgentTurnView(v: unknown): AgentTurnView | undefined {
       if (!Array.isArray(rawCitations)) return undefined;
       const citations: AgentCitation[] = [];
       for (const c of rawCitations) {
-        if (!isObj(c) || !isNum(c['n']) || !isStr(c['callId'])) return undefined;
+        if (!isObj(c) || !isCount(c['n']) || c['n'] < 1 || !isCallId(c['callId'])) {
+          return undefined;
+        }
         const chip = asChip(c['workspace']);
         if (!chip) return undefined;
         const deepLink = c['deepLink'];
+        const workspaceHost = c['workspaceHost'];
         if (deepLink !== undefined && !isStr(deepLink)) return undefined;
-        citations.push(
-          deepLink === undefined
-            ? { n: c['n'], callId: c['callId'], workspace: chip }
-            : { n: c['n'], callId: c['callId'], workspace: chip, deepLink },
-        );
+        if (workspaceHost !== undefined && !isStr(workspaceHost)) return undefined;
+        citations.push({
+          n: c['n'],
+          callId: c['callId'],
+          workspace: chip,
+          ...(deepLink === undefined ? {} : { deepLink }),
+          ...(workspaceHost === undefined ? {} : { workspaceHost }),
+        });
       }
       out.summary.citations = citations;
     }

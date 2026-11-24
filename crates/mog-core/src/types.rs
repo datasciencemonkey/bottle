@@ -1421,9 +1421,13 @@ pub struct AgentCitation {
     pub n: u32,
     pub call_id: String,
     pub workspace: AgentWsChip,
-    /// The Open in Databricks link of that part, already checked.
+    /// The Open in Databricks link of that part. A renderer must never use it without
+    /// re-checking it at render time against `workspace_host`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deep_link: Option<String>,
+    /// The workspace host that `deep_link` must belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_host: Option<String>,
 }
 
 impl std::fmt::Debug for AgentSummaryView {

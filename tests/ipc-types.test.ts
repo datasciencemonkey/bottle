@@ -33,6 +33,7 @@ import type {
   CardUpdate,
   GenieCodeStatus,
   OrchestratorModels,
+  OrchestratorState,
   OrchestratorStatus,
   WorkspaceList,
   WorkspaceRow,
@@ -292,6 +293,13 @@ const TURN_A = '0123456789abcdef0123456789abcdef';
 const TURN_B = 'fedcba9876543210fedcba9876543210';
 const SALES = { name: 'Sales', colorVariant: 'teal' };
 const FINANCE = { name: 'Finance', colorVariant: 'amber' };
+const ORCHESTRATOR_STATES = [
+  'ready',
+  'no_home',
+  'signed_out',
+  'no_model',
+  'unreachable',
+] as const satisfies OrchestratorState[];
 const AGENT_CALL_STATES = [
   'queued',
   'asking',
@@ -576,11 +584,13 @@ const agentTyped: Record<string, unknown> = {
   } satisfies WorkspaceList,
   AgentCallState: AGENT_CALL_STATES,
   AgentSessionEndReason: AGENT_END_REASONS,
+  OrchestratorState: ORCHESTRATOR_STATES,
 };
 const agentUnionsListed: [
+  Equal<(typeof ORCHESTRATOR_STATES)[number], OrchestratorState>,
   Equal<(typeof AGENT_CALL_STATES)[number], AgentCallState>,
   Equal<(typeof AGENT_END_REASONS)[number], AgentSessionEndReason>,
-] = [true, true];
+] = [true, true, true];
 
 const typed: Record<string, unknown> = {
   ...agentTyped,

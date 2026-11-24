@@ -2265,10 +2265,7 @@
         },
         "cleanDictation": {
           "description": "ADR 0122: \"Clean up dictation\".",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "crossWorkspaceData": {
           "type": [

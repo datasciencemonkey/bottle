@@ -709,8 +709,13 @@ export interface AgentCitation {
   n: number;
   callId: string;
   workspace: AgentWsChip;
-  /** The Open in Databricks link of that part, already checked with `openInDatabricksUrl`. */
+  /**
+   * The Open in Databricks link of that part. A renderer must never use `deepLink` without
+   * re-checking it at render time: `openInDatabricksUrl(deepLink, workspaceHost)`.
+   */
   deepLink?: string;
+  /** The workspace host that `deepLink` must belong to. */
+  workspaceHost?: string;
 }
 export interface AgentCallView {
   callId: string;
