@@ -956,3 +956,59 @@ describe('review fixes (needs you, queued only, toast, composer, list line)', ()
     expect(d.querySelector('[data-action="fold"]')).toBeNull();
   });
 });
+
+describe('the note of a stored turn (ADR 0122)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[owner bug] a link in the stored note opens through link_open with the part of its host', async () => {
+    const { el } = await mount();
+    const url = 'https://example.cloud.databricks.test/one/chat/threads/t1';
+    const other = 'https://elsewhere.example/x';
+    const t = stored('a', { summaryMd: `See [the thread](${url}) and [that](${other}).` });
+    await feed([thread(THREAD_A, [t])]);
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    const links = [...note.querySelectorAll<HTMLAnchorElement>('a.md-link')];
+    expect(links).toHaveLength(1);
+    // A host that is no workspace of the turn stays plain text.
+    expect(note.querySelector('.md-link--blocked')).not.toBeNull();
+    await click(links[0]);
+    expect(payloads(CONVERSATIONS_VIEW_ID)).toContainEqual({
+      target: 'link_open',
+      url,
+      requestId: t.parts[0]?.requestId,
+    });
+  });
+
+  const noteLink = async (turnOver: Partial<AgentThreadTurn>, url: string) => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: `See [it](${url}).`, ...turnOver })])]);
+    const a = el.querySelector<HTMLAnchorElement>('[data-agent-note] a.md-link');
+    await click(a);
+    return payloads(CONVERSATIONS_VIEW_ID).filter((p) => p['target'] === 'link_open');
+  };
+
+  it('[L2] two parts share a host: the part that did not fail speaks for it', async () => {
+    const parts = [part(1, { status: 'failed' }), part(2)];
+    const url = 'https://example.cloud.databricks.test/x';
+    const opens = await noteLink({ parts }, url);
+    expect(opens).toEqual([{ target: 'link_open', url, requestId: parts[1]?.requestId }]);
+  });
+
+  it('a home host written as https://host and a second host both resolve to their part', async () => {
+    const parts = [
+      part(1, { workspaceHost: 'https://home.cloud.databricks.test' }),
+      part(2, { workspaceHost: 'other.cloud.databricks.test' }),
+    ];
+    const home = await noteLink({ parts }, 'https://home.cloud.databricks.test/h');
+    expect(home).toEqual([
+      {
+        target: 'link_open',
+        url: 'https://home.cloud.databricks.test/h',
+        requestId: parts[0]?.requestId,
+      },
+    ]);
+    tauri.reset();
+    const other = await noteLink({ parts }, 'https://other.cloud.databricks.test/o');
+    expect(other[0]?.['requestId']).toBe(parts[1]?.requestId);
+  });
+});

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-orchestrator-status"
+description = "Enables the orchestrator_status command without any pre-configured scope."
+commands.allow = ["orchestrator_status"]
+
+[[permission]]
+identifier = "deny-orchestrator-status"
+description = "Denies the orchestrator_status command without any pre-configured scope."
+commands.deny = ["orchestrator_status"]

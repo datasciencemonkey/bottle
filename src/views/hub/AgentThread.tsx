@@ -31,7 +31,7 @@ import {
   type AgentThreadTurn,
 } from '../../shared/hub-conversations';
 import type { AgentTurnView } from '../../shared/ipc';
-import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
   NOTE_LABEL,
   OPEN_IN_DATABRICKS,
@@ -475,7 +475,24 @@ function StoredTurn({
   headingId?: string | undefined;
 }) {
   const [open, setOpen] = useState(true);
-  const trust = useMemo(() => ({ profileHost: '', allowedAppUrls: [] as string[] }), []);
+  // The note may link to the workspaces that it combines: each of their hosts is trusted for it,
+  // and a click goes to the brain with the part of that host (the same path as StoredPart).
+  const trust = useMemo(
+    () => ({
+      profileHost: '',
+      allowedAppUrls: [...new Set(turn.parts.map((p) => bareHost(p.workspaceHost)))]
+        .filter((h) => h !== '')
+        .map((h) => `https://${h}`),
+    }),
+    [turn.parts],
+  );
+  const openNoteLink = (url: string) => {
+    const host = displayHost(url)?.toLowerCase();
+    // Two parts may share a host: the first one that did not fail speaks for it.
+    const same = turn.parts.filter((p) => bareHost(p.workspaceHost) === host);
+    const part = same.find((p) => p.status !== 'failed') ?? same[0];
+    if (part) openPartLink(url, part.requestId);
+  };
   const listId = `agent-parts-${turn.turnUuid}`;
   const hasNote = turn.summaryMd !== '';
   const shown = !hasNote || open;
@@ -544,7 +561,7 @@ function StoredTurn({
         <div className="agent-note agent-note--after" data-agent-note>
           <p className="agent-note-label">{NOTE_LABEL}</p>
           <div className="agent-note-body">
-            <SafeMarkdown text={turn.summaryMd} trust={trust} />
+            <SafeMarkdown text={turn.summaryMd} trust={trust} onOpenLink={openNoteLink} />
           </div>
         </div>
       )}

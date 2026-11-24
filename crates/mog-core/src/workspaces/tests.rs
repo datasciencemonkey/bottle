@@ -165,7 +165,8 @@ fn migration_never_changes_an_old_config_and_writes_a_private_file() {
     assert_eq!(data["schemaVersion"], 1);
     assert_eq!(data["agent"]["crossWorkspaceData"], false);
     assert_eq!(data["agent"]["genieCallBudget"], 10);
-    assert_eq!(data["agent"]["endpoint"], "databricks-claude-sonnet-5-5");
+    assert_eq!(data["agent"]["endpoint"], "system.ai.claude-haiku-5-5");
+    assert_eq!(data["agent"]["cleanDictation"], true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -410,8 +411,8 @@ fn ready(s: &Scratch) -> WorkspaceStore {
     )
 }
 
-fn ep(s: &str) -> EndpointName {
-    EndpointName::try_from(s.to_owned()).unwrap()
+fn ep(s: &str) -> OrchestratorModel {
+    OrchestratorModel::try_from(s.to_owned()).unwrap()
 }
 
 fn budget(n: u8) -> GenieCallBudget {
@@ -521,25 +522,33 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: false,
             cross_workspace_locked: false,
             genie_call_budget: GenieCallBudget::DEFAULT,
-            endpoint: ep("databricks-claude-sonnet-5-5"),
+            endpoint: ep("system.ai.claude-haiku-5-5"),
+            clean_dictation: true,
             run_profile: None,
         }
     );
-    // A bad budget or endpoint cannot be built, and the command refuses it on the wire.
+    // A bad budget or model cannot be built, and the command refuses it on the wire.
     assert!(GenieCallBudget::try_from(7).is_err());
-    assert!(EndpointName::try_from("a b/c".to_owned()).is_err());
+    assert!(OrchestratorModel::try_from("a b/c".to_owned()).is_err());
     let bad = w.call("workspace_settings_write", json!({"genieCallBudget": 7}));
     assert_eq!(code(bad.unwrap_err()), "invalid_args");
-    let bad = w.call(
-        "workspace_settings_write",
-        json!({"agentEndpoint": "a b/c"}),
-    );
-    assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    for v in [
+        json!("a b/c"),
+        json!("databricks-claude-sonnet-5-5"),
+        json!("system.ai."),
+        json!("system.ai.a.b"),
+        json!("other.ai.model"),
+        json!(5),
+    ] {
+        let bad = w.call("workspace_settings_write", json!({"agentEndpoint": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
             cross_workspace_data: Some(true),
             genie_call_budget: Some(budget(20)),
-            agent_endpoint: Some(ep("my-endpoint")),
+            agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
+            clean_dictation: Some(false),
             run_profile: None,
         })
         .unwrap();
@@ -547,9 +556,10 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
         (
             l.agent.cross_workspace_data,
             l.agent.genie_call_budget.get(),
-            l.agent.endpoint.as_str()
+            l.agent.endpoint.as_str(),
+            l.agent.clean_dictation
         ),
-        (true, 20, "my-endpoint")
+        (true, 20, "system.ai.gpt-oss-20b", false)
     );
     // A later partial write keeps the rest.
     let l = w
@@ -557,11 +567,70 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             cross_workspace_data: None,
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
+            clean_dictation: None,
             run_profile: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
-    assert_eq!(l.agent.endpoint.as_str(), "my-endpoint");
+    assert_eq!(l.agent.endpoint.as_str(), "system.ai.gpt-oss-20b");
+    assert!(!l.agent.clean_dictation);
+}
+
+/// ADR 0122: `cleanDictation` is a bool. Any other JSON type is refused.
+#[test]
+fn settings_write_refuses_a_non_bool_clean_dictation() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"cleanDictation": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert_eq!(l["agent"]["cleanDictation"], false);
+}
+
+/// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other
+/// value that is not a `system.ai.` id, becomes the default model. A file with no
+/// `cleanDictation` reads as true. A valid `system.ai.` id stays.
+#[test]
+fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
+    for old in [
+        "databricks-claude-sonnet-5-5",
+        "my-endpoint",
+        "system.ai.",
+        "x y",
+        "",
+    ] {
+        let s = Scratch::new();
+        let w = ready(&s);
+        w.list(false).unwrap();
+        let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+        data["agent"]["endpoint"] = json!(old);
+        data["agent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cleanDictation");
+        fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+        let l = w.list(false).unwrap();
+        assert_eq!(
+            l.agent.endpoint.as_str(),
+            "system.ai.claude-haiku-5-5",
+            "{old}"
+        );
+        assert!(l.agent.clean_dictation);
+    }
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]["endpoint"] = json!("system.ai.gpt-oss-20b");
+    fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+    assert_eq!(
+        w.list(false).unwrap().agent.endpoint.as_str(),
+        "system.ai.gpt-oss-20b"
+    );
 }
 
 /// Slice 2a: `runProfile` absent changes nothing, a name sets it and `null` goes back to home.

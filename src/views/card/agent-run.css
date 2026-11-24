@@ -505,3 +505,102 @@
 .agent-note-body .md-table-block {
   overflow-x: auto;
 }
+
+/* ADR 0122: the marker [n] of a combined answer, and the chips that reach a workspace answer.
+   The chip is small, but its hit area is 24px square (an invisible pseudo-element). */
+.agent-cite {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
+  height: 1.5em;
+  /* 2 x 4px between two chips: their 24px hit areas (7.5px beyond each chip) do not overlap. */
+  margin: 0 4px;
+  padding: 0 var(--mog-space-1);
+  border: 1px solid var(--agent-ws-stripe, var(--mog-edge));
+  border-radius: var(--mog-radius-pill);
+  background: color-mix(in srgb, var(--agent-ws-color, transparent) 18%, transparent);
+  color: var(--mog-text);
+  font: inherit;
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+  line-height: 1;
+  vertical-align: super;
+  cursor: pointer;
+}
+
+.agent-cite::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+}
+
+.agent-chip--button {
+  min-height: 24px;
+  padding: 0 var(--mog-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--mog-radius-pill);
+  background: none;
+  cursor: pointer;
+}
+
+.agent-cite,
+.agent-chip--button {
+  --agent-ws-stripe: color-mix(in srgb, var(--agent-ws-color) 65%, white);
+}
+
+.agent-cite:hover,
+.agent-chip--button:hover {
+  background: color-mix(in srgb, var(--agent-ws-color, transparent) 30%, transparent);
+}
+
+.agent-cite:focus-visible,
+.agent-chip--button:focus-visible {
+  outline: none;
+  box-shadow: var(--mog-focus-ring);
+}
+
+/* The part that a citation reached: a short highlight that fades out. */
+/* The value of data-flash is the parity of the click count: a repeat click changes the animation
+   name, so the highlight starts again. */
+.agent-part[data-flash='0'] {
+  animation: agent-part-flash-a 1.6s ease-out;
+}
+
+.agent-part[data-flash='1'] {
+  animation: agent-part-flash-b 1.6s ease-out;
+}
+
+.agent-part:focus {
+  outline: none;
+}
+
+@keyframes agent-part-flash-a {
+  from {
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@keyframes agent-part-flash-b {
+  from {
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: the highlight shows still for the same time. */
+  .agent-part[data-flash] {
+    animation: none;
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+}
