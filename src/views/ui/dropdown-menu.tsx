@@ -50,7 +50,7 @@ function DropdownMenuItem({
 
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
-/** A radio item of a menu (slice 2a, "Genie Code runs on"): `role="menuitemradio"`. */
+/** A radio item of a menu (slice 2a): `role="menuitemradio"`. */
 function DropdownMenuRadioItem({
   className,
   children,

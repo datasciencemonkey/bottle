@@ -1,5 +1,5 @@
 /**
- * The hub's copy of the Genie Code agent view (slice 2a). Thin view (ARC-2, ARC-4): it keeps the
+ * The hub's copy of the orchestrator agent view (slice 2a). Thin view (ARC-2, ARC-4): it keeps the
  * `HubAgentView` that the brain sends on `hub:agent` and sends `agent.ready` once the listener is
  * on. Conversations draws it inside the agent threads, and the Hub reads it for Settings
  * (`agentBusy`).

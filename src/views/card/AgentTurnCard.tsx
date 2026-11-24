@@ -4,7 +4,7 @@
  * same body for the live turn and for each earlier turn (`AgentThread.tsx`). Thin view (ARC-2): the brain
  * sends the `AgentTurnView`; this file draws it and sends clicks with `view_emit`.
  *
- * - Header: "Planning with Genie Code in sales…", then "Asking 2 workspaces · 3 of 10 Genie
+ * - Header: "Planning in sales…", then "Asking 2 workspaces · 3 of 10 Genie
  *   calls", "Still working…" after 4 min, and a fixed line for each end.
  * - One row for each Genie call: colour stripe, workspace chip, the question on one line (the full
  *   text in `title`), and the state (Queued, "Asking finance… 0:12", Ready, No answer, Needs you,
@@ -86,15 +86,15 @@ export function turnHeadline(t: AgentTurnView): string {
     case 'queued':
       return QUEUED_LABEL;
     case 'planning':
-      return `Planning with Genie Code in ${t.agentWorkspace.name}…`;
+      return `Planning in ${t.agentWorkspace.name}…`;
     case 'running':
     case 'slow':
       return asked === 0
-        ? `Planning with Genie Code in ${t.agentWorkspace.name}…`
+        ? `Planning in ${t.agentWorkspace.name}…`
         : `Asking ${plural(asked, 'workspace', 'workspaces')} · ${calls}`;
     case 'done': {
       const ready = t.calls.filter((c) => c.state === 'ready');
-      if (t.calls.length === 0) return `Answered by Genie Code in ${t.agentWorkspace.name}`;
+      if (t.calls.length === 0) return `Answered in ${t.agentWorkspace.name}`;
       const count =
         ready.length < t.calls.length
           ? `${ready.length} of ${t.calls.length} answered`
@@ -142,7 +142,7 @@ export function callLabel(c: AgentCallView, now: number): string {
 /** The footer line of a finished turn. */
 export function footerText(t: AgentTurnView): string | undefined {
   if (t.tokens === undefined) return undefined;
-  return `Planned by Genie Code in ${t.agentWorkspace.name} · ${tokensText(t.tokens)}`;
+  return `Planned in ${t.agentWorkspace.name} · ${tokensText(t.tokens)}`;
 }
 
 /** A 1 s tick while something on screen counts time. */

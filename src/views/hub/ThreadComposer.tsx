@@ -39,7 +39,8 @@ import {
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { emitView } from '../view-ipc';
-import { agentReady, notReadyText, QUEUE_LIMIT } from './AgentThread';
+import { notReadyText, QUEUE_LIMIT } from './AgentThread';
+import { useHubOrchestrator } from './use-hub-orchestrator';
 
 /**
  * A half-typed question for each thread, kept in memory only (never saved): the composer
@@ -353,7 +354,7 @@ export interface AgentComposerProps {
 /**
  * The composer of an agent thread: "Ask a follow-up". Send sends `agent.thread_send` for this
  * thread (the reply of a live turn or a queued turn is the brain's call). While the hub has focus
- * on it, a ⌥G is a follow-up in this thread (`thread.active_agent`). With Genie Code not ready
+ * on it, a ⌥G is a follow-up in this thread (`thread.active_agent`). With the orchestrator model not ready
  * it shows why, with Open Settings. With a full queue it keeps the text and turns Send off.
  */
 export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
@@ -361,7 +362,7 @@ export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
   const [text, setText] = useState(() => drafts.get(key) ?? '');
   const [failed, setFailed] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
-  const ready = agentReady(agent?.genieCode);
+  const orchestrator = useHubOrchestrator();
   const waiting = agent?.waiting.length ?? 0;
   const full = waiting >= QUEUE_LIMIT;
 
@@ -393,27 +394,25 @@ export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
     el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
   }, [text]);
 
-  if (agent !== undefined && !ready) {
+  if (agent !== undefined && orchestrator?.state !== undefined && orchestrator.state !== 'ready') {
     return (
       <div className="thread-composer max-w-[68ch]" data-agent-composer="not-ready">
         <p className="thread-composer-signin mb-2 text-sm text-muted-foreground" role="status">
-          {notReadyText(agent.genieCode)}
+          {notReadyText(orchestrator.state, orchestrator.homeName)}
         </p>
-        {agent.genieCode.pinned !== '' && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-agent-open-settings
-            onClick={() =>
-              void emitView(HUB_SCOPE, 'click', { action: 'agent.open_settings' }).catch(
-                () => undefined,
-              )
-            }
-          >
-            Open Settings
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-agent-open-settings
+          onClick={() =>
+            void emitView(HUB_SCOPE, 'click', { action: 'agent.open_settings' }).catch(
+              () => undefined,
+            )
+          }
+        >
+          Open Settings
+        </Button>
       </div>
     );
   }

@@ -1,5 +1,5 @@
 /**
- * Slice 2a: the brain client of the live Genie Code session. IPC doubles and a simulated clock.
+ * Slice 2a: the brain client of the live orchestrator session. IPC doubles and a simulated clock.
  * All values are plainly fake. Covers AC-2a.2, 2a.9 (UI half), 2a.11, 2a.12, 2a.18, 2a.19 to
  * 2a.21 (UI level), 2a.28 (UI half) and the session events.
  */
@@ -683,10 +683,11 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
   });
 
   it.each([
-    ['genie_code_missing', 'Genie Code is not installed. Asked Sales only.'],
-    ['genie_code_version', 'Genie Code is not the version that Bottle needs. Asked Sales only.'],
-    ['agent_profile_unsupported', 'Genie Code is not available in Sales. Asked Sales only.'],
-    ['agent_not_eligible', 'Genie Code is not available in Sales. Asked Sales only.'],
+    [
+      'agent_profile_unsupported',
+      'The orchestrator model is not available in Sales. Asked Sales only.',
+    ],
+    ['agent_not_eligible', 'The orchestrator model is not available in Sales. Asked Sales only.'],
     ['agent_signed_out', 'Your sign-in to Sales expired. Asked Sales only.'],
     ['agent_session_unavailable', 'The agent could not run. Asked Sales only.'],
   ])('a refused submit (%s) asks home with its notice', async (code, notice) => {
@@ -867,10 +868,10 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
 
   it('[H2] a refused ask_others submit shows only a note', async () => {
     const r = rig();
-    r.script.submit.push({ error: 'genie_code_missing' });
+    r.script.submit.push({ error: 'agent_not_eligible' });
     await r.client.submit(turn('Plain?'), 'ask_others', 't');
     expect(r.directs).toEqual([]);
-    expect(r.notes).toEqual(['Genie Code is not installed.']);
+    expect(r.notes).toEqual(['The orchestrator model is not available in Sales.']);
   });
 
   it('[H3] a call that ends after its turn ended updates its row only, never the state', async () => {

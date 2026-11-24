@@ -1,5 +1,5 @@
 /**
- * Slice 2a: the card of an agent turn (brain side), and the ask router (R-8, R-9, R-11).
+ * Slice 2a: the card of an agent turn (brain side), and the ask router (ADR 0122).
  * A simulated clock and the real UX slice 1 arrival gate. All values are plainly fake.
  */
 import type { AgentTurn } from '../shared/interfaces';
@@ -129,8 +129,8 @@ describe('chips', () => {
 
   it('parses the chip ids, including the shape that UX slice 5 plugs into', () => {
     expect(parseAgentChip('agent-resend:abc')).toEqual({ kind: 'resend', arg: 'abc' });
-    expect(parseAgentChip('agent-more:op')).toEqual({ kind: 'more', arg: 'op' });
-    expect(parseAgentChip('agent-more:')).toBeUndefined();
+    // ADR 0122: the old "Ask other workspaces too" chip is gone.
+    expect(parseAgentChip('agent-more:op')).toBeUndefined();
     expect(parseAgentChip('retry:x')).toBeUndefined();
   });
 });
@@ -138,24 +138,25 @@ describe('chips', () => {
 describe('notices', () => {
   const ws = { agent: 'finance', home: 'sales' };
   it('uses the fixed one-line texts of the plan', () => {
-    expect(fallbackNotice('not_installed', { agent: 'sales', home: 'sales' })).toBe(
-      'Genie Code is not installed. Asked sales only.',
+    expect(fallbackNotice('no_home', ws)).toBe('No home workspace is set.');
+    expect(fallbackNotice('signed_out', ws)).toBe(
+      'Your sign-in to sales expired. Asked sales only.',
     );
-    expect(fallbackNotice('not_available', ws)).toBe(
-      'Genie Code is not available in finance. Asked sales only.',
+    expect(fallbackNotice('no_model', ws)).toBe(
+      'The orchestrator model is not available in sales. Asked sales only.',
+    );
+    expect(fallbackNotice('unreachable', ws)).toBe(
+      'The orchestrator model is not reachable. Asked sales only.',
     );
     expect(fallbackNotice('timeout', ws)).toBe('The agent timed out. Asked sales only.');
     expect(fallbackNotice('offline', ws)).toBe('Offline. Asked sales only.');
   });
 
   it('maps the status, the refusal codes and the outcomes', () => {
-    expect(whyOfStatus({ binary: 'not_installed', agentProfileState: 'ready' })).toBe(
-      'not_installed',
-    );
-    expect(whyOfStatus({ binary: 'ready', agentProfileState: 'not_eligible' })).toBe(
-      'not_available',
-    );
-    expect(whyOfStatus({ binary: 'ready', agentProfileState: 'signed_out' })).toBe('signed_out');
+    expect(whyOfStatus({ state: 'no_home' })).toBe('no_home');
+    expect(whyOfStatus({ state: 'signed_out' })).toBe('signed_out');
+    expect(whyOfStatus({ state: 'no_model' })).toBe('no_model');
+    expect(whyOfStatus({ state: 'unreachable' })).toBe('unreachable');
     expect(whyOfStatus(undefined)).toBe('failed');
     expect(whyOfRefusal('agent_queue_full')).toBeUndefined();
     expect(whyOfRefusal('ask_not_approved')).toBeUndefined();
@@ -389,7 +390,6 @@ describe('chip clicks from the card', () => {
       stop: (id) => void log.push(`stop:${id}`),
       openAgent: (id) => void log.push(`open:${id}`),
       openSettings: () => void log.push('settings'),
-      askOthers: (m, op, t) => void log.push(`more:${m === MOG ? 'mog' : m}:${op}:${t ?? '-'}`),
       cardDone: (m) => void log.push(`done:${m === MOG ? 'mog' : m}`),
     };
     wireAgentChips(bus, deps);
@@ -405,7 +405,7 @@ describe('chip clicks from the card', () => {
     return { log, input };
   }
 
-  it('routes Stop, Open in Conversations, Open Settings and the R-9 chip with its ticket', () => {
+  it('routes Stop, Open in Conversations and Open Settings, and drops the removed chip', () => {
     const r = chipRig();
     const from = `card-${MOG}`;
     r.input(from, 'chip_click', { chipId: `agent-stop:${T1}` });
@@ -413,7 +413,7 @@ describe('chip clicks from the card', () => {
     r.input(from, 'chip_click', { chipId: `agent-settings:${T1}` });
     r.input(from, 'chip_click', { chipId: `agent-more:${OP}` }, 'ticket-1');
     r.input(from, 'chip_click', { chipId: `agent-resend:${T1}` }, 'ticket-2');
-    expect(r.log).toEqual([`stop:${T1}`, `open:${T1}`, 'settings', `more:mog:${OP}:ticket-1`]);
+    expect(r.log).toEqual([`stop:${T1}`, `open:${T1}`, 'settings']);
   });
 
   it('an agent chip from another window does nothing', () => {
@@ -441,8 +441,6 @@ describe('the ask router', () => {
     recall: [],
     target: 'fake-sales',
   });
-  const home = { profile: 'fake-sales', name: 'Sales', isHome: true };
-  const fin = { profile: 'fake-fin', name: 'Finance', isHome: false };
 
   function routerRig(ctx: ReturnType<AskRouterDeps['context']>) {
     const log: string[] = [];
@@ -459,91 +457,52 @@ describe('the ask router', () => {
       },
       direct: async (t, opts) => void log.push(`direct:${t.question}:${opts?.notice ?? '-'}`),
       closeAgentCard: () => void log.push('close'),
-      removeChip: (_m, op) => void log.push(`rm:${op}`),
-      note: (_m, t) => void log.push(`note:${t}`),
-      refreshGenieCode: () => void refreshes++,
+      refreshOrchestrator: () => void refreshes++,
     };
     return { router: createAskRouter(deps), log, followUp, refreshes: () => refreshes, clock };
   }
-  const ready = { binary: 'ready', agentProfileState: 'ready' } as const;
 
-  it('[AC-2a.1] with only home available, the question goes direct and no agent call occurs', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home] });
-    await r.router.send(turn('Compare sales and finance'));
-    expect(r.log).toEqual(['close', 'direct:Compare sales and finance:-']);
-    expect(r.router.offerOthers(turn('x'), OP)).toBeUndefined();
-  });
-
-  it('[AC-2a.2] a question that names finance goes to the agent as an ask', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home, fin] });
-    await r.router.send(turn('Compare churn in sales and finance'));
-    expect(r.log).toEqual(['agent:ask:Compare churn in sales and finance:-']);
+  it('with the orchestrator ready, a plain question goes to the agent as an ask', async () => {
+    const r = routerRig({ orchestrator: { state: 'ready' } });
+    await r.router.send(turn('What was revenue last quarter?'));
+    expect(r.log).toEqual(['agent:ask:What was revenue last quarter?:-']);
+    expect(r.refreshes()).toBe(0);
   });
 
   it('[R-13] an open follow-up window sends the next question as a follow-up', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home, fin] });
+    const r = routerRig({ orchestrator: { state: 'ready' } });
     r.followUp.answered();
     await r.router.send(turn('and last month?'));
     expect(r.log).toEqual(['agent:follow_up:and last month?:-']);
     r.clock.advance(10 * 60_000);
     await r.router.send(turn('and last year?'));
-    expect(r.log[1]).toBe('close');
-    expect(r.log[2]).toMatch(/^direct:/);
+    expect(r.log[1]).toBe('agent:ask:and last year?:-');
   });
 
-  it('[R-11] a question for the agent with Genie Code missing goes direct with the reason', async () => {
-    const r = routerRig({
-      genieCode: { binary: 'not_installed', agentProfileState: 'ready' },
-      workspaces: [home, fin],
-    });
-    await r.router.send(turn('finance churn'));
-    expect(r.log).toEqual([
-      'close',
-      'direct:finance churn:Genie Code is not installed. Asked Sales only.',
-    ]);
-    expect(r.refreshes()).toBe(1);
+  it('each not-ready state goes direct with its own notice and reads the status again', async () => {
+    const texts: Record<string, string> = {
+      no_home: 'No home workspace is set.',
+      signed_out: 'Your sign-in to Sales expired. Asked Sales only.',
+      no_model: 'The orchestrator model is not available in Sales. Asked Sales only.',
+      unreachable: 'The orchestrator model is not reachable. Asked Sales only.',
+    };
+    let n = 0;
+    for (const [state, text] of Object.entries(texts)) {
+      const r = routerRig({
+        orchestrator: { state: state as 'no_home' | 'signed_out' | 'no_model' | 'unreachable' },
+      });
+      await r.router.send(turn('finance churn'));
+      expect(r.log, state).toEqual(['close', `direct:finance churn:${text}`]);
+      expect(r.refreshes()).toBe(1);
+      n++;
+    }
+    expect(n).toBe(4);
   });
 
-  it('[R-8] [R-9] a plain question offers the chip; the click asks the agent with ask_others', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home, fin] });
-    const q = turn('What was revenue?');
-    expect(r.router.offerOthers(q, OP)).toEqual({
-      id: `agent-more:${OP}`,
-      label: 'Ask other workspaces too',
-    });
-    await r.router.askOthers(MOG, OP, 'ticket-9');
-    expect(r.log).toEqual([`rm:${OP}`, 'agent:ask_others:What was revenue?:ticket-9']);
-    // The chip works once.
-    await r.router.askOthers(MOG, OP, 'ticket-10');
-    expect(r.log).toHaveLength(2);
-  });
-
-  it('[R-9] a click for another MOG, or for an unknown request, does nothing', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home, fin] });
-    r.router.offerOthers(turn('Q?'), OP);
-    await r.router.askOthers('other-mog', OP, 't');
-    await r.router.askOthers(MOG, 'unknown', 't');
-    expect(r.log).toEqual([]);
-  });
-
-  it('[R-9] a refused click (no ticket) shows "Not sent." and nothing else', async () => {
-    const r = routerRig({ genieCode: ready, workspaces: [home, fin] });
-    r.router.offerOthers(turn('Q?'), OP);
-    const deps = r;
-    // Make the agent refuse.
-    const refusing = createAskRouter({
-      context: () => ({ genieCode: ready, workspaces: [home, fin] }),
-      names: () => ({ agent: 'Sales', home: 'Sales' }),
-      followUp: deps.followUp,
-      agent: { submit: () => Promise.reject({ error: 'ask_not_approved' }) },
-      direct: async () => undefined,
-      closeAgentCard: () => undefined,
-      removeChip: () => undefined,
-      note: (_m, t) => void deps.log.push(`note:${t}`),
-      refreshGenieCode: () => undefined,
-    });
-    refusing.offerOthers(turn('Q2?'), OP);
-    await refusing.askOthers(MOG, OP, undefined);
-    expect(deps.log).toEqual(['note:Not sent.']);
+  it('with no status read yet, the question goes direct', async () => {
+    const r = routerRig({ orchestrator: undefined });
+    await r.router.send(turn('revenue?'));
+    expect(r.log[0]).toBe('close');
+    expect(r.log[1]).toMatch(/^direct:revenue\?:/);
   });
 });

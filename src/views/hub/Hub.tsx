@@ -40,7 +40,9 @@ import { sttModelApi } from './sttModelApi';
 import { StoreNotice } from './StoreNotice';
 import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import type { HubOrchestratorView } from '../../shared/hub-orchestrator';
 import { useHubAgent } from './use-hub-agent';
+import { useHubOrchestrator } from './use-hub-orchestrator';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 import { useHubWorkspaces, WorkspaceSettings } from './WorkspaceSettings';
@@ -107,9 +109,11 @@ function SettingsArea({
   homeDomains,
   onChoose,
   agentBusy,
+  orchestrator,
 }: {
   hidden: boolean;
   agentBusy: boolean;
+  orchestrator: HubOrchestratorView | undefined;
   recording: HubRecording | undefined;
   workspaces: HubWorkspaceList | undefined;
   homeDomains: readonly MogViewState[];
@@ -125,6 +129,7 @@ function SettingsArea({
         homeDomains={homeDomains}
         onChoose={onChoose}
         agentBusy={agentBusy}
+        orchestrator={orchestrator}
       />
       <MicPreference />
       <DictationWords />
@@ -210,6 +215,7 @@ export function Hub() {
   const notice = useHubNotice();
   const workspaces = useHubWorkspaces();
   const agent = useHubAgent();
+  const orchestrator = useHubOrchestrator();
   const homeDomains = [...mogs.values()].filter((m) => m.homeDomain !== undefined);
   const hp = workspaces?.homePick;
   const pickKey = hp ? `${hp.suggested}|${hp.candidates.join(',')}` : '';
@@ -320,6 +326,7 @@ export function Hub() {
             homeDomains={homeDomains}
             onChoose={onChoose}
             agentBusy={agent?.live !== undefined || agent?.session.state === 'busy'}
+            orchestrator={orchestrator}
           />
           <ForgetDialogHost />
           {/* ADR 0117 (FLAG 5): the one-time home pick shows over every area while it is set. */}
