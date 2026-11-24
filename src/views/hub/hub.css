@@ -639,6 +639,12 @@
     border-top: 0;
   }
 
+  /* The Agent area is one reading column: its own hairline would double the header's. */
+  .hub [data-hub-view='agent'].hub-section {
+    padding-top: 0;
+    border-top: 0;
+  }
+
   /* "Connect a workspace" steps (first run in the setup region, or inline under the Settings
    row): the label sits above a full-width field, with the buttons in one row below it. */
   .hub [data-view='connect-workspace'] form,
@@ -748,7 +754,8 @@
   /* MOGs and Settings keep a comfortable reading width (ui-1); Conversations (`hub--wide`) is
    allowed the full window. */
   .hub [data-hub-view='mogs'],
-  .hub [data-hub-view='settings'] {
+  .hub [data-hub-view='settings'],
+  .hub [data-hub-view='agent'] {
     max-width: 616px;
   }
 

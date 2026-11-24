@@ -141,7 +141,10 @@ function AgentWorkspaceMenu({
                   data-agent-profile-item={r.profile}
                 >
                   <span className="flex flex-col">
-                    <span>{r.isHome ? `${r.name} (home)` : r.name}</span>
+                    <span>
+                      {r.name}
+                      {r.isHome && <span className="text-muted-foreground"> (home)</span>}
+                    </span>
                     {reason !== undefined && (
                       <span className="text-[var(--mog-text-xs)] text-muted-foreground">
                         {reason}

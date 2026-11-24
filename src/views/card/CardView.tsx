@@ -332,6 +332,7 @@ export function CardView({ mogId }: { mogId: MogId }) {
           mogId={mogId}
           turn={agentTurn}
           chips={card?.chips.filter(isAgentCardChip) ?? []}
+          queued={card?.chips.filter((c) => c.id.startsWith('agent-queued:')) ?? []}
           onSize={onSize}
           identity={identity}
         />

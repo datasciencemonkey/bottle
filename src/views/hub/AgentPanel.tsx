@@ -14,7 +14,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { XIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   asHubAgentView,
   HUB_AGENT_EVENT,
@@ -24,10 +24,9 @@ import {
 } from '../../shared/hub-agent';
 import type { AgentTurnView } from '../../shared/ipc';
 import { LINK_OPEN } from '../../shared/link-trust';
-import { TurnBody, WAITING_COPY, tokensText, useNow } from '../card/AgentTurnCard';
+import { TurnBody, WAITING_COPY, tokensText, turnHeadline, useNow } from '../card/AgentTurnCard';
 import { Button } from '../ui/button';
 import { askBrain, emitView } from '../view-ipc';
-import { genieCodeLine } from './AgentSettings';
 
 function send(action: AgentAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
@@ -72,20 +71,60 @@ const openLink = (url: string) =>
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-function headerText(v: HubAgentView): string {
+/** "Genie Code in sales · started 10:42 · 3 questions · 124k tokens". */
+function sessionText(v: HubAgentView): string {
   const t = v.live ?? v.waiting[0] ?? v.earlier[0];
   const ws = t?.agentWorkspace.name ?? v.session.agentProfile ?? 'your workspace';
   const parts = [`Genie Code in ${ws}`];
   if (v.session.startedAt !== undefined)
     parts.push(
-      `started ${new Date(v.session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      `started ${new Date(v.session.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
     );
   parts.push(plural(v.session.turns, 'question', 'questions'));
   if (v.session.tokens > 0) parts.push(tokensText(v.session.tokens));
   return parts.join(' · ');
 }
 
-function WaitingRow({ turn, onRemoved }: { turn: AgentTurnView; onRemoved: () => void }) {
+/** Why the agent cannot run, in one sentence, with where the question goes instead. */
+export function notReadyText(g: HubAgentView['genieCode']): string {
+  const home = 'your home workspace';
+  const tail = `Questions that name another workspace go to ${home} only.`;
+  switch (g.binary) {
+    case 'not_installed':
+      return `Genie Code is not installed. ${tail}`;
+    case 'installing':
+      return `Genie Code is still installing. ${tail}`;
+    case 'unsupported_os':
+      return `Genie Code is not available on this Mac yet. ${tail}`;
+    case 'wrong_version':
+      return `Genie Code is not the version that Bottle needs. ${tail}`;
+    case 'ready':
+      break;
+  }
+  switch (g.agentProfileState) {
+    case 'not_eligible':
+      return `Genie Code is not available in your agent workspace. ${tail}`;
+    case 'signed_out':
+      return `Your sign-in to your agent workspace expired. ${tail}`;
+    case 'no_home':
+      return `Choose a home workspace first. ${tail}`;
+    default:
+      return `Genie Code cannot run on this profile. ${tail}`;
+  }
+}
+
+/** One line of the answer of a turn, with no markdown marks. */
+function oneLine(t: AgentTurnView): string {
+  const md =
+    t.summary?.md ??
+    t.parts
+      .flatMap((p) => p.sections)
+      .find((s): s is Extract<typeof s, { id: 'answer' }> => s.id === 'answer')?.md ??
+    '';
+  return (md.split('\n').find((l) => l.trim() !== '') ?? '').replace(/[*_`#>|]/g, '').trim();
+}
+
+function WaitingRow({ turn }: { turn: AgentTurnView }) {
   return (
     <li className="agent-waiting" data-agent-waiting={turn.turnId}>
       <div className="agent-waiting-text">
@@ -101,9 +140,14 @@ function WaitingRow({ turn, onRemoved }: { turn: AgentTurnView; onRemoved: () =>
         className="size-7 shrink-0"
         data-agent-remove={turn.turnId}
         aria-label={`Remove from the queue: ${turn.question}`}
-        onClick={() => {
+        onClick={(e) => {
+          // The next row's button takes the focus, so the queue clears in a row from the keyboard.
+          const li = e.currentTarget.closest('li');
+          const near = li?.nextElementSibling ?? li?.previousElementSibling;
+          const target = near?.querySelector<HTMLElement>('[data-agent-remove]');
           send({ action: 'agent.remove_queued', turnId: turn.turnId });
-          onRemoved();
+          if (target) target.focus();
+          else (document.querySelector('[data-agent-session]') as HTMLElement | null)?.focus();
         }}
       >
         <XIcon className="size-4" aria-hidden="true" />
@@ -112,46 +156,98 @@ function WaitingRow({ turn, onRemoved }: { turn: AgentTurnView; onRemoved: () =>
   );
 }
 
+/** An earlier turn in the shape of an Activity row: the question, one line of the answer, the meta. */
+function EarlierRow({ turn, now }: { turn: AgentTurnView; now: number }) {
+  // A turn that needs the user stays open, with its action.
+  const [open, setOpen] = useState(turn.state === 'needs_you');
+  const bodyId = `agent-earlier-${turn.turnId}`;
+  const meta = [turnHeadline(turn), turn.tokens !== undefined ? tokensText(turn.tokens) : '']
+    .filter((m) => m !== '')
+    .join(' · ');
+  const line = oneLine(turn);
+  return (
+    <li data-agent-earlier={turn.turnId} data-state={turn.state} className="agent-earlier-row">
+      <button
+        type="button"
+        className="agent-earlier-head"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="agent-panel-q" title={turn.question}>
+          {turn.question}
+        </span>
+        {line !== '' && <span className="agent-earlier-line">{line}</span>}
+        <span className="agent-sub">{meta}</span>
+      </button>
+      <div id={bodyId} hidden={!open}>
+        {open && (
+          <TurnBody
+            turn={turn}
+            now={now}
+            showQuestion={false}
+            onOpenLink={openLink}
+            actions={
+              turn.state === 'needs_you' ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  data-agent-open-settings
+                  onClick={() => send({ action: 'agent.open_settings' })}
+                >
+                  Open Settings
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
+      </div>
+    </li>
+  );
+}
+
 export function AgentPanel({ view, active }: { view: HubAgentView | undefined; active: boolean }) {
-  const heading = useRef<HTMLHeadingElement>(null);
+  const sessionLine = useRef<HTMLParagraphElement>(null);
+  const [confirm, setConfirm] = useState(false);
   const counting = view?.live?.calls.some((c) => c.state === 'asking') ?? false;
   const now = useNow(active && counting);
-  // A removed or stopped row takes its button with it: the focus goes to the heading.
-  const toHeading = useCallback(() => requestAnimationFrame(() => heading.current?.focus()), []);
+  const toSession = useCallback(
+    () => requestAnimationFrame(() => sessionLine.current?.focus()),
+    [],
+  );
   const notice = view?.notice;
-  const g = view
-    ? genieCodeLine(view.genieCode, view.session.agentProfile ?? 'your workspace')
-    : undefined;
   const ready = view?.genieCode.binary === 'ready' && view.genieCode.agentProfileState === 'ready';
   const hasSession = view !== undefined && view.session.state !== 'none';
   const hasContent =
     view !== undefined &&
     (view.live !== undefined || view.waiting.length > 0 || view.earlier.length > 0);
+  // New session stops a live question and clears the list: it asks first.
+  const needsConfirm = view?.live !== undefined || (view?.waiting.length ?? 0) > 0;
+  const newSession = () => {
+    send({ action: 'agent.new_session' });
+    setConfirm(false);
+    toSession();
+  };
   return (
-    <section
-      data-hub-view="agent"
-      aria-labelledby="agent-title"
-      hidden={!active}
-      className="hub-section"
-    >
-      <div className="flex items-center justify-between gap-[var(--mog-space-3)]">
-        <h2 id="agent-title" ref={heading} tabIndex={-1} data-agent-header className="m-0">
-          {view === undefined ? 'Agent' : hasSession || hasContent ? headerText(view) : 'Agent'}
-        </h2>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-agent-new-session
-          disabled={!hasSession}
-          onClick={() => {
-            send({ action: 'agent.new_session' });
-            toHeading();
-          }}
-        >
-          New session
-        </Button>
-      </div>
+    <section data-hub-view="agent" aria-label="Agent" hidden={!active} className="hub-section">
+      {view !== undefined && (hasSession || hasContent) && (
+        <div className="agent-session-row">
+          <p ref={sessionLine} tabIndex={-1} data-agent-session className="agent-session">
+            {hasSession || hasContent ? sessionText(view) : ''}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-agent-new-session
+            aria-expanded={confirm}
+            onClick={() => (needsConfirm ? setConfirm(true) : newSession())}
+          >
+            New session
+          </Button>
+        </div>
+      )}
+      {confirm && <NewSessionConfirm onConfirm={newSession} onCancel={() => setConfirm(false)} />}
       <p
         role="status"
         aria-live="polite"
@@ -171,19 +267,26 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
         </p>
       )}
       {view !== undefined && !hasSession && !hasContent && (
-        <div data-agent-empty className="hub-muted">
-          <p className="m-0">{ready ? NO_SESSION_COPY : (g?.text ?? '')}</p>
-          {!ready && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-[var(--mog-space-2)]"
-              data-agent-open-settings
-              onClick={() => send({ action: 'agent.open_settings' })}
-            >
-              Open Settings
-            </Button>
+        <div data-agent-empty className="agent-empty">
+          {ready ? (
+            <>
+              <p className="agent-empty-title">No session yet</p>
+              <p className="hub-muted m-0">{NO_SESSION_COPY}</p>
+            </>
+          ) : (
+            <>
+              <p className="hub-muted m-0">{notReadyText(view.genieCode)}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-[var(--mog-space-2)]"
+                data-agent-open-settings
+                onClick={() => send({ action: 'agent.open_settings' })}
+              >
+                Open Settings
+              </Button>
+            </>
           )}
         </div>
       )}
@@ -197,6 +300,7 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
             now={now}
             showQuestion={false}
             onOpenLink={openLink}
+            live
             actions={
               <Button
                 type="button"
@@ -206,7 +310,7 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
                 aria-label={`Stop: ${view.live.question}`}
                 onClick={() => {
                   send({ action: 'agent.stop', turnId: (view.live as AgentTurnView).turnId });
-                  toHeading();
+                  toSession();
                 }}
               >
                 Stop
@@ -220,7 +324,7 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
           <h3 className="agent-panel-label">Waiting</h3>
           <ul className="agent-waiting-list" aria-label="Waiting questions">
             {view.waiting.map((t) => (
-              <WaitingRow key={t.turnId} turn={t} onRemoved={toHeading} />
+              <WaitingRow key={t.turnId} turn={t} />
             ))}
           </ul>
         </section>
@@ -230,16 +334,50 @@ export function AgentPanel({ view, active }: { view: HubAgentView | undefined; a
           <h3 className="agent-panel-label">Earlier</h3>
           <ul className="agent-earlier" aria-label="Earlier questions">
             {view.earlier.map((t) => (
-              <li key={t.turnId} data-agent-earlier={t.turnId} className="agent-earlier-row">
-                <h4 className="agent-panel-q" title={t.question}>
-                  {t.question}
-                </h4>
-                <TurnBody turn={t} now={now} showQuestion={false} onOpenLink={openLink} />
-              </li>
+              <EarlierRow key={t.turnId} turn={t} now={now} />
             ))}
           </ul>
         </section>
       )}
     </section>
+  );
+}
+
+function NewSessionConfirm({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const id = useId();
+  const cancel = useRef<HTMLButtonElement>(null);
+  // The safe choice has the focus when the question opens.
+  useEffect(() => cancel.current?.focus(), []);
+  return (
+    <div
+      role="group"
+      aria-labelledby={id}
+      data-agent-new-session-confirm
+      className="agent-confirm"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+    >
+      <p id={id} className="m-0">
+        Start a new session? The live question stops and this list clears.
+      </p>
+      <div className="flex gap-[var(--mog-space-2)]">
+        <Button type="button" size="sm" data-confirm-new-session onClick={onConfirm}>
+          New session
+        </Button>
+        <Button ref={cancel} type="button" size="sm" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }

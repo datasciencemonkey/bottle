@@ -85,23 +85,27 @@ afterEach(() => {
 });
 
 describe('AgentPanel', () => {
-  it('[2a.1] no session: the fixed line, and New session is disabled', async () => {
+  it('[2a.1] no session: the fixed line under a title, no second heading and no New session', async () => {
     const { el } = await render(<AgentPanel view={view()} active />);
-    expect(el.querySelector('[data-agent-empty]')?.textContent).toBe(NO_SESSION_COPY);
-    expect(el.querySelector<HTMLButtonElement>('[data-agent-new-session]')?.disabled).toBe(true);
+    expect(el.querySelector('[data-agent-empty]')?.textContent).toContain(NO_SESSION_COPY);
+    expect(el.querySelector('.agent-empty-title')?.textContent).toBe('No session yet');
+    expect(el.querySelector('h2')).toBeNull();
+    expect(el.querySelector('[data-agent-new-session]')).toBeNull();
   });
 
   it('with Genie Code missing the empty state says why and offers Settings', async () => {
     const v = view({ genieCode: { ...READY, binary: 'not_installed' } });
     const { el } = await render(<AgentPanel view={v} active />);
-    expect(el.querySelector('[data-agent-empty]')?.textContent).toContain('Not installed');
+    expect(el.querySelector('[data-agent-empty] p')?.textContent).toBe(
+      'Genie Code is not installed. Questions that name another workspace go to your home workspace only.',
+    );
     await click(el.querySelector('[data-agent-open-settings]'));
     expect(actions()).toEqual([{ action: 'agent.open_settings' }]);
   });
 
   it('shows the header with the workspace, the count and the tokens', async () => {
     const { el } = await render(<AgentPanel view={busy} active />);
-    const h = text(el.querySelector('[data-agent-header]') as HTMLElement);
+    const h = text(el.querySelector('[data-agent-session]') as HTMLElement);
     expect(h).toContain('Genie Code in Sales · started ');
     expect(h).toContain('3 questions · 124k tokens');
   });
@@ -147,17 +151,59 @@ describe('AgentPanel', () => {
     const { el } = await render(<AgentPanel view={busy} active />);
     const rows = [...el.querySelectorAll('[data-agent-earlier]')];
     expect(rows.map((r) => r.getAttribute('data-agent-earlier'))).toEqual([T('e'), T('f')]);
+    // [P1-6] Each row is collapsed: the question, one line of the answer, the meta.
+    const head = rows[0]?.querySelector<HTMLButtonElement>('.agent-earlier-head');
+    expect(head?.getAttribute('aria-expanded')).toBe('false');
+    expect(head?.textContent).toContain('Finance is higher.');
+    expect(head?.textContent).toContain('41k tokens');
+    expect(rows[0]?.querySelector('[data-agent-note]')).toBeNull();
+    await click(head);
+    expect(head?.getAttribute('aria-expanded')).toBe('true');
     expect(rows[0]?.textContent).toContain('Note from your MOG');
-    expect(rows[0]?.textContent).toContain('41k tokens');
     expect(rows[0]?.querySelector('[data-agent-stop]')).toBeNull();
+    // No earlier row is a live region.
+    expect(rows[0]?.querySelector('[aria-live]')).toBeNull();
   });
 
-  it('New session sends its action and puts the focus on the heading', async () => {
+  it('[P2-16] New session asks first while a question runs, and Cancel has the focus', async () => {
     const { el } = await render(<AgentPanel view={busy} active />);
+    await click(el.querySelector('[data-agent-new-session]'));
+    expect(actions()).toEqual([]);
+    const confirm = el.querySelector('[data-agent-new-session-confirm]');
+    expect(confirm?.getAttribute('role')).toBe('group');
+    expect(document.activeElement?.textContent).toBe('Cancel');
+    await click(el.querySelector('[data-confirm-new-session]'));
+    expect(actions()).toEqual([{ action: 'agent.new_session' }]);
+  });
+
+  it("[P2-15] removing a row puts the focus on the next row's button", async () => {
+    const { el } = await render(<AgentPanel view={busy} active />);
+    await click(el.querySelector(`[data-agent-remove="${T('b')}"]`));
+    expect(document.activeElement).toBe(el.querySelector(`[data-agent-remove="${T('c')}"]`));
+  });
+
+  it('[P2-11] only the live turn is a live region', async () => {
+    const { el } = await render(<AgentPanel view={busy} active />);
+    expect(el.querySelectorAll('[aria-live="polite"][data-agent-headline]')).toHaveLength(1);
+  });
+
+  it('[P0-3] a needs_you turn stays open with Open Settings', async () => {
+    const v = view({
+      ...busy,
+      earlier: [turn('n', { state: 'needs_you', notice: 'Your sign-in expired.' })],
+    });
+    const { el } = await render(<AgentPanel view={v} active />);
+    await click(el.querySelector('[data-agent-earlier] [data-agent-open-settings]'));
+    expect(actions()).toEqual([{ action: 'agent.open_settings' }]);
+  });
+
+  it('New session with only earlier turns sends its action at once and focuses the session line', async () => {
+    const v = view({ session: busy.session, earlier: busy.earlier });
+    const { el } = await render(<AgentPanel view={v} active />);
     await click(el.querySelector('[data-agent-new-session]'));
     expect(actions()).toEqual([{ action: 'agent.new_session' }]);
     await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
-    expect(document.activeElement).toBe(el.querySelector('[data-agent-header]'));
+    expect(document.activeElement).toBe(el.querySelector('[data-agent-session]'));
   });
 
   it('the controls are real buttons with names (keyboard and aria)', async () => {
@@ -168,7 +214,7 @@ describe('AgentPanel', () => {
       expect(b.tagName).toBe('BUTTON');
       expect((b.getAttribute('aria-label') ?? b.textContent ?? '').trim()).not.toBe('');
     }
-    expect(el.querySelector('[data-agent-header]')?.getAttribute('tabindex')).toBe('-1');
+    expect(el.querySelector('[data-agent-session]')?.getAttribute('tabindex')).toBe('-1');
   });
 
   it('an error notice is an alert and an info notice is a polite status', async () => {

@@ -15,7 +15,9 @@
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CARD_DONE } from '../../shared/genie-status';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import type {
   AgentCallView,
@@ -40,6 +42,8 @@ export const FROM_EARLIER_COPY = 'From an earlier answer';
 export const NOT_SHOWN_COPY = 'Not shown to the agent';
 /** A finished card fades after this time with no pointer or focus on it. */
 export const DONE_SHOW_MS = 20_000;
+/** The fade of a finished card (the same 300 ms as the direct card). */
+export const FADE_MS = 300;
 
 export const isLiveState = (s: AgentTurnView['state']): boolean =>
   s === 'planning' || s === 'running' || s === 'slow';
@@ -61,7 +65,13 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 /** The workspaces that a turn asked, once each. */
 const askedNames = (t: AgentTurnView) => [...new Set(t.calls.map((c) => c.workspace.name))];
 
-/** The header line of a turn. */
+/** "sales and finance", "sales, finance +1". */
+function nameList(names: string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
+
+/** The header line of a turn. The reason of an end is the `notice`, not this line. */
 export function turnHeadline(t: AgentTurnView): string {
   const asked = askedNames(t).length;
   const calls = `${t.used} of ${t.budget} Genie calls`;
@@ -75,18 +85,26 @@ export function turnHeadline(t: AgentTurnView): string {
       return asked === 0
         ? `Planning with Genie Code in ${t.agentWorkspace.name}…`
         : `Asking ${plural(asked, 'workspace', 'workspaces')} · ${calls}`;
-    case 'done':
-      return asked === 0
-        ? `Answered by Genie Code in ${t.agentWorkspace.name}`
-        : `Asked ${plural(asked, 'workspace', 'workspaces')} · ${plural(t.used, 'Genie call', 'Genie calls')}`;
+    case 'done': {
+      const ready = t.calls.filter((c) => c.state === 'ready');
+      if (t.calls.length === 0) return `Answered by Genie Code in ${t.agentWorkspace.name}`;
+      const count =
+        ready.length < t.calls.length
+          ? `${ready.length} of ${t.calls.length} answered`
+          : plural(t.calls.length, 'Genie call', 'Genie calls');
+      const names = [...new Set(ready.map((c) => c.workspace.name))];
+      return names.length === 0
+        ? `No answers · ${count}`
+        : `Answered from ${nameList(names)} · ${count}`;
+    }
     case 'stopped':
       return 'Stopped';
     case 'timed_out':
-      return 'The agent timed out.';
+      return 'Timed out';
     case 'offline':
-      return 'Offline.';
+      return 'Offline';
     case 'failed':
-      return 'The agent could not finish.';
+      return 'Could not finish';
     case 'needs_you':
       return 'Needs you';
   }
@@ -279,12 +297,64 @@ export interface TurnBodyProps {
   showQuestion?: boolean;
   /** Controls that go in the footer row (the card chips, or the panel's Stop). */
   actions?: ReactNode;
+  /** The headline is a live region. Only the live turn (and the card) sets it. */
+  live?: boolean;
+  /** The caller draws the footer itself (the card keeps it outside its scroll region). */
+  footerOutside?: boolean;
+}
+
+/** The footer of a turn: the planner and the tokens, then the controls. */
+export function TurnFooter({ turn, actions }: { turn: AgentTurnView; actions?: ReactNode }) {
+  const footer = footerText(turn);
+  if (footer === undefined && !actions) return null;
+  return (
+    <footer className="agent-foot">
+      {footer !== undefined && (
+        <span className="agent-foot-text" data-agent-footer>
+          {footer}
+        </span>
+      )}
+      {actions}
+    </footer>
+  );
+}
+
+/** The call rows of a turn that ended sit behind one toggle: the answer comes before the process. */
+function CallsOf({ turn, now }: { turn: AgentTurnView; now: number }) {
+  const [open, setOpen] = useState(false);
+  const id = `agent-calls-${turn.turnId}`;
+  if (isOpenState(turn.state) || turn.state === 'needs_you' || turn.calls.length === 0)
+    return <CallRows calls={turn.calls} now={now} />;
+  return (
+    <>
+      <button
+        type="button"
+        className="genie-toggle agent-fold"
+        aria-expanded={open}
+        aria-controls={id}
+        data-action="calls"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {`${open ? 'Hide' : 'Show'} ${plural(turn.calls.length, 'Genie call', 'Genie calls')}`}
+      </button>
+      <div id={id} hidden={!open}>
+        <CallRows calls={turn.calls} now={now} />
+      </div>
+    </>
+  );
 }
 
 /** The body of a turn, the same in the card and in the hub panel. */
-export function TurnBody({ turn, now, onOpenLink, showQuestion = true, actions }: TurnBodyProps) {
+export function TurnBody({
+  turn,
+  now,
+  onOpenLink,
+  showQuestion = true,
+  actions,
+  live = false,
+  footerOutside = false,
+}: TurnBodyProps) {
   const queued = turn.state === 'queued';
-  const footer = footerText(turn);
   return (
     <div className="agent-turn" data-agent-turn={turn.turnId} data-state={turn.state}>
       {showQuestion && (
@@ -292,7 +362,11 @@ export function TurnBody({ turn, now, onOpenLink, showQuestion = true, actions }
           {turn.question}
         </p>
       )}
-      <p className="agent-headline" data-agent-headline role="status" aria-live="polite">
+      <p
+        className="agent-headline"
+        data-agent-headline
+        {...(live ? { role: 'status', 'aria-live': 'polite' as const } : {})}
+      >
         {queued && <span className="agent-pill">{QUEUED_LABEL}</span>}
         {queued ? <span className="agent-sub">{WAITING_COPY}</span> : turnHeadline(turn)}
         {turn.state === 'slow' && <span className="agent-slow">{SLOW_COPY}</span>}
@@ -302,7 +376,7 @@ export function TurnBody({ turn, now, onOpenLink, showQuestion = true, actions }
           {turn.notice}
         </p>
       )}
-      <CallRows calls={turn.calls} now={now} />
+      <CallsOf turn={turn} now={now} />
       {turn.summary && (
         <div className="agent-note" data-agent-note>
           <p className="agent-note-label">{NOTE_LABEL}</p>
@@ -316,16 +390,7 @@ export function TurnBody({ turn, now, onOpenLink, showQuestion = true, actions }
         </div>
       )}
       <TurnParts turn={turn} onOpenLink={onOpenLink} />
-      {(footer !== undefined || actions !== undefined) && (
-        <footer className="agent-foot">
-          {footer !== undefined && (
-            <span className="agent-foot-text" data-agent-footer>
-              {footer}
-            </span>
-          )}
-          {actions}
-        </footer>
-      )}
+      {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
     </div>
   );
 }
@@ -333,20 +398,57 @@ export function TurnBody({ turn, now, onOpenLink, showQuestion = true, actions }
 export interface AgentTurnCardProps {
   mogId: MogId;
   turn: AgentTurnView;
-  /** The chips of the compact card: Stop (or Remove), Open in Agent. */
+  /** The chips of the compact card: Stop (or Remove), Open Settings, Open in Agent. */
   chips: { id: string; label: string }[];
+  /** The turns that wait under the live one: `agent-queued:<turnId>` chips, the label is the question. */
+  queued?: { id: string; label: string }[];
   /** The final height of the card with its frame, so the window can fit it (`fit-window.ts`). */
   onSize?: ((px: number) => Promise<void> | void) | undefined;
   identity?: { name: string; colorVariant?: string } | undefined;
 }
 
+/** Listen to one brain event sent to this window only (ARC-5). `fn` must be stable. */
+function useWindowEvent(name: string, fn: (payload: unknown) => void) {
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(name, (e) => fn(e.payload), { target: getCurrentWindow().label }).then(
+      (u) => {
+        if (gone) u();
+        else off = u;
+      },
+    );
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [name, fn]);
+}
+
+const chipClass = (c: { id: string; label: string }, turn: AgentTurnView) =>
+  // One main action: Stop on a live turn, Open Settings on a turn that needs the user.
+  (c.id.startsWith('agent-stop:') && c.label === 'Stop') ||
+  (c.id.startsWith('agent-settings:') && turn.state === 'needs_you')
+    ? 'popup-action'
+    : 'genie-toggle';
+
 /** The card of an agent turn. It never takes focus (ADR 0102). */
-export function AgentTurnCard({ mogId, turn, chips, onSize, identity }: AgentTurnCardProps) {
+export function AgentTurnCard({
+  mogId,
+  turn,
+  chips,
+  queued = [],
+  onSize,
+  identity,
+}: AgentTurnCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const open = isOpenState(turn.state);
+  // A card that asks the user for something never fades by itself.
+  const sticky = turn.state === 'needs_you';
   const counting = turn.calls.some((c) => c.state === 'asking');
   const now = useNow(counting);
   const accent = identity && paletteColorOf(identity.colorVariant, mogId).hex;
+  const [vis, setVis] = useState<'shown' | 'fading'>('shown');
 
   const openLink = useCallback(
     (url: string) =>
@@ -365,24 +467,63 @@ export function AgentTurnCard({ mogId, turn, chips, onSize, identity }: AgentTur
     void onSize(frame ? frame.getBoundingClientRect().height : 0);
   });
 
-  // A finished card fades away after a while, unless the pointer or the keyboard is on it.
-  const held = useRef(false);
+  // A finished card fades (300 ms) after 20 s, unless the pointer, the keyboard or the MOG holds it.
+  // After a hold it stays at least 2.5 s more.
+  const holds = useRef({ pointer: false, focus: false, mog: false });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const arm = useCallback(() => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      if (!held.current) done();
-    }, DONE_SHOW_MS);
-  }, [done]);
+  const arm = useCallback(
+    (ms: number) => {
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        setVis('fading');
+        timer.current = setTimeout(done, FADE_MS);
+      }, ms);
+    },
+    [done],
+  );
   useEffect(() => {
     clearTimeout(timer.current);
-    if (!open) arm();
+    const h = holds.current;
+    if (!open && !sticky && !h.pointer && !h.focus && !h.mog) arm(DONE_SHOW_MS);
     return () => clearTimeout(timer.current);
-  }, [open, arm, turn.turnId, turn.state]);
-  const hold = (on: boolean) => {
-    held.current = on;
-    if (!on && !open) arm();
-  };
+  }, [open, sticky, arm, turn.turnId, turn.state]);
+  const hold = useCallback(
+    (via: 'pointer' | 'focus' | 'mog', on: boolean) => {
+      const h = holds.current;
+      h[via] = on;
+      if (h.pointer || h.focus || h.mog) {
+        clearTimeout(timer.current);
+        setVis('shown');
+      } else if (!open && !sticky) arm(AFTER_HOVER_MS);
+    },
+    [open, sticky, arm],
+  );
+  const onMogHover = useCallback(
+    (p: unknown) => {
+      const on = typeof p === 'object' && p !== null && (p as { on?: unknown }).on;
+      if (typeof on === 'boolean') hold('mog', on);
+    },
+    [hold],
+  );
+  useWindowEvent(CARD_MOG_HOVER_EVENT, onMogHover);
+
+  const chipButtons = (
+    <span className="agent-actions">
+      {chips.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          className={chipClass(c, turn)}
+          data-chip={c.id}
+          onClick={() =>
+            void emitView(mogId, 'chip_click', { chipId: c.id }).catch(() => undefined)
+          }
+        >
+          {c.label}
+        </button>
+      ))}
+    </span>
+  );
 
   return (
     <div
@@ -390,11 +531,12 @@ export function AgentTurnCard({ mogId, turn, chips, onSize, identity }: AgentTur
       className="genie genie-answer agent-card"
       data-genie="agent"
       data-agent-card={turn.state}
+      data-state={open || sticky ? 'shown' : vis}
       style={accent ? ({ '--mog-id-color': accent } as CSSProperties) : undefined}
-      onMouseEnter={() => hold(true)}
-      onMouseLeave={() => hold(false)}
-      onFocus={() => hold(true)}
-      onBlur={() => hold(false)}
+      onMouseEnter={() => hold('pointer', true)}
+      onMouseLeave={() => hold('pointer', false)}
+      onFocus={() => hold('focus', true)}
+      onBlur={() => hold('focus', false)}
     >
       {identity && (
         <span className="genie-identity">
@@ -414,30 +556,39 @@ export function AgentTurnCard({ mogId, turn, chips, onSize, identity }: AgentTur
         </svg>
       </button>
       <div className="agent-card-body" tabIndex={0} aria-label="Agent turn">
-        <TurnBody
-          turn={turn}
-          now={now}
-          onOpenLink={openLink}
-          actions={
-            chips.length > 0 && (
-              <span className="agent-actions">
-                {chips.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={c.id.startsWith('agent-stop:') ? 'popup-action' : 'genie-toggle'}
-                    data-chip={c.id}
-                    onClick={() =>
-                      void emitView(mogId, 'chip_click', { chipId: c.id }).catch(() => undefined)
-                    }
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </span>
-            )
-          }
-        />
+        <TurnBody turn={turn} now={now} onOpenLink={openLink} live footerOutside />
+      </div>
+      {queued.length > 0 && (
+        <ul className="agent-queued" aria-label="Waiting questions">
+          {queued.map((q) => {
+            const turnId = q.id.slice('agent-queued:'.length);
+            return (
+              <li key={q.id} className="agent-queued-row" data-agent-queued={turnId}>
+                <span className="agent-pill">{QUEUED_LABEL}</span>
+                <span className="agent-waiting-q" title={q.label}>
+                  {q.label}
+                </span>
+                <span className="agent-sub">{WAITING_COPY}</span>
+                <button
+                  type="button"
+                  className="genie-toggle agent-x"
+                  data-chip={`agent-stop:${turnId}`}
+                  aria-label={`Remove from the queue: ${q.label}`}
+                  onClick={() =>
+                    void emitView(mogId, 'chip_click', { chipId: `agent-stop:${turnId}` }).catch(
+                      () => undefined,
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="agent-card-foot">
+        <TurnFooter turn={turn} actions={chipButtons} />
       </div>
     </div>
   );

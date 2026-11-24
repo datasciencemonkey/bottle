@@ -60,8 +60,22 @@ describe('agent turn text', () => {
       'Planning with Genie Code in Sales…',
     );
     expect(turnHeadline(view())).toBe('Asking 2 workspaces · 3 of 10 Genie calls');
-    expect(turnHeadline(view({ state: 'done' }))).toBe('Asked 2 workspaces · 3 Genie calls');
-    expect(turnHeadline(view({ state: 'timed_out' }))).toBe('The agent timed out.');
+    expect(turnHeadline(view({ state: 'done' }))).toBe('Answered from Sales · 1 of 2 answered');
+    const both = view({
+      state: 'done',
+      calls: view().calls.map((c) => ({ ...c, state: 'ready' as const })),
+    });
+    expect(turnHeadline(both)).toBe('Answered from Sales and Finance · 2 Genie calls');
+    const first = both.calls[0];
+    if (!first) throw new Error('no call');
+    const more = ['Ops', 'EU'].map((name, n) => ({
+      ...first,
+      callId: `c-0000000${n + 3}`,
+      workspace: { name, colorVariant: 'teal' },
+    }));
+    const three = { ...both, calls: [...both.calls, ...more] };
+    expect(turnHeadline(three)).toBe('Answered from Sales, Finance +2 · 4 Genie calls');
+    expect(turnHeadline(view({ state: 'timed_out' }))).toBe('Timed out');
     expect(tokensText(41_200)).toBe('41k tokens');
     expect(tokensText(850)).toBe('850 tokens');
     expect(clock(12_000)).toBe('0:12');
@@ -142,7 +156,7 @@ describe('AgentTurnCard', () => {
     expect(fold?.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('Close sends card_done; a finished card fades after 20 s, and a hold stops that', async () => {
+  it('[P1-7] a finished card fades for 300 ms after 20 s, then closes; Close closes at once', async () => {
     vi.useFakeTimers();
     const { el } = await render(
       <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={[]} />,
@@ -151,7 +165,13 @@ describe('AgentTurnCard', () => {
       inputEmits().filter(
         (e) => (e as { payload?: { target?: string } }).payload?.target === 'card_done',
       );
+    const frame = () => el.querySelector('[data-agent-card]')?.getAttribute('data-state');
     await act(async () => void vi.advanceTimersByTime(19_999));
+    expect(frame()).toBe('shown');
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(frame()).toBe('fading');
+    expect(closes()).toHaveLength(0);
+    await act(async () => void vi.advanceTimersByTime(299));
     expect(closes()).toHaveLength(0);
     await act(async () => void vi.advanceTimersByTime(1));
     expect(closes()).toHaveLength(1);
@@ -159,6 +179,118 @@ describe('AgentTurnCard', () => {
     expect(close?.getAttribute('aria-label')).toBe('Close');
     await click(close);
     expect(closes()).toHaveLength(2);
+  });
+
+  it('[P1-7] a pointer on the card holds it, and after the leave it stays 2.5 s', async () => {
+    vi.useFakeTimers();
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={[]} />,
+    );
+    const card = el.querySelector('[data-agent-card]') as HTMLElement;
+    const closes = () =>
+      inputEmits().filter(
+        (e) => (e as { payload?: { target?: string } }).payload?.target === 'card_done',
+      );
+    await act(async () => void card.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    await act(async () => void vi.advanceTimersByTime(60_000));
+    expect(closes()).toHaveLength(0);
+    await act(async () => void card.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    await act(async () => void vi.advanceTimersByTime(2_499));
+    expect(card.getAttribute('data-state')).toBe('shown');
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(card.getAttribute('data-state')).toBe('fading');
+  });
+
+  it('[P1-7] a needs_you card never fades, and Open Settings is its main action', async () => {
+    vi.useFakeTimers();
+    const { el } = await render(
+      <AgentTurnCard
+        mogId={MOG}
+        turn={view({ state: 'needs_you', notice: 'Your sign-in expired.' })}
+        chips={[
+          { id: `agent-settings:${T}`, label: 'Open Settings' },
+          { id: `agent-open:${T}`, label: 'Open in Agent' },
+        ]}
+      />,
+    );
+    await act(async () => void vi.advanceTimersByTime(120_000));
+    expect(inputEmits()).toEqual([]);
+    expect(el.querySelector(`[data-chip="agent-settings:${T}"]`)?.className).toContain(
+      'popup-action',
+    );
+    expect(el.querySelector(`[data-chip="agent-open:${T}"]`)?.className).not.toContain(
+      'popup-action',
+    );
+  });
+
+  it('[P0-1] the footer and the actions sit outside the scroll region', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ tokens: 41_000 })} chips={chips} />,
+    );
+    const body = el.querySelector('.agent-card-body') as HTMLElement;
+    expect(body.querySelector('[data-chip], .agent-foot')).toBeNull();
+    expect(el.querySelector('.agent-card-foot [data-chip="agent-open:' + T + '"]')).not.toBeNull();
+  });
+
+  it('[P0-2] waiting turns are compact rows under the live one, each with a Remove ×', async () => {
+    const q = [{ id: `agent-queued:${'b'.repeat(32)}`, label: 'Later?' }];
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view()} chips={chips} queued={q} />,
+    );
+    const row = el.querySelector(`[data-agent-queued="${'b'.repeat(32)}"]`);
+    expect(row?.textContent).toContain('Queued');
+    expect(row?.textContent).toContain('Sends when the answer above lands');
+    await click(row?.querySelector('button') ?? null);
+    expect(inputEmits()).toContainEqual({
+      mogId: MOG,
+      kind: 'chip_click',
+      payload: { chipId: `agent-stop:${'b'.repeat(32)}` },
+    });
+  });
+
+  it('[P2-12] Remove is a quiet toggle and Stop is the one main button', async () => {
+    const stop = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
+    expect(stop.el.querySelector(`[data-chip="agent-stop:${T}"]`)?.className).toContain(
+      'popup-action',
+    );
+    const rem = await render(
+      <AgentTurnCard
+        mogId={MOG}
+        turn={view({ state: 'queued', calls: [] })}
+        chips={[{ id: `agent-stop:${T}`, label: 'Remove' }]}
+      />,
+    );
+    expect(rem.el.querySelector(`[data-chip="agent-stop:${T}"]`)?.className).not.toContain(
+      'popup-action',
+    );
+  });
+
+  it('[P1-6] the call rows of a finished turn sit behind one toggle', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={chips} />,
+    );
+    const t = el.querySelector<HTMLButtonElement>('[data-action="calls"]');
+    expect(t?.textContent).toBe('Show 2 Genie calls');
+    expect(t?.getAttribute('aria-expanded')).toBe('false');
+    expect((el.querySelector('#' + t?.getAttribute('aria-controls')) as HTMLElement).hidden).toBe(
+      true,
+    );
+    await click(t);
+    expect(t?.textContent).toBe('Hide 2 Genie calls');
+  });
+
+  it('[P2-10] an ended turn shows a short state word, and the reason once', async () => {
+    const { el } = await render(
+      <AgentTurnCard
+        mogId={MOG}
+        turn={view({ state: 'timed_out', notice: 'The agent timed out. Asked Sales only.' })}
+        chips={chips}
+      />,
+    );
+    expect(el.querySelector('[data-agent-headline]')?.textContent).toBe('Timed out');
+    expect(el.querySelector('[data-agent-notice]')?.textContent).toBe(
+      'The agent timed out. Asked Sales only.',
+    );
   });
 
   it('a running card never fades', async () => {

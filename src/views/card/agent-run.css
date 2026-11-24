@@ -23,6 +23,33 @@
   box-shadow: var(--mog-focus-ring);
 }
 
+.agent-card-foot {
+  flex: none;
+  padding-top: var(--mog-space-2);
+}
+
+/* The turns that wait sit as compact rows under the live one. */
+.agent-queued {
+  flex: none;
+  margin: var(--mog-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-queued-row {
+  display: flex;
+  align-items: center;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  padding: var(--mog-space-1) 0;
+  font-size: var(--mog-text-xs);
+}
+
+.agent-queued-row .agent-waiting-q {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .agent-turn {
   display: flex;
   flex-direction: column;
@@ -70,6 +97,13 @@
   font-size: var(--mog-text-xs);
 }
 
+/* The workspace colour is lifted toward white so it keeps 3:1 on the raised surface. */
+.agent-call,
+.agent-part,
+.agent-chip {
+  --agent-ws-stripe: color-mix(in srgb, var(--agent-ws-color) 65%, white);
+}
+
 /* One row for each Genie call: a stripe in the colour of its workspace, the chip, the question on
    one line and the state. */
 .agent-calls,
@@ -92,7 +126,7 @@
   align-items: center;
   gap: var(--mog-space-2);
   padding: var(--mog-space-1) var(--mog-space-2);
-  border-left: 3px solid var(--agent-ws-color, var(--mog-edge));
+  border-left: 3px solid var(--agent-ws-stripe, var(--mog-edge));
   border-radius: var(--mog-radius-sm);
   background: var(--mog-surface-raised);
 }
@@ -110,13 +144,20 @@
   white-space: nowrap;
 }
 
-/* Needs you is the one amber state (UX proposal 2.1): it asks the user for something. */
-.agent-call[data-state='needs_you'] .agent-call-state {
-  color: var(--mog-note-text);
+/* Needs you is the one amber state (UX proposal 2.1): it asks the user for something. The gold
+   spark token is amber; the note tokens (blue-grey) belong to "Note from your MOG". */
+.agent-call[data-state='needs_you'] {
+  border-left-color: var(--mog-spark);
+  background: rgb(246 196 99 / 10%);
 }
 
-.agent-call[data-state='needs_you'] {
-  background: var(--mog-note-bg);
+.agent-call[data-state='needs_you'] .agent-call-state {
+  color: var(--mog-spark);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-turn[data-state='needs_you'] .agent-headline {
+  color: var(--mog-spark);
 }
 
 .agent-call[data-state='failed'] .agent-call-state,
@@ -143,7 +184,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--agent-ws-color, var(--mog-text-muted));
+  background: var(--agent-ws-stripe, var(--mog-text-muted));
 }
 
 .agent-note {
@@ -168,6 +209,29 @@
   font-size: var(--mog-text-sm);
 }
 
+.agent-note-body p,
+.agent-note-body ul,
+.agent-note-body ol,
+.agent-note-body pre,
+.agent-part-body p,
+.agent-part-body ul,
+.agent-part-body ol,
+.agent-part-body pre {
+  margin: 0 0 6px;
+}
+
+.agent-note-body > :last-child,
+.agent-part-body > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-note-body ul,
+.agent-note-body ol,
+.agent-part-body ul,
+.agent-part-body ol {
+  padding-left: 18px;
+}
+
 .agent-parts {
   display: flex;
   flex-direction: column;
@@ -180,7 +244,7 @@
   gap: var(--mog-space-1);
   min-width: 0;
   padding-left: var(--mog-space-3);
-  border-left: 3px solid var(--agent-ws-color, var(--mog-edge));
+  border-left: 3px solid var(--agent-ws-stripe, var(--mog-edge));
 }
 
 .agent-part-head {
@@ -211,8 +275,37 @@
 }
 
 .agent-fold,
-.agent-databricks {
+.agent-databricks,
+.agent-x {
   align-self: flex-start;
+  appearance: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mog-text-muted);
+  font: inherit;
+  font-size: var(--mog-text-sm);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  cursor: pointer;
+}
+
+.agent-fold:hover,
+.agent-databricks:hover,
+.agent-x:hover {
+  color: var(--mog-text);
+  text-decoration-color: currentColor;
+}
+
+.agent-fold:focus-visible,
+.agent-databricks:focus-visible,
+.agent-x:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
 }
 
 .agent-parts[hidden] {
@@ -240,9 +333,36 @@
   margin-left: auto;
 }
 
+/* It breathes while it plans or runs, so it never looks stuck (the same 2 s as the direct pill). */
+@keyframes agent-breathe {
+  from {
+    opacity: 0.45;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.agent-turn:is([data-state='planning'], [data-state='running'], [data-state='slow'])
+  .agent-headline::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mog-eye);
+  animation: agent-breathe 2s ease-in-out infinite alternate;
+}
+
+.agent-call[data-state='asking'] .agent-chip-dot {
+  animation: agent-breathe 2s ease-in-out infinite alternate;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .agent-card-body {
-    scroll-behavior: auto;
+  .agent-turn .agent-headline::before,
+  .agent-call .agent-chip-dot {
+    animation: none;
   }
 }
 
@@ -307,4 +427,85 @@
 .agent-earlier-row {
   padding: var(--mog-space-3) 0;
   border-top: 1px solid var(--mog-edge);
+}
+
+.agent-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mog-space-3);
+}
+
+.agent-session {
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.agent-session:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.agent-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-3);
+  margin-top: var(--mog-space-3);
+  padding: var(--mog-space-3) var(--mog-space-4);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-md);
+  background: var(--mog-surface-raised);
+}
+
+.agent-empty-title {
+  margin: 0 0 var(--mog-space-1);
+  font-weight: var(--mog-weight-semibold);
+}
+
+/* An earlier turn is one row: the question, one line of the answer, the meta. */
+.agent-earlier-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mog-space-1);
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-earlier-head .agent-panel-q {
+  margin: 0;
+}
+
+.agent-earlier-line {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-earlier-head:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.agent-earlier-row[data-state='needs_you'] .agent-sub {
+  color: var(--mog-spark);
+}
+
+/* A wide table in an answer scrolls sideways inside its part. */
+.agent-part-body .md-table-block,
+.agent-note-body .md-table-block {
+  overflow-x: auto;
 }
