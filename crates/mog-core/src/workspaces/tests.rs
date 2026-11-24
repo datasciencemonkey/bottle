@@ -660,6 +660,38 @@ fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
     assert!(!w.cloud_dictation_fast());
 }
 
+/// ADR 0123 follow-up: `settings_write` must store the fast flag only after `save` actually
+/// wrote the file. A failed write (here: a read-only store directory) leaves both the fast
+/// flag and the file itself unchanged.
+#[test]
+fn adr_0123_a_failed_settings_write_leaves_the_fast_flag_unchanged() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    w.list(false).unwrap();
+    assert!(!w.cloud_dictation_fast());
+    let before = fs::read(s.file()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = fs::metadata(&s.0).unwrap().permissions();
+        perm.set_mode(0o500); // read + execute only: no new file can be created here
+        fs::set_permissions(&s.0, perm).unwrap();
+        let err = w.call("workspace_settings_write", json!({"cloudDictation": true}));
+        // Restore before any assert can panic, so `Scratch::drop` can still clean up.
+        let mut perm = fs::metadata(&s.0).unwrap().permissions();
+        perm.set_mode(0o700);
+        fs::set_permissions(&s.0, perm).unwrap();
+        assert!(
+            err.is_err(),
+            "the write must fail for this test to mean anything"
+        );
+        assert_eq!(code(err.unwrap_err()), "workspace_storage_failed");
+    }
+    assert!(!w.cloud_dictation_fast());
+    assert!(!w.cloud_dictation());
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
 /// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other
 /// value that is not a `system.ai.` id, becomes the default model. A file with no
 /// `cleanDictation` reads as true. A valid `system.ai.` id stays.

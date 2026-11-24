@@ -790,9 +790,13 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.cloud_dictation {
                 data.agent.cloud_dictation = v;
-                self.cloud_dictation_flag.store(v, Ordering::SeqCst);
             }
             self.save(&data)?;
+            // Only after a successful save: a failed write must not make the fast flag
+            // (ADR 0123) disagree with the file that is actually on disk.
+            if let Some(v) = a.cloud_dictation {
+                self.cloud_dictation_flag.store(v, Ordering::SeqCst);
+            }
             data
         };
         self.render(&data, false)
