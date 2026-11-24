@@ -198,6 +198,8 @@ enum Msg {
     Hint(u64, Hint),
     Eof(u64),
     Net(bool),
+    /// The guard saw the third refusal of a turn.
+    Refusals(String),
     Tick(Option<Reply<()>>),
     Shutdown(Reply<()>),
 }
@@ -298,6 +300,8 @@ struct Live {
     interrupt_at: Option<Duration>,
     interrupt_wanted: bool,
     hint: Option<Hint>,
+    /// The guard stopped the turn after 3 refused tool calls.
+    refusals: bool,
     final_text: Option<String>,
     usage: Usage,
 }
@@ -316,6 +320,7 @@ impl Live {
             interrupt_at: None,
             interrupt_wanted: false,
             hint: None,
+            refusals: false,
             final_text: None,
             usage: Usage::default(),
         }
@@ -441,6 +446,15 @@ impl Engine {
             Msg::Net(online) => {
                 if !online {
                     self.on_offline();
+                }
+            }
+            Msg::Refusals(turn_id) => {
+                if self.live.as_ref().is_some_and(|l| l.turn.id == turn_id) {
+                    if let Some(l) = self.live.as_mut() {
+                        l.refusals = true;
+                    }
+                    self.interrupt_live(StopWhy::Failed);
+                    self.pump();
                 }
             }
             Msg::Tick(done) => {
@@ -937,7 +951,7 @@ impl Engine {
             }
         }
         let outcome = match (l.stop, status) {
-            (Some(why), _) => outcome_of_stop(why, l.hint),
+            (Some(_), _) => outcome_of_live(l),
             (None, "completed") => AgentTurnOutcome::Answered,
             (None, _) => outcome_of_stop(StopWhy::Failed, l.hint),
         };
@@ -958,8 +972,8 @@ impl Engine {
         if l.sent {
             return;
         }
-        if let Some(why) = l.stop {
-            let o = outcome_of_stop(why, l.hint);
+        if l.stop.is_some() {
+            let o = outcome_of_live(l);
             return self.finish(o);
         }
         if !self.d.net.online() {
@@ -1494,6 +1508,14 @@ fn item_violation(item: &Value) -> bool {
     }
 }
 
+fn outcome_of_live(l: &Live) -> AgentTurnOutcome {
+    match (l.refusals, l.stop) {
+        (true, Some(StopWhy::Failed)) => AgentTurnOutcome::Refusals,
+        (_, Some(why)) => outcome_of_stop(why, l.hint),
+        (_, None) => AgentTurnOutcome::Failed,
+    }
+}
+
 fn outcome_of_stop(why: StopWhy, hint: Option<Hint>) -> AgentTurnOutcome {
     match why {
         StopWhy::User => AgentTurnOutcome::Stopped,
@@ -1511,6 +1533,9 @@ fn outcome_of_stop(why: StopWhy, hint: Option<Hint>) -> AgentTurnOutcome {
 }
 
 fn live_outcome(live: &Live, reason: AgentSessionEndReason) -> AgentTurnOutcome {
+    if live.refusals && live.stop == Some(StopWhy::Failed) {
+        return AgentTurnOutcome::Refusals;
+    }
     if let Some(why) = live.stop {
         // A stop that was already chosen wins, except a graceful end: a crash is a failure.
         return match (why, reason) {
@@ -1708,6 +1733,15 @@ impl SessionHost {
         let (r, rx) = mpsc::channel();
         self.tx.send(mk(r)).ok()?;
         rx.recv_timeout(END_WAIT).ok()
+    }
+
+    /// The hook for `AgentGuard::set_refusal_hook`: the third refusal of a turn interrupts it and
+    /// ends it with the outcome `refusals`.
+    pub fn refusal_hook(&self) -> Arc<dyn Fn(&str) + Send + Sync> {
+        let tx = Mutex::new(self.tx.clone());
+        Arc::new(move |turn_id: &str| {
+            let _ = lock(&tx).send(Msg::Refusals(turn_id.to_owned()));
+        })
     }
 
     /// Drive the timer once, and wait until it ran (tests, and the clock owner).

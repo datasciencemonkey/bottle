@@ -109,8 +109,9 @@ impl ShimProvider for DefaultShim {
             command: std::env::current_exe().unwrap_or_default(),
             args: vec![SHIM_ARG.to_owned()],
             env: vec![
-                ("BOTTLE_SHIM_SESSION".to_owned(), session_id.to_owned()),
-                ("BOTTLE_SHIM_SECRET".to_owned(), hex),
+                ("BOTTLE_AGENT_SESSION".to_owned(), session_id.to_owned()),
+                ("BOTTLE_AGENT_SECRET".to_owned(), hex),
+                // The socket path comes from the guard (`shim::env_pairs`) in the real wiring.
             ],
         }
     }
@@ -375,12 +376,12 @@ mod tests {
         let s = l
             .env
             .iter()
-            .find(|(k, _)| k == "BOTTLE_SHIM_SECRET")
+            .find(|(k, _)| k == "BOTTLE_AGENT_SECRET")
             .unwrap();
         assert_eq!(s.1, "ab".repeat(32));
         // `Debug` never shows a value of the environment.
         assert!(!format!("{l:?}").contains(&"ab".repeat(32)));
-        assert!(format!("{l:?}").contains("BOTTLE_SHIM_SECRET"));
+        assert!(format!("{l:?}").contains("BOTTLE_AGENT_SECRET"));
     }
 
     #[test]

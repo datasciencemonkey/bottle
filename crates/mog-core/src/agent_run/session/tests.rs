@@ -510,7 +510,7 @@ impl AgentEnv for Env {
     fn var(&self, n: &str) -> Option<String> {
         match n {
             "HOME" => Some("/Users/t".into()),
-            "DATABRICKS_TOKEN" => Some("must-not-pass".into()),
+            "AWS_SECRET_ACCESS_KEY" => Some("must-not-pass".into()),
             _ => None,
         }
     }
@@ -776,7 +776,7 @@ fn the_start_rewrites_genie_home_and_spawns_with_a_clean_argv_and_env() {
     assert_eq!(s.spec.program, PathBuf::from("/fake/genie"));
     let names: Vec<&str> = s.spec.env.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"GENIE_HOME") && names.contains(&"HOME"));
-    assert!(!names.contains(&"DATABRICKS_TOKEN"));
+    assert!(!names.contains(&"AWS_SECRET_ACCESS_KEY"));
     assert!(s
         .spec
         .env
@@ -1800,4 +1800,21 @@ fn fixture_the_recorded_approval_request_is_refused_and_ends_the_session() {
     assert!(refusal["error"].is_object());
     assert_eq!(r.events.session_ended(0), AgentSessionEndReason::Lockdown);
     assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Lockdown);
+}
+
+#[test]
+fn the_third_refusal_interrupts_the_turn_and_ends_it_with_refusals() {
+    let r = Rig::new();
+    let (s, t) = r.first_turn("q");
+    let hook = r.host.refusal_hook();
+    // Another turn id is ignored.
+    hook("not-the-live-turn");
+    assert!(s.quiet());
+    hook(&t);
+    s.recv_req("turn/interrupt");
+    assert!(r.guard.has(&format!("stop:{t}:Failed")));
+    s.complete("st-1", "interrupted", None);
+    assert_eq!(r.events.ended(&t), (AgentTurnOutcome::Refusals, 0, None));
+    // The session stays for the next turn.
+    assert!(!s.killed());
 }

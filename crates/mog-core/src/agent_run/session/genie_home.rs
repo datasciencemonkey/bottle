@@ -262,7 +262,8 @@ pub fn sweep_cwds(root: &Path) {
     }
 }
 
-/// The environment of the server: a fixed allow-list, each variable only if it is set. `PATH` is
+/// The environment of the server: a fixed allow-list, each variable only if it is set. The CLI
+/// config file comes from `HOME` (a credential-source variable is never passed on; W-01a). `PATH` is
 /// `/usr/bin:/bin` plus the folder of the CLI. `shim_env` holds the values of the shim variables.
 pub fn server_env(
     var: &dyn Fn(&str) -> Option<String>,
@@ -280,7 +281,6 @@ pub fn server_env(
         "NO_PROXY",
         "ALL_PROXY",
         "SSL_CERT_FILE",
-        "DATABRICKS_CONFIG_FILE",
     ] {
         if let Some(v) = var(name) {
             env.push((name.to_owned(), v));

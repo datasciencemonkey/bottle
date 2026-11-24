@@ -65,6 +65,7 @@ lockdown holds. `exec-server` ignores the sandbox. `exec resume` writes plaintex
 
 - Another genie version needs new fixtures in `crates/mog-core/tests/fixtures/genie-<v>/`, a new
   run of the canary tool and new snapshots before `pin.rs` changes.
-- The guard (R2) and the shim must read the variables `BOTTLE_SHIM_SESSION` and
-  `BOTTLE_SHIM_SECRET` (and a socket variable that R2 names). The host takes `Arc<dyn
-  ShimProvider>` and `Arc<dyn SessionGuard>` from managed state.
+- The guard (R2) names the shim variables `BOTTLE_AGENT_SOCK`, `BOTTLE_AGENT_SESSION` and
+  `BOTTLE_AGENT_SECRET` (`guard::shim::env_pairs`). The host takes `Arc<dyn ShimProvider>` and
+  `Arc<dyn SessionGuard>` from managed state, and `SessionHost::refusal_hook()` goes into
+  `AgentGuard::set_refusal_hook`: the third refusal of a turn ends it with outcome `refusals`.
