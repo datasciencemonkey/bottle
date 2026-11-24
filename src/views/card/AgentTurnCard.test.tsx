@@ -133,34 +133,79 @@ describe('AgentTurnCard', () => {
     ...o,
   });
 
-  it('with a combined note: the note first, the cited part, a fold for the rest, the earlier tag', async () => {
+  it('[AC-2b.3] with a combined note: "Combined by your MOG", the source chips, the parts folded under it', async () => {
     const t = view({
       state: 'done',
       tokens: 41_000,
-      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin, sales] },
       parts: [
         partOf('c-00000001'),
-        partOf('c-00000003', { folded: true }),
+        partOf('c-00000003', { workspace: sales }),
         partOf('c-00000004', { fromEarlier: true }),
       ],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     const note = el.querySelector('[data-agent-note]') as HTMLElement;
-    expect(note.textContent).toContain('Note from your MOG');
+    expect(note.querySelector('.agent-note-label')?.textContent).toBe('Combined by your MOG');
+    expect(note.textContent).not.toContain('Note from your MOG');
     expect(note.className).not.toContain('agent-note--after');
-    // The note comes before the parts.
+    const chipNames = [...note.querySelectorAll('[data-agent-chip]')].map((n) => n.textContent);
+    expect(chipNames).toEqual(['Finance', 'Sales']);
+    // The note comes before the parts, and every part is folded under one toggle.
     const parts = el.querySelector('.agent-parts') as HTMLElement;
     expect(note.compareDocumentPosition(parts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(parts.hidden).toBe(true);
+    expect(el.querySelector('.agent-part-title')).toBeNull();
     expect(el.querySelector('[data-agent-footer]')?.textContent).toBe(
       'Planned by Genie Code in Sales · 41k tokens',
     );
-    expect(el.textContent).toContain(FROM_EARLIER_COPY);
-    expect(el.querySelector('.agent-part-title')).toBeNull();
     const fold = el.querySelector<HTMLButtonElement>('[data-action="fold"]');
-    expect(fold?.textContent).toBe('1 more answer');
+    expect(fold?.textContent).toBe('3 workspace answers');
     expect(fold?.getAttribute('aria-expanded')).toBe('false');
     await click(fold);
     expect(fold?.getAttribute('aria-expanded')).toBe('true');
+    expect(parts.hidden).toBe(false);
+    expect(el.textContent).toContain(FROM_EARLIER_COPY);
+  });
+
+  it('[AC-2b.2] a withheld part under a combined note says "Not shown to the agent" and hides its text', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', {
+          workspace: sales,
+          notShownToAgent: true,
+          sections: [{ id: 'answer' as const, md: 'This answer was held back.' }],
+        }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    // The note still comes first; the withheld part is in view, the rest is folded.
+    expect(el.querySelector('[data-agent-note]')?.className).not.toContain('agent-note--after');
+    const withheld = el.querySelector('[data-agent-part="c-00000002"]') as HTMLElement;
+    expect(withheld.closest('[hidden]')).toBeNull();
+    expect(withheld.textContent).toContain(NOT_SHOWN_COPY);
+    expect(withheld.textContent).toContain('This answer was held back.');
+    expect(withheld.textContent).not.toContain('IGNORE');
+    const folded = el.querySelector('[data-agent-part="c-00000001"]') as HTMLElement;
+    expect(folded.closest('[hidden]')).not.toBeNull();
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('1 workspace answer');
+  });
+
+  it('[AC-2b.6] a note with D1 off says "Note from your MOG" and has no fold of its own', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [fin] },
+      parts: [partOf('c-00000001')],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    expect(note.textContent).toContain('Note from your MOG');
+    expect(note.textContent).not.toContain('Combined');
+    expect(note.querySelector('[data-agent-chip]')).toBeNull();
+    expect(el.querySelector('[data-action="fold"]')).toBeNull();
   });
 
   it('[owner bug] with the cross-workspace answer off the workspace answers come first, open, each under "Answer from <workspace>"', async () => {
@@ -198,16 +243,6 @@ describe('AgentTurnCard', () => {
     expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
     expect(el.querySelector('[data-agent-note]')).toBeNull();
     expect((el.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
-  });
-
-  it('[owner bug] a combined note with a part the agent never saw still shows the answers first', async () => {
-    const t = view({
-      state: 'done',
-      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
-      parts: [partOf('c-00000001', { notShownToAgent: true })],
-    });
-    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
-    expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Finance');
   });
 
   it('firstAnswerLine takes the first line of the first answer, never the note', () => {

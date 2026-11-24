@@ -9,6 +9,8 @@
  * - "Genie calls per question [5 | 10 | 20]": D2, the most Genie calls for one question.
  * - "Genie Code": the status of the pinned binary and of the agent profile, with Install… (after
  *   the user's consent), Check again and a busy state.
+ * - "Combine across workspaces" (D1, slice 2b): off by default. It sends `workspace.cross`. When the
+ *   admin locks it, it is off, disabled, and says "Set by your admin".
  * - The disclosure line: where a cross-workspace question goes, and what it costs.
  */
 import { ChevronDownIcon, Loader2Icon } from 'lucide-react';
@@ -30,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
+import { Switch } from '../ui/switch';
 import { emitView } from '../view-ipc';
 import { SettingsGroup, SettingsRow } from './SettingsGroup';
 
@@ -38,6 +41,14 @@ function send(action: WorkspaceAction): void {
 }
 
 export const APPLIES_AFTER = 'Applies after the current question';
+export const COMBINE_LABEL = 'Combine across workspaces';
+export const COMBINE_LOCKED = 'Set by your admin';
+export const COMBINE_APPLIES = 'Applies to your next question.';
+export const COMBINE_OFF_HELP =
+  "When off, each workspace's answer is shown to you, and the agent sees only a receipt.";
+/** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
+export const combineHelp = (agentName: string): string =>
+  `When on, Genie Code in ${agentName} can see the answers from your other workspaces and combine them. It can also put an answer from one workspace into a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 
@@ -230,6 +241,7 @@ export function AgentSettings({
   const [confirm, setConfirm] = useState(false);
   const [checkingFor, setCheckingFor] = useState<HubWorkspaceList | undefined>(undefined);
   const budgetId = useId();
+  const combineId = useId();
   const install = useRef<HTMLButtonElement>(null);
   if (!list) return null;
   // A new list ends the "Check again" wait.
@@ -239,6 +251,8 @@ export function AgentSettings({
   const current =
     (runProfile ? list.rows.find((r) => r.profile === runProfile) : undefined) ?? home;
   const agentName = current?.name ?? 'your home workspace';
+  const locked = list.agent.crossWorkspaceLocked;
+  const combineOn = list.agent.crossWorkspaceData && !locked;
   const g = genieCodeLine(list.agent.genieCode, agentName);
   const installing = list.agent.genieCode?.binary === 'installing';
   const closeConfirm = () => {
@@ -290,6 +304,53 @@ export function AgentSettings({
                 </label>
               ))}
             </RadioGroup>
+          }
+        />
+        <SettingsRow
+          label={<span id={`${combineId}-label`}>{COMBINE_LABEL}</span>}
+          htmlFor={combineId}
+          description={
+            <span
+              id={`${combineId}-help`}
+              data-agent-combine-help
+              className="flex flex-col gap-[var(--mog-space-1)]"
+            >
+              <span>{combineHelp(agentName)}</span>
+              <span>{COMBINE_OFF_HELP}</span>
+            </span>
+          }
+          control={
+            <span className="flex flex-col items-end gap-[var(--mog-space-1)]">
+              <Switch
+                id={combineId}
+                data-agent-combine
+                checked={combineOn}
+                disabled={locked}
+                aria-labelledby={`${combineId}-label`}
+                aria-describedby={`${combineId}-help${locked ? ` ${combineId}-locked` : ''}`}
+                onCheckedChange={(on) =>
+                  send({ action: 'workspace.cross', crossWorkspaceData: on })
+                }
+              />
+              {locked && (
+                <span
+                  id={`${combineId}-locked`}
+                  data-agent-combine-locked
+                  className="text-[var(--mog-text-xs)] text-foreground"
+                >
+                  {COMBINE_LOCKED}
+                </span>
+              )}
+              {busy && !locked && (
+                <span
+                  role="status"
+                  data-agent-combine-applies
+                  className="text-[var(--mog-text-xs)] text-muted-foreground"
+                >
+                  {COMBINE_APPLIES}
+                </span>
+              )}
+            </span>
           }
         />
         <SettingsRow

@@ -216,6 +216,13 @@
   font-weight: var(--mog-weight-semibold);
 }
 
+.agent-note-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mog-space-1) var(--mog-space-3);
+  margin: 0;
+}
+
 .agent-note-body {
   min-width: 0;
   font-size: var(--mog-text-sm);

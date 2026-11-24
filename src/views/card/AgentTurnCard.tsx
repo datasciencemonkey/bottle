@@ -12,7 +12,8 @@
  * - The answers of the workspaces come first and open, each under "Answer from <workspace>", when
  *   the turn has no combined note (the cross-workspace answer is off, or the note is missing). The
  *   note of the MOG then comes after them as one small muted block. With a combined note the note
- *   comes first, and a part that no source cites folds into "1 more answer".
+ *   comes first ("Combined by your MOG", with the chips of its sources) and the parts fold under
+ *   it; a part withheld from the agent stays in view with "Not shown to the agent".
  *   A part of an earlier turn says so.
  * - A queued turn shows the pill "Queued" and "Sends when the answer above lands".
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
@@ -39,6 +40,7 @@ export const QUEUED_LABEL = 'Queued';
 export const WAITING_COPY = 'Sends when the answer above lands';
 export const SLOW_COPY = 'Still working…';
 export const NOTE_LABEL = 'Note from your MOG';
+export const COMBINED_LABEL = 'Combined by your MOG';
 export const OPEN_IN_DATABRICKS = 'Open in Databricks';
 export const CLOSE_LABEL = 'Close';
 export const FROM_EARLIER_COPY = 'From an earlier answer';
@@ -265,15 +267,22 @@ export function TurnParts({
   turn,
   onOpenLink,
   answersFirst = false,
+  combined = false,
 }: {
   turn: AgentTurnView;
   onOpenLink?: ((url: string) => void) | undefined;
   /** Every answer shows open under "Answer from <workspace>"; none folds. */
   answersFirst?: boolean;
+  /**
+   * The note is a combined answer (D1 on): the parts of the workspaces fold under it, except a
+   * part that was withheld from the agent, which stays in view with its tag.
+   */
+  combined?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const shown = turn.parts.filter((p) => answersFirst || p.folded !== true);
-  const folded = answersFirst ? [] : turn.parts.filter((p) => p.folded === true);
+  const foldIt = (p: AgentPartView) => (combined ? p.notShownToAgent !== true : p.folded === true);
+  const shown = turn.parts.filter((p) => answersFirst || !foldIt(p));
+  const folded = answersFirst ? [] : turn.parts.filter(foldIt);
   const foldId = `agent-fold-${turn.turnId}`;
   if (turn.parts.length === 0) return null;
   return (
@@ -295,7 +304,11 @@ export function TurnParts({
             data-action="fold"
             onClick={() => setOpen((o) => !o)}
           >
-            {open ? 'Hide' : plural(folded.length, 'more answer', 'more answers')}
+            {open
+              ? 'Hide'
+              : combined
+                ? plural(folded.length, 'workspace answer', 'workspace answers')
+                : plural(folded.length, 'more answer', 'more answers')}
           </button>
           <ul id={foldId} className="agent-parts" aria-label="More answers" hidden={!open}>
             {folded.map((p) => (
@@ -365,14 +378,11 @@ function CallsOf({ turn, now }: { turn: AgentTurnView; now: number }) {
 
 /**
  * The workspace answers come first, open, when the agent has no combined note of them: the turn
- * has no summary, the summary is the agent's own note (the cross-workspace answer is off), or a
- * part was never shown to the agent. Else the combined note comes first and the parts fold.
+ * has no summary, or the summary is the agent's own note (the cross-workspace answer is off).
+ * Else (D1 on) the combined note comes first and the parts fold under it.
  */
 export const answersFirstOf = (turn: AgentTurnView): boolean =>
-  turn.parts.length > 0 &&
-  (turn.summary === undefined ||
-    turn.summary.kind !== 'combined' ||
-    turn.parts.some((p) => p.notShownToAgent === true));
+  turn.parts.length > 0 && (turn.summary === undefined || turn.summary.kind !== 'combined');
 
 /** The first line of the first answer of a turn, for a list: never the note of the agent. */
 export function firstAnswerLine(turn: AgentTurnView): string {
@@ -398,9 +408,17 @@ export function TurnBody({
   // On an ended turn the answer comes before the process.
   const answerFirst = !isOpenState(turn.state) && turn.state !== 'needs_you';
   const answersFirst = answersFirstOf(turn);
+  const combined = turn.summary?.kind === 'combined';
   const note = turn.summary && (
     <div className={answersFirst ? 'agent-note agent-note--after' : 'agent-note'} data-agent-note>
-      <p className="agent-note-label">{NOTE_LABEL}</p>
+      <p className="agent-note-label">{combined ? COMBINED_LABEL : NOTE_LABEL}</p>
+      {combined && turn.summary.workspaces.length > 0 && (
+        <p className="agent-note-chips" aria-label="Combined from" data-agent-note-chips>
+          {turn.summary.workspaces.map((c) => (
+            <WsChip key={c.name} chip={c} />
+          ))}
+        </p>
+      )}
       <div className="agent-note-body">
         <SafeMarkdown
           text={turn.summary.md}
@@ -433,7 +451,12 @@ export function TurnBody({
       )}
       {!answerFirst && <CallsOf turn={turn} now={now} />}
       {!answersFirst && note}
-      <TurnParts turn={turn} onOpenLink={onOpenLink} answersFirst={answersFirst} />
+      <TurnParts
+        turn={turn}
+        onOpenLink={onOpenLink}
+        answersFirst={answersFirst}
+        combined={combined}
+      />
       {answersFirst && note}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}

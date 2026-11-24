@@ -313,6 +313,24 @@ describe('a finished call and a finished turn', () => {
     expect(live?.calls.every((c) => c.state === 'ready' && c.endedAt === 13_000)).toBe(true);
   });
 
+  it('[AC-2b.6] a combined answer only counts with D1 on; with D1 off the kind is "note"', async () => {
+    for (const on of [false, true]) {
+      const r = rig();
+      r.script.submit.push(accepted(T1, { crossWorkspace: on }));
+      await r.client.submit(turn(), 'ask');
+      r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
+      r.script.result = {
+        answer: 'Both fall.',
+        answerKind: 'combined',
+        sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
+      };
+      r.ev(callEv(T1, C1, SALES, 'answered'));
+      r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+      await r.settle();
+      expect(r.client.panel().earlier[0]?.summary?.kind).toBe(on ? 'combined' : 'note');
+    }
+  });
+
   it('[AC-2a.12] [AC-2a.28] the note and the sources decide which part folds and which is from earlier', async () => {
     const r = rig();
     await answered(r);

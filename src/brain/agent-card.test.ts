@@ -80,6 +80,7 @@ describe('partOf', () => {
       chip,
     });
     expect(p?.sections).toEqual([{ id: 'answer', md: WITHHELD_TEXT }]);
+    expect(p?.notShownToAgent).toBe(true);
   });
 
   it('gives no part for a call that is not answered or has an empty answer', () => {

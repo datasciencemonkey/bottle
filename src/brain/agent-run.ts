@@ -678,7 +678,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     const workspaces = chips.filter((c, i) => chips.findIndex((x) => x.name === c.name) === i);
     r.view = {
       ...r.view,
-      summary: { md: res.answer, kind: res.answerKind, workspaces },
+      // Only D1 on can combine: with D1 off the label stays "Note from your MOG" (AC-2b.6).
+      summary: { md: res.answer, kind: r.crossWorkspace ? res.answerKind : 'note', workspaces },
     };
   }
 

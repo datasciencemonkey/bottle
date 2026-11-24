@@ -124,6 +124,7 @@ export function partOf(call: AgentTurnCall, o: PartOptions): AgentPartView | und
   const part: AgentPartView = { callId: call.callId, workspace: o.chip, sections: [] };
   if (call.withheld !== undefined) {
     part.sections = [{ id: 'answer', md: WITHHELD_TEXT }];
+    part.notShownToAgent = true;
   } else {
     const md = answerOf(call);
     if (md.trim() === '') return undefined;
