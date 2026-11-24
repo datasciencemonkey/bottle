@@ -30,7 +30,7 @@ import {
   lampOnlyManager,
   wireWorkspaces,
 } from '../workspaces';
-import { ipcRecordingApi, wireRecording } from '../recording-wiring';
+import { createHeldNote, ipcRecordingApi, wireRecording } from '../recording-wiring';
 import { wireHubMogs } from '../hub-mogs-wiring';
 import {
   sendHubConversations,
@@ -584,8 +584,11 @@ export function startBrain(): Brain {
     // answer-ready moment on the MOG through the one mood publisher. The core checks the knob
     // again before any capture. TODO(#95): the short OS notice when the notes are ready, once
     // the notification host has an IPC command.
+    const recordingApi = ipcRecordingApi(bus, recordingHomeProfile);
+    // ADR 0118: the first hold in a recording shows "Your call can still hear you." once.
+    const heldNote = createHeldNote({ api: recordingApi, mood: captureMood });
     wireRecording(bus, {
-      api: ipcRecordingApi(bus, recordingHomeProfile),
+      api: recordingApi,
       platform:
         cliPlatform(globalThis.navigator?.userAgent ?? '') === 'windows' ? 'windows' : 'mac',
       mood: {
@@ -731,6 +734,12 @@ export function startBrain(): Brain {
         captureMood.refused(e.mogId, e.error);
         // UX slice 1: a refused start has no paste, so held arrivals need not wait for one.
         arrivalGate.refused();
+      },
+      // ADR 0118: a hold in a call recording shows "Call only" and, the first time, the note.
+      onHold: ({ mogId, on }) => {
+        if (mogId === '') return;
+        captureMood.hold(mogId, on);
+        if (on) heldNote.held(mogId);
       },
       // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
       // refusal shows on the MOG of the press (none with no open MOG).

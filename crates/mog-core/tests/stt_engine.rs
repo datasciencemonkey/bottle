@@ -223,6 +223,7 @@ fn stopped(lease: u64, reason: StopReason) -> Stopped {
 struct NoEvents;
 
 impl CaptureEvents for NoEvents {
+    fn overlay_granted(&self, _lease: &mog_core::capture::Lease) {}
     fn state(&self, _state: &CaptureState) {}
     fn stopped(&self, _stopped: &Stopped) {}
 }
@@ -940,4 +941,163 @@ fn cap_13a_no_frame_is_copied_to_the_worker_with_no_live_lease() {
     feed(&r.engine, &tone(100, -6.0, RATE), RATE);
     r.engine.sync();
     assert_eq!(r.engine.status().frame_messages, 10);
+}
+
+// ---------- ADR 0118: a PTT overlay on a session lease (a hold during a recording) ----------
+
+fn overlay_lease(id: u64) -> mog_core::capture::Lease {
+    mog_core::capture::Lease {
+        id,
+        mog_id: "mog-a".into(),
+        mode: CaptureMode::Ptt,
+    }
+}
+
+/// What `capture.state` shows while an overlay PTT lives on session lease `session`.
+fn session_state(session: u64, directed: bool) -> CaptureState {
+    CaptureState {
+        directed_to: directed.then(|| "mog-a".to_owned()),
+        ..state(session, CaptureMode::Session, true)
+    }
+}
+
+fn mic_tone(r: &Rig, ms: u64) {
+    feed(&r.engine, &tone(ms, -6.0, RATE), RATE);
+}
+
+#[test]
+fn adr_0118_overlay_granted_begins_a_take_with_the_overlay_lease_id() {
+    let r = rig(PowerSource::Ac);
+    let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
+    events.state(&session_state(1, false));
+    events.overlay_granted(&overlay_lease(2));
+    events.state(&session_state(1, true));
+    mic_tone(&r, 1_000);
+    events.stopped(&stopped(2, StopReason::Released));
+    r.engine.sync();
+    let done = r.out.all();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].lease_id, 2, "the overlay lease, not the session");
+    assert_eq!(done[0].mode, CaptureMode::Ptt);
+    assert_eq!(r.engine.status().held_samples, 0);
+}
+
+#[test]
+fn adr_0118_a_session_state_with_directed_to_does_not_idle_the_engine() {
+    let r = rig(PowerSource::Ac);
+    let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
+    events.overlay_granted(&overlay_lease(2));
+    events.state(&session_state(1, true));
+    events.state(&session_state(1, true));
+    mic_tone(&r, 1_000);
+    events.stopped(&stopped(2, StopReason::Released));
+    r.engine.sync();
+    let done = r.out.all();
+    assert_eq!(done.len(), 1);
+    assert!(
+        (900..=1_100).contains(&done[0].duration_ms),
+        "{}",
+        done[0].duration_ms
+    );
+}
+
+#[test]
+fn adr_0118_a_session_state_without_directed_to_idles_and_clears_the_overlay() {
+    let r = rig(PowerSource::Ac);
+    let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
+    events.overlay_granted(&overlay_lease(2));
+    events.state(&session_state(1, true));
+    mic_tone(&r, 500);
+    // The overlay ended: the state shows the bare session. Later frames go nowhere.
+    events.state(&session_state(1, false));
+    mic_tone(&r, 500);
+    events.stopped(&stopped(2, StopReason::Released));
+    r.engine.sync();
+    let done = r.out.all();
+    assert_eq!(done.len(), 1);
+    assert!(done[0].duration_ms < 700, "{}", done[0].duration_ms);
+    // The overlay is cleared: a directed state now idles the engine again.
+    events.state(&session_state(1, true));
+    mic_tone(&r, 500);
+    r.engine.sync();
+    assert_eq!(r.out.all().len(), 1);
+}
+
+#[test]
+fn adr_0118_no_frames_reach_the_session_lease() {
+    let r = rig(PowerSource::Ac);
+    let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
+    events.state(&session_state(1, false));
+    mic_tone(&r, 1_000);
+    events.stopped(&Stopped {
+        lease_id: 1,
+        mog_id: "mog-a".into(),
+        mode: CaptureMode::Session,
+        reason: StopReason::Manual,
+    });
+    r.engine.sync();
+    assert!(r.out.all().is_empty());
+    assert_eq!(r.engine.status().held_samples, 0);
+}
+
+#[test]
+fn adr_0118_an_overlay_grant_after_its_stop_begins_no_take() {
+    let r = rig(PowerSource::Ac);
+    let events = SttCaptureEvents::new(NoEvents, r.engine.clone());
+    // The events of one change can arrive out of order: the stop first, the grant late.
+    events.stopped(&stopped(2, StopReason::Released));
+    events.overlay_granted(&overlay_lease(2));
+    events.state(&session_state(1, true));
+    mic_tone(&r, 1_000);
+    events.state(&session_state(1, false));
+    r.engine.sync();
+    assert!(r.out.all().is_empty());
+    assert_eq!(r.engine.status().held_samples, 0, "no audio is kept");
+}
+
+#[test]
+fn adr_0118_the_production_wrapper_order_hands_the_overlay_lease_to_the_buffer_and_r4() {
+    use mog_core::audio_device::level::{LevelCaptureEvents, LevelGate, LevelOut, TeeSink};
+    use mog_core::audio_device::ptt_buffer::{
+        PttBuffer, PttCaptureEvents, Utterance, UtteranceSink,
+    };
+    #[derive(Default)]
+    struct Got(Mutex<Vec<u64>>);
+    impl UtteranceSink for Got {
+        fn utterance(&self, u: Utterance) {
+            self.0.lock().unwrap().push(u.lease_id());
+        }
+    }
+    struct NoLevel;
+    impl LevelOut for NoLevel {
+        fn level(&self, _dbfs: f32) {}
+    }
+    let r = rig(PowerSource::Ac);
+    let got = Arc::new(Got::default());
+    let buf = PttBuffer::new(got.clone());
+    let mut mic = TeeSink(buf.sink(), r.engine.frame_sink());
+    // capture_host.rs: Level -> Ptt -> Stt -> inner.
+    let events = LevelCaptureEvents::new(
+        PttCaptureEvents::new(
+            SttCaptureEvents::new(NoEvents, r.engine.clone()),
+            buf.clone(),
+        ),
+        LevelGate::new(Arc::new(NoLevel)),
+    );
+    events.state(&session_state(1, false));
+    events.overlay_granted(&overlay_lease(2));
+    events.state(&session_state(1, true));
+    for block in tone(1_000, -6.0, RATE).chunks(480) {
+        mic.frame(MicFrame {
+            samples: block,
+            sample_rate: RATE,
+        });
+    }
+    events.stopped(&stopped(2, StopReason::Released));
+    events.state(&session_state(1, false));
+    r.engine.sync();
+    assert_eq!(*got.0.lock().unwrap(), vec![2], "the PTT buffer made one");
+    let done = r.out.all();
+    assert_eq!(done.len(), 1, "R4 made one");
+    assert_eq!(done[0].lease_id, 2);
 }

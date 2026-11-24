@@ -27,12 +27,12 @@ use mog_core::clock::{MonotonicClock, WallClock};
 use mog_core::error::CoreResult;
 use mog_core::recording_capture::permissions::{ask_on_enable, PermissionAsker};
 use mog_core::recording_capture::session::{
-    FinishedRecording, PartsHandoff, RecordingSession, SessionConfig, StopCause,
+    FinishedRecording, PartsHandoff, RecordingSession, SessionConfig, Snapshot, StopCause,
 };
 use mog_core::recording_capture::tap::RecordingTap;
 use mog_core::token_events::{SessionEventSource, SessionWatch};
 
-use crate::capture_host::CaptureHost;
+use crate::capture_host::{CaptureHost, RecordingPhase};
 
 /// How often the ticker applies the length preset and the CAP-10a check.
 pub const TICK_EVERY: Duration = Duration::from_millis(250);
@@ -220,10 +220,20 @@ impl RecordingHost {
                 s.lease_stopped(stopped.lease_id, stopped.reason);
             }
         }));
-        // The mic rule: no dictation while a recording runs.
+        // The mic rule (ADR 0118): a PTT is an overlay while the recording runs; hands-free and
+        // every start while the recording starts or stops answer `recording_in_progress`.
         let weak = Arc::downgrade(&session);
         capture.set_recording_check(Arc::new(move || {
-            weak.upgrade().is_some_and(|s| s.is_recording())
+            let Some(s) = weak.upgrade() else {
+                return RecordingPhase::Idle;
+            };
+            // `snapshot` reads `Recording` only in the `active` state. A start or stop in
+            // flight has `is_recording` true with no active recording.
+            match (s.snapshot(), s.is_recording()) {
+                (Snapshot::Recording(_), _) => RecordingPhase::Active,
+                (Snapshot::Idle, true) => RecordingPhase::Changing,
+                (Snapshot::Idle, false) => RecordingPhase::Idle,
+            }
         }));
         let ticker = Arc::new(Ticker {
             stop: Mutex::new(false),

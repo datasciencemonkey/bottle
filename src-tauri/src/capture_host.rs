@@ -32,7 +32,7 @@ use mog_core::audio_device::ptt_buffer::{NoUtteranceSink, PttBuffer, PttCaptureE
 use mog_core::audio_device::{FailureLink, FrameSink, MicDevice, MicHost};
 use mog_core::capture::{
     parse_lease, AudioDevice, AudioSource, CaptureCore, CaptureError, CaptureEvents,
-    CaptureRequest, CaptureService, DeviceError, LeaseNo, Stopped,
+    CaptureRequest, CaptureService, DeviceError, Lease, LeaseNo, Stopped,
 };
 use mog_core::clock::MonotonicClock;
 use mog_core::error::{CoreError, CoreResult};
@@ -42,6 +42,7 @@ use mog_core::ipc::{
     IpcError, MogId,
 };
 use mog_core::ipc_gateway::ipc_error_code;
+use mog_core::recording_capture::tap::{GateCaptureEvents, RecordingTap};
 use mog_core::stt_engine::{self, LocalSttEngine, SttCaptureEvents, SttDone, TranscriptSink};
 use mog_core::types::{CaptureState, CaptureStopped, SegmentRef, Track};
 use serde_json::{json, Value};
@@ -56,8 +57,19 @@ use std::time::Duration;
 /// finalizes when its lease stops). It runs on the thread that stopped the lease.
 pub type StopObserver = Arc<dyn Fn(&Stopped) + Send + Sync>;
 
-/// ADR 0103: tells whether a call recording runs (see [`CaptureHost::set_recording_check`]).
-pub type RecordingCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+/// Where a call recording is now (ADR 0103, ADR 0118 decisions 1 to 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingPhase {
+    /// No recording runs.
+    Idle,
+    /// A recording runs: a PTT is granted as an overlay, hands-free is refused.
+    Active,
+    /// A recording starts or stops: every start is refused.
+    Changing,
+}
+
+/// ADR 0103: tells where a call recording is (see [`CaptureHost::set_recording_check`]).
+pub type RecordingCheck = Arc<dyn Fn() -> RecordingPhase + Send + Sync>;
 
 /// The outermost [`CaptureEvents`] of the host: the inner chain, then each [`StopObserver`].
 struct ObservedEvents<E> {
@@ -76,6 +88,10 @@ impl<E: CaptureEvents> CaptureEvents for ObservedEvents<E> {
         for o in observers {
             o(stopped);
         }
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        self.inner.overlay_granted(lease);
     }
 }
 
@@ -230,6 +246,10 @@ impl CaptureEvents for BrainCaptureEvents {
             let _ = (self.relay)(events::CAPTURE_STOPPED, payload);
         }
     }
+
+    /// ADR 0118: the brain reads `capture.state`, which keeps the session lease. It has no use
+    /// for the overlay lease, so this is a no-op.
+    fn overlay_granted(&self, _lease: &Lease) {}
 }
 
 // ---------- R4 results ----------
@@ -379,6 +399,13 @@ impl<E: CaptureEvents> CaptureEvents for SttEvents<E> {
         match self {
             SttEvents::On(e) => e.stopped(stopped),
             SttEvents::Off(e) => e.stopped(stopped),
+        }
+    }
+
+    fn overlay_granted(&self, lease: &Lease) {
+        match self {
+            SttEvents::On(e) => e.overlay_granted(lease),
+            SttEvents::Off(e) => e.overlay_granted(lease),
         }
     }
 }
@@ -666,6 +693,7 @@ impl CaptureHost {
             ptt,
             None,
             mog_core::insertion::targets(),
+            None,
         )
     }
 
@@ -689,9 +717,35 @@ impl CaptureHost {
             ptt,
             Some(stt),
             mog_core::insertion::targets(),
+            None,
         )
     }
 
+    /// As [`CaptureHost::with_stt`], with the mic gate of the call recording `tap` outermost in
+    /// the event chain (ADR 0118): the gate hears of an overlay lease before any other sink,
+    /// and `tap` must be the tap of the recording session and of the mic's `mic_sink()`.
+    pub fn with_stt_gated(
+        device: Box<dyn AudioDevice>,
+        clock: Arc<dyn MonotonicClock>,
+        relay: BrainRelay,
+        levels: HostLevels,
+        ptt: PttBuffer,
+        stt: LocalSttEngine,
+        tap: RecordingTap,
+    ) -> std::io::Result<Self> {
+        Self::build(
+            device,
+            clock,
+            relay,
+            levels,
+            ptt,
+            Some(stt),
+            mog_core::insertion::targets(),
+            Some(tap),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn build(
         device: Box<dyn AudioDevice>,
         clock: Arc<dyn MonotonicClock>,
@@ -700,7 +754,10 @@ impl CaptureHost {
         ptt: PttBuffer,
         stt: Option<LocalSttEngine>,
         targets: &'static TargetTable,
+        tap: Option<RecordingTap>,
     ) -> std::io::Result<Self> {
+        // A host with no recording gets a tap that nothing reads, so the chain has one shape.
+        let tap = tap.unwrap_or_else(|| RecordingTap::new(Arc::clone(&clock)));
         let owners: Arc<Mutex<LeaseOwners>> = Arc::default();
         let brain = BrainCaptureEvents {
             relay,
@@ -715,10 +772,18 @@ impl CaptureHost {
         // take before the brain sees the stop (#21). R4 begins, commits or drops its take
         // before the brain sees the event (#46).
         let stop_observers: Arc<Mutex<Vec<StopObserver>>> = Arc::default();
-        let sink = Arc::new(ObservedEvents {
-            inner: LevelCaptureEvents::new(PttCaptureEvents::new(brain, ptt), levels.gate.clone()),
-            observers: Arc::clone(&stop_observers),
-        });
+        // ADR 0118: the mic gate is outermost, so it closes before any other sink hears of an
+        // overlay lease, and reopens (after the tail) only when the stop reaches it first.
+        let sink = Arc::new(GateCaptureEvents::new(
+            ObservedEvents {
+                inner: LevelCaptureEvents::new(
+                    PttCaptureEvents::new(brain, ptt),
+                    levels.gate.clone(),
+                ),
+                observers: Arc::clone(&stop_observers),
+            },
+            tap,
+        ));
         let service = Arc::new(CaptureCore::new(device, Arc::clone(&clock), sink));
         let timer = CapTimer::spawn(Arc::clone(&service) as Arc<dyn CaptureService>, clock)?;
         Ok(Self {
@@ -740,16 +805,24 @@ impl CaptureHost {
         &self.service
     }
 
-    /// ADR 0103 mic rule: while `recording()` is true, `capture_start` (PTT, hands-free)
-    /// answers `recording_in_progress`. No overlay lease, so no dictated speech reaches the
-    /// recording. The recording's own lease does not go through `capture_start`.
+    /// ADR 0103 and ADR 0118 mic rule, by the phase of `recording()`:
+    /// - `Active`: a `ptt` start is granted. R2 makes it an overlay on the recording's lease.
+    ///   The gate in the recording tap closes at the talk-key down, so the recording gets no
+    ///   speech of the hold. `hands_free` answers `recording_in_progress`.
+    /// - `Changing` (the recording starts or stops): every start answers `recording_in_progress`.
+    ///
+    /// The check is not one lock with the grant. R2 closes the gap: it grants one start at a
+    /// time, and a PTT is an overlay only on a live session lease. A start that loses the race
+    /// is a plain PTT with no recording, or an `MicBusy` error. The gate does not wait for the
+    /// lease, so no grant order lets mic speech into the recording.
+    /// The recording's own lease does not go through `capture_start`.
     pub fn set_recording_check(&self, recording: RecordingCheck) {
         *lock(&self.recording) = Some(recording);
     }
 
-    fn recording_runs(&self) -> bool {
+    fn recording_phase(&self) -> RecordingPhase {
         let check = lock(&self.recording).clone();
-        check.is_some_and(|f| f())
+        check.map_or(RecordingPhase::Idle, |f| f())
     }
 
     /// Send every later lease stop to `observer` too (ADR 0103).
@@ -903,10 +976,13 @@ impl CaptureHost {
                 command: command.to_owned(),
             }));
         }
-        if self.recording_runs() {
-            return Err(refused(IpcError::RecordingInProgress {
-                command: command.to_owned(),
-            }));
+        match (self.recording_phase(), a.mode) {
+            (RecordingPhase::Idle, _) | (RecordingPhase::Active, CaptureMode::Ptt) => {}
+            _ => {
+                return Err(refused(IpcError::RecordingInProgress {
+                    command: command.to_owned(),
+                }));
+            }
         }
         if a.mode == CaptureMode::Session {
             // TODO(#65): check the consent token of `session_attest`, and pass `policy` to R3
@@ -1003,6 +1079,7 @@ mod tests {
             ptt,
             None,
             targets,
+            None,
         )
         .unwrap();
         (host, targets)
@@ -1116,6 +1193,56 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(targets.expected(&hf, "a1", now_ms()), app);
+        h.shutdown();
+    }
+
+    /// A host whose recording phase is `phase` (a shared cell the test moves).
+    fn host_in_phase(phase: &Arc<Mutex<RecordingPhase>>) -> CaptureHost {
+        let (h, _) = host_with_targets();
+        let p = Arc::clone(phase);
+        h.set_recording_check(Arc::new(move || *lock(&p)));
+        h
+    }
+
+    fn refusal(r: CoreResult<Value>) -> Option<&'static str> {
+        match r {
+            Err(CoreError::IpcRefused { code }) => Some(code),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn ux6h_ac_6_1_to_6_3_the_refusal_follows_the_recording_phase() {
+        let phase = Arc::new(Mutex::new(RecordingPhase::Idle));
+        let h = host_in_phase(&phase);
+        // Idle: both modes start (and stop again, so the next start finds the mic free).
+        for mode in ["ptt", "hands_free"] {
+            let lease = lease_of(&h.call("capture_start", start_args("a1", mode)).unwrap());
+            h.call("capture_stop", json!({"mogId": "a1", "leaseId": lease}))
+                .unwrap();
+        }
+        // AC-6.3: while the recording starts or stops, every start is refused.
+        *lock(&phase) = RecordingPhase::Changing;
+        for mode in ["ptt", "hands_free"] {
+            assert_eq!(
+                refusal(h.call("capture_start", start_args("a1", mode))),
+                Some("recording_in_progress"),
+                "{mode} while changing"
+            );
+        }
+        // AC-6.2: active, hands-free stays refused. AC-6.1: a PTT passes the check (R2 then
+        // grants it as an overlay on the session lease; `recording_host` tests that).
+        *lock(&phase) = RecordingPhase::Active;
+        assert_eq!(
+            refusal(h.call("capture_start", start_args("a1", "hands_free"))),
+            Some("recording_in_progress")
+        );
+        assert!(h.call("capture_start", start_args("a1", "ptt")).is_ok());
+        // A session start through the IPC is refused by the same check.
+        assert_eq!(
+            refusal(h.call("capture_start", start_args("a1", "session"))),
+            Some("recording_in_progress")
+        );
         h.shutdown();
     }
 

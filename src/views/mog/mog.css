@@ -786,3 +786,61 @@ body,
       mog-answer-soft 2400ms ease-in-out 480ms infinite alternate;
   }
 }
+
+/* ADR 0118: "Call only" replaces the REC label while the talk key is held during a call
+   recording. Its dot is hollow (a ring, not the filled lamp dot), so the state reads as
+   "paused for you", not "recording you". */
+[data-overlay='recording'][data-call-only]::before {
+  border: 1.5px solid var(--mog-overlay-text);
+  width: 4px;
+  height: 4px;
+  box-sizing: content-box;
+}
+
+/* The one-time note "Your call can still hear you." is a pill with the other badges. It can be
+   wider than the window, so it wraps, balanced, and stays inside it. */
+.badges [data-badge='call_note'] {
+  order: -1;
+  max-width: calc(100% - 4px);
+  padding-inline: 5px;
+  letter-spacing: -0.01em;
+  box-sizing: border-box;
+  justify-content: center;
+  text-align: center;
+  text-wrap: balance;
+  font-weight: 400;
+  border-radius: var(--mog-radius-md);
+  animation: mog-note-in 160ms var(--mog-ease-out);
+}
+
+@keyframes mog-note-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badges [data-badge='call_note'] {
+    animation-name: mog-note-fade;
+  }
+
+  @keyframes mog-note-fade {
+    from {
+      opacity: 0;
+    }
+  }
+}
+
+/* Visually hidden, still read by a screen reader. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

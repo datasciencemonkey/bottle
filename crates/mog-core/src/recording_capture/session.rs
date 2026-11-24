@@ -40,7 +40,7 @@ use crate::token_events::SessionEvent;
 use crate::types::{CaptureMode, MogId};
 
 use super::chunker::{create_private_dir, PartFile, PartFormat, PartWriter};
-use super::mixer::Mixer;
+use super::mixer::{Mixer, Track};
 use super::tap::{Block, RecordingTap};
 use super::PART_MAX_SAMPLES;
 
@@ -298,7 +298,45 @@ struct Active {
     dir: PathBuf,
     started_mono: u64,
     ends_mono: u64,
-    writer: JoinHandle<std::io::Result<Vec<PartFile>>>,
+    writer: JoinHandle<std::io::Result<Written>>,
+}
+
+/// What the writer thread returns: the parts and the gated ranges (mixer samples from the
+/// recording start).
+type Written = (Vec<PartFile>, Vec<(u64, u64)>);
+
+/// A range of mic audio that the gate zeroed (ADR 0118), in 16 kHz mixer samples counted from
+/// the start of its part. No audio and no text is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldRange {
+    /// The first gated sample, from the part start.
+    pub start_samples: u64,
+    /// The number of gated samples.
+    pub len_samples: u64,
+}
+
+/// Cut ranges (absolute start, length) at the part borders. Part `i` spans the samples of
+/// the parts before it and its own.
+fn split_ranges(parts: &[PartFile], ranges: &[(u64, u64)]) -> Vec<Vec<HeldRange>> {
+    let mut at = 0u64;
+    parts
+        .iter()
+        .map(|p| {
+            let (lo, hi) = (at, at + p.samples);
+            at = hi;
+            ranges
+                .iter()
+                .filter_map(|&(start, len)| {
+                    let (a, b) = (start.max(lo), (start + len).min(hi));
+                    (b > a).then(|| HeldRange {
+                        start_samples: a - lo,
+                        len_samples: b - a,
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -610,11 +648,16 @@ impl RecordingSession {
         lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
         let system_audio = self.system_state(&active.info);
-        let parts = match active.writer.join() {
-            Ok(Ok(parts)) => parts,
+        let (parts, held) = match active.writer.join() {
+            Ok(Ok(done)) => done,
             // A write error: hand off what was finished (the open part may be cut short).
-            Ok(Err(_)) | Err(_) => existing_parts(&active.dir),
+            Ok(Err(_)) | Err(_) => (existing_parts(&active.dir), Vec::new()),
         };
+        let mut parts = parts;
+        let per_part = split_ranges(&parts, &held);
+        for (part, ranges) in parts.iter_mut().zip(per_part) {
+            part.held = ranges;
+        }
         let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
         let rec = FinishedRecording {
             profile: job.profile,
@@ -731,23 +774,32 @@ fn write_loop(
     mut mixer: Mixer,
     mut parts: PartWriter,
     on_part: PartSink,
-) -> std::io::Result<Vec<PartFile>> {
+) -> std::io::Result<Written> {
     let mut out = Vec::new();
     let mut sent = 0;
     for block in rx {
+        if block.track == Track::Mic {
+            mixer.mark_mic(block.gated);
+        }
         mixer.push(block.track, &block.samples, block.rate);
         out.clear();
         mixer.drain(&mut out);
         parts.write(&out)?;
-        for part in &parts.finished()[sent..] {
-            on_part(part);
+        for k in sent..parts.finished().len() {
+            // The part is closed: its ranges are final (an open range is cut at its end).
+            let mut part = parts.finished()[k].clone();
+            if let Some(h) = split_ranges(&parts.finished()[..=k], &mixer.ranges_so_far()).pop() {
+                part.held = h;
+            }
+            on_part(&part);
         }
         sent = parts.finished().len();
     }
     out.clear();
     mixer.flush(&mut out);
     parts.write(&out)?;
-    parts.finish()
+    let ranges = mixer.finish_ranges();
+    Ok((parts.finish()?, ranges))
 }
 
 /// The part files in `dir`, by name, after a failed write (best effort).
@@ -770,6 +822,7 @@ fn existing_parts(dir: &std::path::Path) -> Vec<PartFile> {
                 file_name,
                 samples: 0,
                 offset_ms: 0,
+                held: Vec::new(),
             })
         })
         .collect();

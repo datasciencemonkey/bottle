@@ -127,6 +127,7 @@ pub fn temp_parts_in(roots: &[std::path::PathBuf], name: &str) -> Vec<LocalPart>
         .map(|path| LocalPart {
             path,
             duration_s: 0.0,
+            held: Vec::new(),
         })
         .collect()
 }
@@ -224,6 +225,7 @@ pub fn resumable(
             .map(|path| LocalPart {
                 path,
                 duration_s: 0.0,
+                held: Vec::new(),
             })
             .collect();
         parts.sort_by(|a, b| a.path.file_name().cmp(&b.path.file_name()));
@@ -467,6 +469,7 @@ fn local_part(p: &PartFile) -> LocalPart {
     LocalPart {
         path: p.path.clone(),
         duration_s: p.samples as f64 / f64::from(SAMPLE_RATE),
+        held: p.held.clone(),
     }
 }
 

@@ -654,6 +654,7 @@ impl CloudAdapter {
                 .map(|p| LocalPart {
                     path: p.path.clone(),
                     duration_s: p.duration_s,
+                    held: Vec::new(),
                 })
                 .collect(),
         };
@@ -764,24 +765,6 @@ impl RecordingCloud for CloudAdapter {
             .collect())
     }
 
-    fn write_notes(
-        &self,
-        profile: &ProfileName,
-        endpoint: &EndpointName,
-        instructions: &Instructions,
-        transcript_md: &str,
-    ) -> RecordingResult<String> {
-        self.service
-            .notes(
-                profile.as_str(),
-                endpoint.as_str(),
-                RECORDING_MOG_TAG,
-                instructions.as_str(),
-                transcript_md,
-            )
-            .map_err(wire_kind)
-    }
-
     fn write_job(
         &self,
         profile: &ProfileName,
@@ -847,6 +830,7 @@ impl RecordingCloud for CloudAdapter {
                         part: s.part,
                     })
                     .collect(),
+                bottle_gaps: Vec::new(),
             };
             let tj = serde_json::to_vec_pretty(&doc).map_err(|_| RecordingErrorKind::Internal)?;
             w(transcript_json_file(name), &tj)?;
