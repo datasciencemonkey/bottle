@@ -45,7 +45,11 @@ second meaning, so it does not change.
 
 - The combined answer stays on disk in `final_answer_md`, encrypted by SQLCipher. It can join text
   from several workspaces. The call rows already keep the full answer of each workspace,
-  including workspaces that are not home. So the summary adds no new kind of data.
+  including workspaces that are not home. So the answer adds no new kind of data.
+- The question is new on disk in one case. A call row for a workspace that is not home keeps no
+  question text (a table CHECK). The turn row keeps the question and counts as a home row, also
+  when every part of the turn went to a workspace that is not home. This ADR accepts that. The
+  user can delete the thread, and Wipe removes the row.
 - The text stays out of `answer_summary` and the key numbers (D60 fields). So the recall paths
   never use it.
 - Wipe needs no change. Age Wipe deletes a turn row by `asked_at`. Wipe "everything" deletes all
@@ -58,16 +62,36 @@ second meaning, so it does not change.
 ### Local-only delete
 
 - A new brain statement, `mem.exchange.delete` (Write, `Access::Brain`), deletes the named
-  exchanges of one MOG: `mogId` and `requestIds`, a list of at most 200 strings of at most 36
-  characters. It answers `{changes}`.
+  exchanges of one MOG: `mogId`, `now` and `requestIds`, a list of at most 200 strings of at most
+  36 characters. It answers `{changes}`.
+- It is a tombstone, not a row delete. It sets `deleted_at` to `now`, sets `question_user`,
+  `answer_summary` and `final_answer_md` to NULL, sets `key_numbers` to `'[]'`, and keeps the ids
+  (`conversation_id`, `request_id`, `space_id` and the host). The list and get statements skip a
+  row with `deleted_at`. A row that is already a tombstone matches no change.
+- `mem.exchange.upsert` never brings a tombstone back. On a conflict with a tombstone it changes
+  nothing: the row keeps `deleted_at` and the erased text.
 - The SQL filters by `mog_id` and passes the MEM-01 guard. A value that is not a request id
   matches no row. An empty list deletes nothing. The list limits come from the `Tags` param type,
   so the check runs before any SQL.
 - It writes no `forget_log` row and calls no remote service. A Genie conversation stays on the
-  server unless Forget or Wipe "Also delete Genie conversations" removes it.
-- `memory_item.source_exchange_id` is `ON DELETE SET NULL`. A citing memory item keeps its row and
-  loses its source.
+  server until Forget or Wipe "Also delete Genie conversations" removes it. These reads take the
+  `conversation_id` from the tombstone, so a local delete does not put the conversation out of
+  reach. A test deletes a thread, runs Wipe "everything", and checks that the report still has
+  the conversation id.
+- Wipe and Forget delete the tombstone rows like any other row.
+- A citing `memory_item` keeps its row and its `source_exchange_id`: the tombstone row stays.
 - The brain sends the delete after the 8 s Undo window, like Memory (`memory.delete`).
+
+### Answers first
+
+- The workspace answers must be visible. When a turn has no combined note, the answers show open
+  and first, each under "Answer from <workspace>". The note of the MOG then comes after them as
+  one small muted block. This holds when the summary is missing, when the summary is only the
+  note of the agent (the cross-workspace answer is off), and when a part was never shown to the
+  agent. A stored turn does not say whether the agent saw every part, so it always shows the
+  answers first.
+- The one-line hint of a finished thread in the list is the first line of the first answered
+  part, never the note.
 
 ### HubThread ticket
 
@@ -86,4 +110,8 @@ second meaning, so it does not change.
 - The Conversations list can show one thread for each agent thread, and the Agent panel goes.
 - Disk now holds the user question and the combined answer of each turn until the user deletes the
   thread or uses Wipe.
-- A delete is local. The Genie conversations stay on the server.
+- A delete is local and leaves a tombstone. The Genie conversations stay on the server until
+  Wipe or Forget with "Also delete Genie conversations" removes them.
+- A Wipe leaves no turn row. The brain sets a write fence at each Wipe. A row write that began
+  before it saves nothing, and a turn that the session end cut off writes its row only when the
+  `agent:session` event arrives with a reason other than `wipe`.

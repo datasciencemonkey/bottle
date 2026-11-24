@@ -1128,3 +1128,43 @@ fn adr_0121_wipe_removes_agent_turn_rows() {
     service(&s, &c).wipe(WipeScope::Everything).expect("wipe");
     assert_eq!(count(&s, turns), 0);
 }
+
+/// ADR 0121 (security M1): a hub Delete leaves a tombstone that keeps the Genie conversation id.
+/// Wipe everything must still return that conversation, so Bottle can delete it on the server.
+#[test]
+fn adr_0121_wipe_still_returns_the_conversation_of_a_locally_deleted_thread() {
+    let (_t, s) = seeded("0121-tomb");
+    let req = request_id("e1");
+    exec(
+        &s,
+        "mem.exchange.upsert",
+        json!({"mogId": MOG_A, "exchangeId": exchange_id("e1"), "requestId": req,
+               "backendKind": "genie_one_mcp", "profileName": "test-profile",
+               "workspaceHost": "example.cloud.databricks.com", "workspaceId": 1234,
+               "homeWorkspace": true, "conversationId": "conv-test-deleted",
+               "questionUser": "What drove Q3?", "questionSentSha256": "0".repeat(64),
+               "status": "completed", "finalAnswerMd": "Revenue grew",
+               "askedAt": NOW - 2 * DAY, "rowHlc": 1, "deviceId": "test-device"}),
+    );
+    let del = exec(
+        &s,
+        "mem.exchange.delete",
+        json!({"mogId": MOG_A, "requestIds": [req], "now": NOW}),
+    );
+    assert_eq!(del["rows"][0]["changes"], 1);
+    let r = wipe(&s, WipeScope::Everything);
+    assert!(
+        r.conversations
+            .iter()
+            .any(|c| c.conversation_id == "conv-test-deleted"),
+        "the tombstone still gives its conversation id to Wipe"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM genie_exchange WHERE conversation_id = 'conv-test-deleted'"
+        ),
+        0,
+        "Wipe hard-deletes the tombstone"
+    );
+}

@@ -254,10 +254,6 @@ fn mem_26_no_statement_or_trigger_purges_exchanges_by_age() {
                 "mem.forget.session_exchanges" | "mem.forget.mog_exchanges" => {
                     assert!(!sql.contains("_at"), "{}: Forget has no age rule", st.id);
                 }
-                // Hub Conversations delete: named request ids only, no age rule (ADR 0121).
-                "mem.exchange.delete" => {
-                    assert!(!sql.contains("_at"), "{}: no age rule", st.id);
-                }
                 // Wipe: Settings only, through R14 (U9).
                 "mem.wipe.exchanges_before" => assert_eq!(st.access, Access::Core),
                 other => panic!("{other} deletes exchanges"),
@@ -265,8 +261,9 @@ fn mem_26_no_statement_or_trigger_purges_exchanges_by_age() {
         }
         if sql.contains("genie_exchange") {
             assert!(!sql.contains("expires_at"), "{}: no TTL (U9)", st.id);
+            // The hub delete tombstone erases the text on purpose (ADR 0121).
             assert!(
-                !sql.contains("final_answer_md = null"),
+                st.id == "mem.exchange.delete" || !sql.contains("final_answer_md = null"),
                 "{}: never clears the answer",
                 st.id
             );
@@ -519,8 +516,21 @@ fn delete(s: &SqlCipherLocalStore, mog: &str, ids: Value) -> i64 {
     changes(&exec(
         s,
         "mem.exchange.delete",
-        json!({"mogId": mog, "requestIds": ids}),
+        json!({"mogId": mog, "requestIds": ids, "now": T0 + 10 * DAY}),
     ))
+}
+
+/// The row of one request, deleted or not: id, conversation id, deleted_at and the text parts.
+fn raw(s: &SqlCipherLocalStore, request_id: &str) -> (Option<String>, Option<i64>, bool, String) {
+    s.with_conn(|c| {
+        c.query_row(
+            "SELECT conversation_id, deleted_at, question_user IS NULL AND answer_summary IS NULL \
+             AND final_answer_md IS NULL, key_numbers FROM genie_exchange WHERE request_id = ?1",
+            [request_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+    })
+    .unwrap()
 }
 
 #[test]
@@ -536,13 +546,13 @@ fn adr_0121_delete_removes_only_the_named_ids_of_that_mog() {
     // MEM-01: another MOG's id in the list matches nothing.
     assert_eq!(delete(&s, MOG_A, json!([REQ_2])), 0);
     assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
-    // Two named ids go; the rest stay.
+    // Two named ids go (as tombstones); the rest stay.
     assert_eq!(delete(&s, MOG_A, json!([TURN_REQ, CALL_REQ])), 2);
     assert!(get(&s, MOG_A, TURN_REQ).is_empty());
     assert!(get(&s, MOG_A, CALL_REQ).is_empty());
     assert_eq!(get(&s, MOG_A, REQ_1).len(), 1);
     assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
-    // A repeat, an empty list and an unknown id delete nothing.
+    // A repeat (a tombstone), an empty list and an unknown id delete nothing.
     assert_eq!(delete(&s, MOG_A, json!([TURN_REQ])), 0);
     assert_eq!(delete(&s, MOG_A, json!([])), 0);
     // A local delete leaves no forget_log row.
@@ -555,6 +565,35 @@ fn adr_0121_delete_removes_only_the_named_ids_of_that_mog() {
     assert_eq!(st.access, Access::Brain);
     assert_eq!(st.kind, super::catalog::Kind::Write);
     super::mog_guard::require_mog_id_filter(st.sql).expect("mog_guard");
+}
+
+#[test]
+fn adr_0121_delete_is_a_tombstone_that_keeps_the_ids_and_upsert_cannot_revive_it() {
+    let t = TempDir::new("0121-tomb");
+    let s = open(&t);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    assert_eq!(delete(&s, MOG_A, json!([REQ_1])), 1);
+    // The row stays with its conversation id; the text is erased; the reads skip it.
+    let (conv, at, erased, kn) = raw(&s, REQ_1);
+    assert_eq!(conv.as_deref(), Some("test-conv"));
+    assert_eq!(at, Some(T0 + 10 * DAY));
+    assert!(erased, "question, summary and answer are NULL");
+    assert_eq!(kn, "[]");
+    assert!(get(&s, MOG_A, REQ_1).is_empty());
+    let list = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    assert!(rows(&list).is_empty());
+    // A late upsert of the same request keeps the tombstone and the erased text.
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    let (conv, at, erased, kn) = raw(&s, REQ_1);
+    assert_eq!(conv.as_deref(), Some("test-conv"));
+    assert_eq!(at, Some(T0 + 10 * DAY));
+    assert!(erased);
+    assert_eq!(kn, "[]");
+    assert!(get(&s, MOG_A, REQ_1).is_empty());
 }
 
 #[test]
@@ -587,7 +626,7 @@ fn adr_0121_delete_matches_no_non_uuid_id_and_checks_the_list_shape() {
     ] {
         let r = s.exec(
             "mem.exchange.delete",
-            json!({"mogId": MOG_A, "requestIds": bad}),
+            json!({"mogId": MOG_A, "requestIds": bad, "now": T0}),
         );
         assert!(r.is_err(), "{bad}");
     }
@@ -598,7 +637,7 @@ fn adr_0121_delete_matches_no_non_uuid_id_and_checks_the_list_shape() {
 }
 
 #[test]
-fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange_with_a_null_source() {
+fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange() {
     let t = TempDir::new("0121-cite");
     let s = open(&t);
     seed_turn(&s);
@@ -619,5 +658,6 @@ fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange_with_a_null_source(
             )
         })
         .unwrap();
-    assert_eq!(src, None);
+    // The exchange row stays as a tombstone, so the pointer stays too.
+    assert_eq!(src.as_deref(), Some(CALL_EXCH));
 }
