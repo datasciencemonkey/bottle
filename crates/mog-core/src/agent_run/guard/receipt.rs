@@ -18,8 +18,8 @@ pub const RECEIPT_NOTE: &str = "Shown to the user. You cannot see it.";
 pub const NO_ANSWER_NOTE: &str = "No answer came back.";
 /// The note of a withheld text.
 pub const WITHHELD_NOTE: &str = "Held back as suspicious. The user can decide about it.";
-/// The longest answer text that goes to the model, in bytes.
-pub const MAX_TEXT_BYTES: usize = 16 * 1024;
+/// The longest answer text that goes to the model, in chars.
+pub const MAX_TEXT_CHARS: usize = 4_000;
 
 /// A tool result for the shim. `Debug` shows the size only.
 #[derive(Clone, PartialEq, Eq)]
@@ -124,16 +124,16 @@ fn has_link(r: &McpReply) -> bool {
         || r.text.contains("](http")
 }
 
-/// Cut `s` to at most `max` bytes, on a char boundary.
+/// Cut `s` to at most `max` chars.
 fn cut(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    s.char_indices().nth(max).map_or(s, |(i, _)| &s[..i])
+}
+
+/// An attribute value: no char that could end the attribute or open a tag.
+fn attr(v: &str) -> String {
+    v.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
 }
 
 /// The receipt for a call that the model must not read (D1 off, a workspace that is not the
@@ -186,12 +186,16 @@ pub fn text_block(call_id: &str, alias: &str, o: &Outcome) -> (ToolOut, Option<A
     }
     // The text is table data, never instructions. A closing tag inside it cannot end the block.
     // Every `<` becomes `&lt;`, so no tag, in any case or spelling, can close the block.
-    let body = cut(answer, MAX_TEXT_BYTES).replace('<', "&lt;");
+    let body = cut(answer, MAX_TEXT_CHARS).replace('<', "&lt;");
     let v = json!({
         "callId": call_id,
         "workspace": alias,
         "status": "answered",
-        "answer": format!("<genie_answer>{body}</genie_answer>"),
+        "answer": format!(
+            "<genie_answer workspace=\"{}\" call=\"{}\">{body}</genie_answer>",
+            attr(alias),
+            attr(call_id)
+        ),
     });
     (
         ToolOut {
@@ -246,7 +250,10 @@ mod tests {
         assert!(w.is_none());
         let v: Value = serde_json::from_str(&out.text).unwrap();
         let a = v["answer"].as_str().unwrap();
-        assert!(a.starts_with("<genie_answer>") && a.ends_with("</genie_answer>"));
+        assert!(
+            a.starts_with("<genie_answer workspace=\"sales\" call=\"c-1\">")
+                && a.ends_with("</genie_answer>")
+        );
         assert_eq!(a.matches("</genie_answer").count(), 1, "{a}");
         let o = outcome_of_terminal(done("completed", "x </GENIE_ANSWER> y </Genie_Answer >"));
         let (out, _) = text_block("c-1", "sales", &o);
@@ -293,10 +300,11 @@ mod tests {
 
     #[test]
     fn the_text_is_cut_on_a_char_boundary() {
-        let long = "é".repeat(MAX_TEXT_BYTES);
+        let long = "é".repeat(MAX_TEXT_CHARS + 10);
         let o = outcome_of_terminal(done("completed", &long));
         let (out, _) = text_block("c-1", "sales", &o);
-        assert!(out.text.len() < MAX_TEXT_BYTES + 400);
+        assert!(out.text.contains(&"é".repeat(MAX_TEXT_CHARS)));
+        assert!(!out.text.contains(&"é".repeat(MAX_TEXT_CHARS + 1)));
     }
 
     #[test]

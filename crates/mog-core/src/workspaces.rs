@@ -71,6 +71,16 @@ pub trait ProfileSource: Send + Sync {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>>;
 }
 
+/// SEC-28b: an admin lock on D1. No admin source exists before slice 3, so it is never set.
+fn d1_locked() -> bool {
+    false
+}
+
+/// D1 as the agent session sees it: the lock forces it off (AC-2b.5).
+fn effective_d1(setting: bool, locked: bool) -> bool {
+    setting && !locked
+}
+
 impl ProfileSource for ProfileService {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
         self.list(refresh)
@@ -487,7 +497,7 @@ impl WorkspaceStore {
             workspaces: rows,
             agent: AgentSettings {
                 cross_workspace_data: data.agent.cross_workspace_data,
-                cross_workspace_locked: false,
+                cross_workspace_locked: d1_locked(),
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 run_profile: data.agent.run_profile.clone(),
@@ -660,7 +670,7 @@ impl WorkspaceStore {
         });
         Ok(crate::agent_run::session::Snapshot {
             catalog,
-            cross_workspace: data.agent.cross_workspace_data,
+            cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
             budget: data.agent.genie_call_budget.get(),
             agent_profile,
             agent_host,
@@ -736,3 +746,17 @@ impl GatewayComponents for WorkspaceStore {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod d1_lock_tests {
+    use super::{d1_locked, effective_d1};
+
+    #[test]
+    fn ac_2b_5_a_lock_forces_d1_off_and_no_lock_keeps_the_setting() {
+        assert!(!effective_d1(true, true));
+        assert!(!effective_d1(false, true));
+        assert!(effective_d1(true, false));
+        assert!(!effective_d1(false, false));
+        assert!(!d1_locked(), "no admin source before slice 3");
+    }
+}

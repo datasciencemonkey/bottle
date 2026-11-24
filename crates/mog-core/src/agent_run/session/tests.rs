@@ -1530,6 +1530,51 @@ fn a_cited_answered_call_of_this_or_an_earlier_turn_gives_a_note() {
 }
 
 #[test]
+fn ac_2b_6_combined_only_with_d1_on_and_more_than_one_workspace_cited() {
+    for (d1, cites, want) in [
+        (true, 2, AgentAnswerKind::Combined),
+        (true, 1, AgentAnswerKind::Note),
+        (false, 2, AgentAnswerKind::Note),
+    ] {
+        let r = Rig::new();
+        r.ws.0.lock().unwrap().cross_workspace = d1;
+        let (s, t) = r.first_turn("q");
+        *r.guard.calls.lock().unwrap() = vec![
+            record(&t, "c-00000001", "finance", AgentCallState::Answered),
+            record(&t, "c-00000002", "sales", AgentCallState::Answered),
+        ];
+        let sources: Vec<_> = [("finance", "c-00000001"), ("sales", "c-00000002")]
+            .iter()
+            .take(cites)
+            .map(|(w, c)| json!({ "workspace": w, "callId": c }))
+            .collect();
+        let text = json!({ "answer": "x", "sources": sources }).to_string();
+        s.complete("st-1", "completed", Some(&text));
+        assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Answered);
+        let res = r.host.turn_result(&t).unwrap();
+        assert_eq!(res.answer_kind, want, "d1={d1} cites={cites}");
+        assert_eq!(res.sources.len(), cites);
+    }
+}
+
+#[test]
+fn ac_2b_4_a_d1_change_during_a_d1_on_run_ends_the_session_after_the_live_turn() {
+    for now in [false, true] {
+        let r = Rig::new();
+        r.ws.0.lock().unwrap().cross_workspace = !now;
+        let (s, t) = r.first_turn("q");
+        r.ws.0.lock().unwrap().cross_workspace = now;
+        r.clock.advance(Duration::from_secs(2));
+        r.host.tick();
+        assert!(!s.killed(), "the live turn must not be cut");
+        s.complete("st-1", "completed", Some("{}"));
+        assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Answered);
+        assert_eq!(r.events.session_ended(0), AgentSessionEndReason::D1Changed);
+        assert!(s.killed());
+    }
+}
+
+#[test]
 fn an_unknown_call_id_a_wrong_workspace_or_a_failed_call_hides_the_summary() {
     for (call, ws, state) in [
         ("c-deadbeef", "sales", AgentCallState::Answered),
