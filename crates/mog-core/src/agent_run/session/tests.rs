@@ -25,7 +25,8 @@ use crate::error::CoreResult;
 use crate::ipc::AgentTurnSubmitArgs;
 use crate::types::{
     AgentAnswerKind, AgentCallState, AgentProfileState, AgentSessionEndReason, AgentSessionEvent,
-    AgentSessionPhase, AgentTurnCall, AgentTurnEvent, AgentTurnOutcome, GenieCodeBinary,
+    AgentSessionPhase, AgentTurnCall, AgentTurnEvent, AgentTurnOutcome, AgentWithheld,
+    GenieCodeBinary,
 };
 use crate::wipe::AgentWipeHook;
 
@@ -306,6 +307,8 @@ struct FakeGuard {
     log: Mutex<Vec<String>>,
     tainted: AtomicBool,
     calls: Mutex<Vec<CallRecord>>,
+    /// Call ids that the guard withheld (injection suspected).
+    withheld: Mutex<Vec<String>>,
 }
 
 impl FakeGuard {
@@ -350,8 +353,25 @@ impl SessionGuard for FakeGuard {
     fn calls(&self, _: &str) -> Vec<CallRecord> {
         self.calls.lock().unwrap().clone()
     }
-    fn call_detail(&self, _: &str, _: &str) -> Option<AgentTurnCall> {
-        None
+    fn call_detail(&self, turn_id: &str, call_id: &str) -> Option<AgentTurnCall> {
+        let c = self
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| c.turn_id == turn_id && c.call_id == call_id)?
+            .clone();
+        let withheld = self.withheld.lock().unwrap().contains(&c.call_id);
+        Some(AgentTurnCall {
+            call_id: c.call_id,
+            turn_id: c.turn_id,
+            workspace_id: c.alias,
+            profile: "p".to_owned(),
+            question: String::new(),
+            state: c.state,
+            reply: None,
+            withheld: withheld.then_some(AgentWithheld::InjectionSuspected),
+        })
     }
     fn wipe_all(&self) {
         self.log.lock().unwrap().push("wipe_all".to_owned());
@@ -1571,6 +1591,37 @@ fn ac_2b_4_a_d1_change_during_a_d1_on_run_ends_the_session_after_the_live_turn()
         assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Answered);
         assert_eq!(r.events.session_ended(0), AgentSessionEndReason::D1Changed);
         assert!(s.killed());
+    }
+}
+
+#[test]
+fn a_withheld_cited_call_is_never_a_valid_source() {
+    // Case 2: a withheld finance call and an answered sales call, D1 on.
+    // Case 1: the withheld call alone.
+    for cites in [2usize, 1] {
+        let r = Rig::new();
+        r.ws.0.lock().unwrap().cross_workspace = true;
+        let (s, t) = r.first_turn("q");
+        *r.guard.calls.lock().unwrap() = vec![
+            record(&t, "c-00000001", "finance", AgentCallState::Answered),
+            record(&t, "c-00000002", "sales", AgentCallState::Answered),
+        ];
+        r.guard
+            .withheld
+            .lock()
+            .unwrap()
+            .push("c-00000001".to_owned());
+        let sources: Vec<_> = [("finance", "c-00000001"), ("sales", "c-00000002")]
+            .iter()
+            .take(cites)
+            .map(|(w, c)| json!({ "workspace": w, "callId": c }))
+            .collect();
+        let text = json!({ "answer": "x", "sources": sources }).to_string();
+        s.complete("st-1", "completed", Some(&text));
+        assert_eq!(r.events.ended(&t).0, AgentTurnOutcome::Answered);
+        let res = r.host.turn_result(&t).unwrap();
+        assert_eq!(res.answer_kind, AgentAnswerKind::Hidden, "cites={cites}");
+        assert!(res.answer.is_none() && res.sources.is_empty());
     }
 }
 

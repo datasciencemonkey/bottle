@@ -1161,7 +1161,7 @@ impl Engine {
         let calls = calls_all.iter().filter(|c| c.turn_id == turn_id).count();
         if outcome == AgentTurnOutcome::Answered {
             let d1 = self.session.as_ref().is_some_and(|s| s.cross_workspace);
-            let r = build_result(&live, &calls_all, d1);
+            let r = build_result(&live, &calls_all, d1, self.d.guard.as_ref());
             self.store_result(turn_id.clone(), r);
         }
         if live.began {
@@ -1562,6 +1562,7 @@ fn build_result(
     live: &Live,
     calls: &[crate::agent_run::seam::CallRecord],
     d1: bool,
+    guard: &dyn crate::agent_run::seam::SessionGuard,
 ) -> AgentTurnResult {
     let usage = Some(AgentUsage {
         input_tokens: live.usage.input,
@@ -1597,6 +1598,13 @@ fn build_result(
             c.call_id == cid && c.alias == ws && c.state == crate::types::AgentCallState::Answered
         });
         let Some(c) = ok else { return hidden };
+        // A withheld call keeps the state Answered, so ask the guard. No detail: not a source.
+        if guard
+            .call_detail(&c.turn_id, &c.call_id)
+            .is_none_or(|d| d.withheld.is_some())
+        {
+            return hidden;
+        }
         out.push(AgentSource {
             workspace_id: ws.to_owned(),
             call_id: cid.to_owned(),

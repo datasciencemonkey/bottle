@@ -29,5 +29,3 @@ pub use component::{
     AgentEnv, BinaryCheck, Installer, PreflightFail, SessionConfig, SessionDeps, SessionHost,
     ShimLaunch, ShimProvider, Snapshot, WorkspaceView,
 };
-
-pub use crate::agent_run::guard::D1_SUPPORTED;
