@@ -152,9 +152,15 @@ export class WipeFlow {
   }
 
   /** The user selected Wipe: wipe the local rows, then the Genie conversations if chosen. */
-  async confirm(scope: WipeScope, alsoGenie: boolean): Promise<WipeDialogModel> {
+  async confirm(
+    scope: WipeScope,
+    alsoGenie: boolean,
+    /** Runs when the local wipe worked, before the remote deletes. */
+    onLocalWiped?: () => void,
+  ): Promise<WipeDialogModel> {
     const base = this.dialog(scope, alsoGenie);
     const { local, conversations } = await this.core.wipe(scope);
+    onLocalWiped?.();
     const empty = local === 0 && conversations.length === 0;
     const result: NonNullable<WipeDialogModel['result']> = {
       local,

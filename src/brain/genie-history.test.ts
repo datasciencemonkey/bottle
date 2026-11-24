@@ -322,4 +322,13 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     await record(answered({ isStale: () => stale }));
     expect(ids(store)).toEqual(['mem.mog.upsert']);
   });
+
+  it('[Wipe] [L-1] a stale attempt does not use up the op id: the same row (op id) written again saves once', async () => {
+    const { store, record } = rig();
+    await record(answered({ isStale: () => true }));
+    expect(ids(store)).toEqual([]);
+    await record(answered());
+    await record(answered());
+    expect(ids(store).filter((id) => id === 'mem.exchange.upsert')).toHaveLength(1);
+  });
 });

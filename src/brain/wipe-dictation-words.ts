@@ -11,8 +11,8 @@ export function clearingDictationWords(
 ): WipeDialogDeps['flow'] {
   return {
     dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
-    async confirm(scope, alsoGenie) {
-      const done = await flow.confirm(scope, alsoGenie);
+    async confirm(scope, alsoGenie, onLocalWiped) {
+      const done = await flow.confirm(scope, alsoGenie, onLocalWiped);
       if (scope === 'everything') clear();
       return done;
     },

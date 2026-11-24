@@ -152,9 +152,6 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
   const done = new Set<string>();
   return async (x) => {
     if (done.has(x.opId)) return;
-    done.add(x.opId);
-    // A Set iterates in insertion order, so the first id is the oldest.
-    if (done.size > RECENT_OPS_MAX) done.delete(done.values().next().value as string);
     try {
       const dataMogId = (await deps.dataMogId?.(x.profile).catch(() => undefined)) ?? x.mogId;
       const [name, host] = await Promise.all([
@@ -169,6 +166,12 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
       });
       // A Wipe may have run while the lookups above waited: it deleted every row, so none returns.
       if (x.isStale?.()) return;
+      // Only an attempt that gets to the write takes the id: a stale (or held) attempt leaves it
+      // free, so the replay of the same turn row (same op id) is not dropped as a duplicate.
+      if (done.has(x.opId)) return;
+      done.add(x.opId);
+      // A Set iterates in insertion order, so the first id is the oldest.
+      if (done.size > RECENT_OPS_MAX) done.delete(done.values().next().value as string);
       await deps.memory.recordExchange(exchangeOf(x, host ?? '', dataMogId));
     } catch {
       deps.log.event('memory.write', { ok: 0 });

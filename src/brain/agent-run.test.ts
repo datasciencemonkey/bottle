@@ -16,7 +16,7 @@ import type {
 import { createFollowUpWindow } from './agent-route';
 import { createAgentClient, uuidOfTurn, type AgentApi, type AgentClient } from './agent-run';
 import { createSimClock } from './clock';
-import type { GenieEnd } from './genie-history';
+import { createGenieHistory, type ExchangeMemory, type GenieEnd } from './genie-history';
 import { createBrainLog } from './log';
 import { routerDecision } from '../test-support/model-invoke';
 
@@ -104,7 +104,18 @@ const sessionOf = (over: Partial<AgentSessionState> = {}): AgentSessionState => 
   ...over,
 });
 
-function rig() {
+/** A promise that a test opens by hand. */
+function gate() {
+  let open!: () => void;
+  const p = new Promise<void>((res) => (open = res));
+  return { p, open };
+}
+
+/**
+ * `real`: the history is the real `createGenieHistory` over a fake store (it dedupes op ids and
+ * asks `isStale()` after its lookups), and `rows` holds the questions that were written.
+ */
+function rig(opts: { real?: boolean } = {}) {
   const clock = createSimClock(1_000);
   const calls: string[] = [];
   const shown: AgentTurnView[] = [];
@@ -120,7 +131,24 @@ function rig() {
     details: new Map<string, AgentTurnCall>(),
     result: undefined as AgentTurnResult | undefined,
     session: sessionOf(),
+    /** Holds `homeProfile` (the await inside `recordTurn`) until it opens. */
+    homeGate: undefined as Promise<void> | undefined,
+    /** Holds the lookups of the real writer (the await before its first `isStale()`). */
+    writeGate: undefined as Promise<void> | undefined,
   };
+  const rows: string[] = [];
+  const writer = createGenieHistory({
+    memory: {
+      registerMog: async () => undefined,
+      recordExchange: async (x: { questionUser: string }) => void rows.push(x.questionUser),
+    } as unknown as ExchangeMemory,
+    mogName: async () => {
+      await script.writeGate;
+      return 'Sales';
+    },
+    hostOf: async () => undefined,
+    log: { event: () => true },
+  });
   const api: AgentApi = {
     submit: async (a) => {
       calls.push(
@@ -155,11 +183,14 @@ function rig() {
       colorVariant: p === 'fake-sales' ? 'sky' : 'rose',
     }),
     names: () => ({ agent: 'Sales', home: 'Sales' }),
-    homeProfile: async () => 'fake-sales',
+    homeProfile: async () => {
+      await script.homeGate;
+      return 'fake-sales';
+    },
     hostOf: async (p) => `https://${p}.fake.test`,
     newId: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`,
     wallNow: () => clock.now(),
-    recordCall: (x) => void history.push(x),
+    recordCall: opts.real ? (x) => void writer(x) : (x) => void history.push(x),
     direct: async (t, notice) => void directs.push({ turn: t, notice }),
     showTurn: (_m, v) => void shown.push(v),
     dropTurn: (_m, id) => void dropped.push(id),
@@ -183,6 +214,7 @@ function rig() {
     notes,
     directs,
     history,
+    rows,
     phases,
     logLines,
     script,
@@ -1171,6 +1203,110 @@ describe('agent threads in Conversations (ADR 0121)', () => {
         expect(turnRows(r).map((h) => h.question)).toEqual(['Inside?']);
       }
     }
+  });
+
+  /** One turn that ends: its row is asked for, and `settle` lets the write reach its first await. */
+  async function endTurn(r: ReturnType<typeof rig>, turnId: string, q: string, newSession = true) {
+    r.script.submit.push(accepted(turnId, { newSession }));
+    await r.client.submit(turn(q), 'ask');
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId, outcome: 'answered', calls: 0 });
+  }
+
+  it('[L-1e] a fence during the homeProfile await: a good Wipe leaves no row, a failed one exactly one', async () => {
+    for (const wiped of [true, false]) {
+      const r = rig({ real: true });
+      const home = gate();
+      r.script.homeGate = home.p;
+      await endTurn(r, T1, 'Held?');
+      await r.settle();
+      const lift = r.client.fence();
+      home.open();
+      await r.settle();
+      expect(r.rows).toEqual([]);
+      if (wiped) r.client.clear();
+      lift();
+      await r.settle();
+      expect(r.rows).toEqual(wiped ? [] : ['Held?']);
+    }
+  });
+
+  it('[L-1f] [HIGH] a fence after the handoff to the writer (case A: isStale defers; case B: lift first)', async () => {
+    for (const order of ['A', 'B'] as const) {
+      for (const wiped of [true, false]) {
+        const r = rig({ real: true });
+        const write = gate();
+        r.script.writeGate = write.p;
+        await endTurn(r, T1, 'Handed?');
+        await r.settle();
+        const lift = r.client.fence();
+        if (order === 'B') {
+          if (wiped) r.client.clear();
+          lift();
+        }
+        write.open();
+        await r.settle();
+        if (order === 'A') {
+          expect(r.rows).toEqual([]);
+          if (wiped) r.client.clear();
+          lift();
+          await r.settle();
+        }
+        expect(r.rows, `${order} wiped=${wiped}`).toEqual(wiped ? [] : ['Handed?']);
+      }
+    }
+  });
+
+  it('[L-1g] clear() racing an in-flight write of a turn that the panel forgot: no row', async () => {
+    const r = rig({ real: true });
+    const home = gate();
+    r.script.homeGate = home.p;
+    await endTurn(r, T1, 'Forgotten?');
+    await r.settle();
+    // The session end forgets the ended turn (it is no longer in the panel), then a Wipe clears.
+    r.client.onSessionEvent({ ...END, reason: 'new_session' });
+    const lift = r.client.fence();
+    r.client.clear();
+    home.open();
+    await r.settle();
+    lift();
+    await r.settle();
+    expect(r.rows).toEqual([]);
+  });
+
+  it('[L-1h] the row of each Genie call waits for the lift, and a good Wipe drops it', async () => {
+    for (const wiped of [true, false]) {
+      const r = rig();
+      const lift = r.client.fence();
+      r.script.submit.push(accepted(T1));
+      await r.client.submit(turn(), 'ask');
+      r.ev({ kind: 'started', turnId: T1 });
+      r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales: **4.2%**.'));
+      r.script.details.set(`${T1}:${C2}`, detail(T1, C2, FIN, 'answered', 'Finance: **6%**.'));
+      r.ev(callEv(T1, C1, SALES, 'asking', 1));
+      r.ev(callEv(T1, C2, FIN, 'asking', 2));
+      r.ev(callEv(T1, C1, SALES, 'answered', 2));
+      r.ev(callEv(T1, C2, FIN, 'answered', 2));
+      await r.settle();
+      expect(r.history).toEqual([]);
+      if (wiped) r.client.clear();
+      lift();
+      await r.settle();
+      expect(r.history.map((h) => h.question)).toEqual(
+        wiped ? [] : ['Churn in Sales?', 'Churn in Finance?'],
+      );
+    }
+  });
+
+  it('[L-1i] forgetThread drops the rows that the fence holds', async () => {
+    const r = rig();
+    const lift = r.client.fence();
+    await endTurn(r, T1, 'Deleted?');
+    await r.settle();
+    r.client.forgetThread(uuidOfTurn(T1));
+    lift();
+    await r.settle();
+    expect(r.history).toEqual([]);
   });
 
   it('[L-1d] a lift does not undo a Wipe fence of the core that came meanwhile', async () => {

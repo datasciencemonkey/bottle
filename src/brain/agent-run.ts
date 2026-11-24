@@ -338,6 +338,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
    */
   let fenceDepth = 0;
   let fenceEra = 0;
+  /** Counts the Wipes that ended the writes for good (`clear()` and a core Wipe): see `fenceWrites`. */
+  let clearGen = 0;
   const deferredTurns = new Map<TurnRec, string>();
   const deferredCalls = new Map<AgentTurnCall, TurnRec>();
   const fault = () => void deps.log?.event('agent.turn', { ok: 0 });
@@ -432,10 +434,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       return;
     }
     const gen = wipeGen;
+    const cg = clearGen;
     const home = await deps.homeProfile().catch(() => undefined);
-    // A Wipe while we waited: write nothing. (A session end that only forgets the turn from the
-    // panel still saves its history.) A fence that moved it waits for its lift.
-    if (r.noRecord) return;
+    // A Wipe while we waited: write nothing, also for a turn that the panel forgot meanwhile. (A
+    // session end that only forgets the turn from the panel still saves its history.) A client
+    // fence that moved it waits for its lift.
+    if (r.noRecord || cg !== clearGen) return;
     if (gen !== wipeGen) return deferCall(r, d);
     const refs = replyRefs(d);
     let end: TerminalAskEvent;
@@ -475,7 +479,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         question: d.question,
         end,
         splitGroupId: uuidOfTurn(r.view.turnId),
-        isStale: staleOrDefer(r, gen, () => deferCall(r, d)),
+        isStale: staleOrDefer(r, gen, cg, () => deferCall(r, d)),
         homeWorkspace: home === undefined || d.profile === home,
         ...(refs.conversationId !== undefined ? { conversationId: refs.conversationId } : {}),
         ...(refs.responseId !== undefined ? { responseId: refs.responseId } : {}),
@@ -497,10 +501,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     }
     r.recorded = true;
     const gen = wipeGen;
+    const cg = clearGen;
     const home = await deps.homeProfile().catch(() => undefined);
     const profile = home ?? r.agentProfile;
-    // A Wipe while we waited: the turn row is not written. A fence that moved it waits for its lift.
-    if (profile === undefined || r.noRecord) return;
+    // A Wipe while we waited: the turn row is not written. A client fence that moved it waits for
+    // its lift.
+    if (profile === undefined || r.noRecord || cg !== clearGen) return;
     if (gen !== wipeGen) return deferTurn(r, out);
     const md = r.view.summary?.md ?? '';
     const end: TerminalAskEvent =
@@ -520,7 +526,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         end,
         backend: 'genie_agent',
         threadId: r.threadId,
-        isStale: staleOrDefer(r, gen, () => deferTurn(r, out)),
+        isStale: staleOrDefer(r, gen, cg, () => deferTurn(r, out)),
         homeWorkspace: true,
       });
     } catch {
@@ -874,6 +880,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     },
     clear() {
       // Every Wipe scope ends here: no row of a turn in flight is written after it.
+      // It ends every fence, which is right because the Wipe flow runs one Wipe at a time
+      // (`clearingAgentPanel`).
       fenceWrites();
       fenceDepth = 0;
       fenceEra += 1;
@@ -930,11 +938,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     },
   };
 
-  /** A write that finds the fence moved while a client fence only was up waits for the lift. */
-  function staleOrDefer(r: TurnRec, gen: number, defer: () => void): () => boolean {
+  /**
+   * A write that finds the fence moved by a client fence only waits for the lift. One that finds
+   * a Wipe done (`clearGen` moved) is dropped: the turn may be forgotten already (no `noRecord`).
+   */
+  function staleOrDefer(r: TurnRec, gen: number, cg: number, defer: () => void): () => boolean {
     let deferred = false;
     return () => {
-      if (r.noRecord) return true;
+      if (r.noRecord || cg !== clearGen) return true;
       if (gen === wipeGen) return false;
       if (!deferred) {
         deferred = true;
@@ -956,7 +967,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     else void record(r, d).catch(fault);
   }
 
-  /** The lift of a failed Wipe: write what the fence held back, once. */
+  /**
+   * The lift of a failed Wipe: write what the fence held back, once.
+   * Known limit: a turn that the panel forgot at a session end while the fence was up is still
+   * replayed here when the local wipe failed (its row would have been written without the Wipe).
+   */
   function replayDeferred() {
     const turns = [...deferredTurns];
     const calls = [...deferredCalls];
@@ -969,6 +984,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   /** A Wipe: the writes in flight are stale, and no turn writes a row after it. */
   function fenceWrites() {
     wipeGen += 1;
+    clearGen += 1;
     for (const r of recs.values()) r.noRecord = true;
   }
 

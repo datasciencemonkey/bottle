@@ -334,6 +334,7 @@ export function startBrain(): Brain {
         clearingDictationWords(new WipeFlow({ genieOne: new GenieOneDeleteUtility() })),
         () => agentClear.fn?.(),
         () => agentClear.fence?.() ?? (() => undefined),
+        () => void createBrainLog().event('agent.turn', { ok: 0 }),
       ),
       settings: async () => retentionSettings(await readAdminPolicy()),
     });

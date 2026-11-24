@@ -128,6 +128,84 @@ describe('hub Agent panel wiring', () => {
     expect(calls).toEqual(['fence', 'confirm', 'clear', 'fence', 'confirm', 'lift']);
   });
 
+  it('[L-1] a throw after the local wipe worked ends the fence first (clear before the lift)', async () => {
+    const calls: string[] = [];
+    const flow = {
+      dialog: () => ({}) as never,
+      confirm: async (_s: unknown, _a: unknown, onLocal?: () => void) => {
+        onLocal?.();
+        calls.push('local');
+        throw new Error('remote delete failed');
+      },
+    };
+    await clearingAgentPanel(
+      flow,
+      () => void calls.push('clear'),
+      () => {
+        calls.push('fence');
+        return () => void calls.push('lift');
+      },
+    )
+      .confirm('everything', true)
+      .catch(() => undefined);
+    // `clear()` ended the fence at the local result: the lift that follows does nothing then.
+    expect(calls.slice(0, 3)).toEqual(['fence', 'clear', 'local']);
+  });
+
+  it('[L-1] a Wipe that hangs lifts the fence after the timeout and logs a fault', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const flow = {
+        dialog: () => ({}) as never,
+        confirm: () => new Promise<never>(() => undefined),
+      };
+      void clearingAgentPanel(
+        flow,
+        () => void calls.push('clear'),
+        () => {
+          calls.push('fence');
+          return () => void calls.push('lift');
+        },
+        () => void calls.push('fault'),
+        1000,
+      ).confirm('everything', false);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(calls).toEqual(['fence']);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(calls).toEqual(['fence', 'lift', 'fault']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('[L-1] one Wipe at a time: a second confirm waits for the first', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const flow = {
+      dialog: () => ({}) as never,
+      confirm: async () => {
+        calls.push('start');
+        await new Promise<void>((res) => (release = res));
+        calls.push('end');
+        return {} as never;
+      },
+    };
+    const panel = clearingAgentPanel(flow, () => undefined);
+    const a = panel.confirm('everything', false);
+    const b = panel.confirm('everything', false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(['start']);
+    release();
+    await a;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(['start', 'end', 'start']);
+    release();
+    await b;
+  });
+
   it('a failed send never rejects', async () => {
     const bus = new BrainBus();
     const w = wireHubAgent(bus, {

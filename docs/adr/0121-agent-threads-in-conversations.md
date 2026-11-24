@@ -132,3 +132,7 @@ second meaning, so it does not change.
   at each Wipe. A row write that began
   before it saves nothing, and a turn that the session end cut off writes its row only when the
   `agent:session` event arrives with a reason other than `wipe`.
+- A turn row that waits behind the fence is written again at the lift. A Wipe whose local part
+  worked ends the fence for good, before the remote deletes. The flow runs one Wipe at a time, and
+  a fence that holds for 2 min is lifted with a logged fault. Known limit: a turn that the panel
+  forgot at a session end while the fence was up is still replayed when the local wipe failed.

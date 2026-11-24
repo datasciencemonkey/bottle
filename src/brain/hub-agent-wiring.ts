@@ -14,29 +14,51 @@ import { asAgentAction, HUB_AGENT_EVENT, HUB_SCOPE, type HubAgentView } from '..
 import type { GenieCodeStatus } from '../shared/ipc';
 import type { AgentClient } from './agent-run';
 import { onViewInput, type BrainBus } from './bus';
+import type { WipeScope } from '../shared/wipe-view';
 import type { WipeDialogDeps } from './wipe-wiring';
 
 /** A Wipe of any scope ends the agent session (`wipe.rs`): the panel content goes with it. */
+/** A Wipe that runs longer than this lifts the fence (the wipe has its own timers; a hang must not hold rows for ever). */
+export const WIPE_FENCE_TIMEOUT_MS = 120_000;
+
 export function clearingAgentPanel(
   flow: WipeDialogDeps['flow'],
   clear: () => void,
   /** Fences the writes before the Wipe runs. Returns the lift for a Wipe that failed. */
   fence?: () => () => void,
+  /** Logs a fault (the fence timed out). */
+  fault?: () => void,
+  timeoutMs = WIPE_FENCE_TIMEOUT_MS,
 ): WipeDialogDeps['flow'] {
-  return {
-    dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
-    async confirm(scope, alsoGenie) {
-      // The wipe is slow (core and remote deletes): no turn row may land in the meantime.
-      const lift = fence?.();
-      let done;
-      try {
-        done = await flow.confirm(scope, alsoGenie);
-      } catch (e) {
-        lift?.();
-        throw e;
-      }
+  // One Wipe at a time: a second confirm waits for the first. `clear()` ends every fence, which
+  // is only right while there is one fence at a time.
+  let tail: Promise<unknown> = Promise.resolve();
+  const run = async (scope: WipeScope, alsoGenie: boolean) => {
+    // The wipe is slow (core and remote deletes): no turn row may land in the meantime.
+    const lift = fence?.();
+    const timer = setTimeout(() => {
+      lift?.();
+      fault?.();
+    }, timeoutMs);
+    try {
+      // The fence ends for good when the local wipe worked (`clear()`), before the remote
+      // deletes: a later throw must not replay rows into a wiped store.
+      const done = await flow.confirm(scope, alsoGenie, clear);
       clear();
       return done;
+    } catch (e) {
+      lift?.();
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  return {
+    dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
+    confirm(scope, alsoGenie) {
+      const p = tail.then(() => run(scope, alsoGenie));
+      tail = p.catch(() => undefined);
+      return p;
     },
   };
 }
