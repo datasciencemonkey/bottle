@@ -1,6 +1,7 @@
 """Tests for the app CI workflow and the pinned lockfiles (NFR-13a, NFR-15a/b, SEC-26, AT-37, #227).
 
-App CI runs on Windows and Linux on every event. macOS is not in CI: GitHub's hosted macOS queue
+App CI runs on Linux on every event, and on Windows too on the nightly schedule and manual dispatch
+(owner decision 2026-11-24). macOS is not in CI: GitHub's hosted macOS queue
 held runs for hours, so the developer runs scripts/pre-push.sh on a Mac before each push, and
 scripts/package-macos.sh builds, signs and notarizes the DMG (ADR 0045).
 
@@ -44,7 +45,14 @@ def all_runs(wf):
 
 # The matrix is chosen per event: `github.event_name == 'pull_request' && '<PR JSON>' || '<other JSON>'`.
 EVENT_MATRIX = re.compile(r"github\.event_name == 'pull_request' && '(\[.*?\])' \|\| '(\[.*?\])'")
+# Windows only nightly: `(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+# && '<nightly JSON>' || '<other JSON>'` (owner decision 2026-11-24).
+NIGHTLY_MATRIX = re.compile(
+    r"\(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\) && "
+    r"'(\[.*?\])' \|\| '(\[.*?\])'"
+)
 EVENTS = ("pull_request", "push", "schedule", "workflow_dispatch")
+NIGHTLY_EVENTS = ("schedule", "workflow_dispatch")
 MATRIX_JOBS = ("checks", "offline-build", "golden-set", "package")
 
 
@@ -55,8 +63,12 @@ def matrix_entries(job, event):
         value = matrix.get(key)
         if isinstance(value, str):
             m = EVENT_MATRIX.search(value)
-            assert m, f"matrix.{key} is not an event-chosen fromJSON expression: {value}"
-            value = json.loads(m.group(1) if event == "pull_request" else m.group(2))
+            if m:
+                value = json.loads(m.group(1) if event == "pull_request" else m.group(2))
+            else:
+                n = NIGHTLY_MATRIX.search(value)
+                assert n, f"matrix.{key} is not an event-chosen fromJSON expression: {value}"
+                value = json.loads(n.group(1) if event in NIGHTLY_EVENTS else n.group(2))
         if value:
             return [{"os": i} if key == "os" else i for i in value]
     return []
@@ -67,12 +79,14 @@ def matrix_oses(job, event=None):
     return {e.get("os") for ev in ([event] if event else EVENTS) for e in matrix_entries(job, ev)}
 
 
-def test_nfr_13a_app_ci_runs_on_windows_and_linux_on_every_event(app_ci):
-    """[NFR-13a] On every event the checks, offline build and golden set jobs run on Windows and Linux."""
+def test_nfr_13a_app_ci_runs_on_linux_always_and_windows_nightly(app_ci):
+    """[NFR-13a] Checks, offline build and golden set run on Linux on every event, and on Windows too
+    on the nightly schedule and manual dispatch only (owner decision 2026-11-24)."""
     for event in EVENTS:
+        want = CI_OSES if event in NIGHTLY_EVENTS else {"ubuntu-24.04"}
         for name in ("checks", "offline-build", "golden-set"):
             oses = matrix_oses(app_ci["jobs"][name], event)
-            assert oses == CI_OSES, f"{name} on {event} runs on {oses}, not {CI_OSES}"
+            assert oses == want, f"{name} on {event} runs on {oses}, not {want}"
 
 
 def test_nfr_13a_app_ci_has_no_macos_runner(app_ci):
@@ -291,10 +305,13 @@ def test_nfr_15b_windows_signing_skips_without_secrets(app_ci):
 
 
 def test_nfr_15d_package_publishes_a_sha256_file_for_each_artifact(app_ci):
-    """[NFR-15d] The package job builds the NSIS installer on every event and writes a SHA-256 file for it."""
+    """[NFR-15d] The package job builds the NSIS installer nightly and on manual dispatch, and writes a
+    SHA-256 file for it."""
     job = app_ci["jobs"]["package"]
     text = runs(job)
     assert "pnpm tauri build --debug" in text
+    cond = str(job.get("if", ""))
+    assert all(f"github.event_name == '{e}'" in cond for e in NIGHTLY_EVENTS), f"package if: {cond}"
     for event in EVENTS:
         bundles = {e.get("os"): e.get("bundles") for e in matrix_entries(job, event)}
         assert bundles == {"windows-2025": "nsis"}, f"package on {event}: {bundles}"
