@@ -131,6 +131,8 @@ export interface RecJob {
 export interface RecordingApi {
   readSettings(): Promise<RecSettings>;
   writeSettings(next: RecSettings): Promise<RecSettings>;
+  /** ADR 0118: write only `heldNoteShown: true`. It never sends the other fields. */
+  markHeldNoteShown(): Promise<void>;
   /** The My Files root, or `null` when it does not resolve on this workspace. */
   probeStorage(): Promise<{ myFiles: string | null }>;
   createVolume(catalog: string, schema: string): Promise<{ path: string }>;
@@ -258,7 +260,7 @@ export interface HeldNoteMood {
  * after. A failed read leaves the flag unknown, which shows no note (fail quiet, not twice).
  */
 export function createHeldNote(deps: {
-  api: Pick<RecordingApi, 'readSettings' | 'writeSettings' | 'state' | 'onState'>;
+  api: Pick<RecordingApi, 'readSettings' | 'markHeldNoteShown' | 'state' | 'onState'>;
   mood: HeldNoteMood;
 }): { held(mogId: string): void; off(): void } {
   const { api, mood } = deps;
@@ -292,8 +294,9 @@ export function createHeldNote(deps: {
         shown = true;
         mood.heldNote(mogId);
         try {
-          const base = await api.readSettings();
-          await api.writeSettings({ ...base, heldNoteShown: true });
+          // Only this flag goes out. A full copy from a stale read could turn the recording
+          // knob back on after the user turned it off.
+          await api.markHeldNoteShown();
         } catch {
           // The note shows again after a restart. That is better than a lost first note.
         }
@@ -839,6 +842,9 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
   };
   return {
     readSettings: async () => recSettingsOf(await call('recording_settings_read', {})),
+    markHeldNoteShown: async () => {
+      await call('recording_settings_write', { patch: { heldNoteShown: true } });
+    },
     writeSettings: async (next) =>
       recSettingsOf(await call('recording_settings_write', { patch: settingsPatchOf(next) })),
     probeStorage: async () => ({

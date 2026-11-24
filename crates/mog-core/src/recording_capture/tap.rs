@@ -112,11 +112,11 @@ impl RecordingTap {
             .last_system_sound_ms
             .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
         self.shared.dropped.store(0, Ordering::SeqCst);
-        // Only the tail resets. The flags are live state: an overlay lease that was granted
-        // between the session lease and this arm, or a key that is down now, must keep the
-        // gate closed (a stale `true` only silences the mic; a stale `false` would leak).
+        // Nothing of the gate resets. The flags and the tail are live state: an overlay lease
+        // that was granted between the session lease and this arm, a key that is down now, or a
+        // tail that still runs must keep the gate closed (a stale `true` only silences the mic;
+        // a stale `false` would leak). A stale tail ends by itself within `GATE_TAIL_MS`.
         // `lease_live` clears on that lease's stop. The host syncs the key with `resync_key`.
-        self.shared.closed_until_ms.store(0, Ordering::SeqCst);
         *self
             .shared
             .tx

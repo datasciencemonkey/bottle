@@ -130,8 +130,14 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     );
     // ADR 0118: the mic gate of the tap. The talk key hooks close it at key-down; the gate
     // wrapper (outermost in the host's event chain) closes it for an overlay lease.
-    if let Some(gate) = handle.try_state::<hotkey_host::TalkGate>() {
-        gate.attach(tap.clone());
+    // Get or manage the gate, so it never depends on the order of the setup steps.
+    match handle.try_state::<hotkey_host::TalkGate>() {
+        Some(gate) => gate.attach(tap.clone()),
+        None => {
+            let gate = hotkey_host::TalkGate::default();
+            gate.attach(tap.clone());
+            handle.manage(gate);
+        }
     }
     let host = capture_host::CaptureHost::with_stt_gated(
         device,

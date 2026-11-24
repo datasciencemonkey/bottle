@@ -376,11 +376,19 @@ impl TalkGate {
         if let Some(tap) = self.tap.get() {
             if self.down.load(Ordering::SeqCst) {
                 tap.resync_key(true);
+                // A key-up that ran between the load and the raise must win: `up` stored
+                // `false` first, so look again and end the hold it would have ended.
+                if !self.down.load(Ordering::SeqCst) {
+                    tap.talk_key_up();
+                }
             }
         }
     }
 }
 
+/// A talk-key change (Settings) during a hold stops the old service. Its engine reset ends the
+/// hold with a Cancel, so `gate_up` runs and the tail starts. The new key starts with no hold.
+///
 /// ADR 0118: the key-down hook that closes the mic gate. It runs first, so the gate closes
 /// before the preload, the target note and the brain. No lock, no IPC call, no allocation.
 fn gate_down(gate: TalkGate) -> KeyDownHook {
@@ -1429,6 +1437,22 @@ mod tests {
         down();
         gate.resync();
         assert!(tap.mic_gated());
+    }
+
+    #[test]
+    fn ux6h_l1_a_resync_that_races_a_key_up_never_leaves_the_gate_closed() {
+        for _ in 0..500 {
+            let (gate, tap, clock) = gated_tap();
+            gate.down.store(true, Ordering::SeqCst);
+            tap.talk_key_down();
+            let g = gate.clone();
+            let t = std::thread::spawn(move || g.resync());
+            gate.up();
+            t.join().unwrap();
+            // The key is up: after the tail, the gate is open, whatever the order was.
+            clock.advance(TAIL);
+            assert!(!tap.mic_gated());
+        }
     }
 
     #[test]

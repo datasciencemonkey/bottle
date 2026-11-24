@@ -76,6 +76,9 @@ function fakeApi(start: Partial<RecSettings> = {}) {
       s = next;
       return s;
     }),
+    markHeldNoteShown: vi.fn(async () => {
+      s = { ...s, heldNoteShown: true };
+    }),
     probeStorage: vi.fn(async (): Promise<{ myFiles: string | null }> => ({ myFiles: MY_FILES })),
     createVolume: vi.fn(async (c: string, sc: string) => ({
       path: `/Volumes/${c}/${sc}/bottle_audio`,
@@ -733,6 +736,24 @@ describe('the held note (ADR 0118)', () => {
     expect(fake.current().heldNoteShown).toBe(true);
   });
 
+  it('[ADR-0118] the knob turned off between the read and the write stays off', async () => {
+    const { fake, mood, note } = setupNote({ enabled: true });
+    fake.pushState({ phase: 'recording' });
+    note.held('a1');
+    // The user turns the knob off while the held note reads its settings.
+    await fake.api.writeSettings({ ...fake.current(), enabled: false });
+    await flush();
+    expect(mood.heldNote).toHaveBeenCalledTimes(1);
+    expect(fake.current().enabled).toBe(false);
+    expect(fake.current().heldNoteShown).toBe(true);
+    // Only the flag goes to Rust: the real api sends a patch with that one field.
+    core.invoke.mockClear();
+    await ipcRecordingApi(new BrainBus(), async () => 'p').markHeldNoteShown();
+    expect(core.invoke).toHaveBeenCalledWith('recording_settings_write', {
+      args: { patch: { heldNoteShown: true } },
+    });
+  });
+
   it('[AC-6.17] a second hold, in the same or a later recording, shows no note', async () => {
     const { fake, mood, note } = setupNote();
     fake.pushState({ phase: 'recording' });
@@ -753,7 +774,7 @@ describe('the held note (ADR 0118)', () => {
     note.held('a1');
     await flush();
     expect(mood.heldNote).not.toHaveBeenCalled();
-    expect(fake.api.writeSettings).not.toHaveBeenCalled();
+    expect(fake.api.markHeldNoteShown).not.toHaveBeenCalled();
   });
 
   it('a hold with no recording shows no note and keeps the flag', async () => {

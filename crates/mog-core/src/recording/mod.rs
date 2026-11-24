@@ -177,14 +177,6 @@ pub trait RecordingCloud: Send + Sync {
         part: &FinishedPart,
         context: &[RecordingSegment],
     ) -> RecordingResult<Vec<RecordingSegment>>;
-    /// The notes Markdown from one chat call with the instructions and the joined transcript.
-    fn write_notes(
-        &self,
-        profile: &ProfileName,
-        endpoint: &crate::types::EndpointName,
-        instructions: &Instructions,
-        transcript_md: &str,
-    ) -> RecordingResult<String>;
     /// Write the instructions, `job.json`, the transcript files and the notes to the volume
     /// folder, and give the summary of the job. `request.profile` is the same profile; the
     /// explicit argument keeps every `RecordingCloud` method the same shape.

@@ -801,7 +801,9 @@ body,
    wider than the window, so it wraps, balanced, and stays inside it. */
 .badges [data-badge='call_note'] {
   order: -1;
-  max-width: calc(100% - var(--mog-space-2));
+  max-width: calc(100% - 4px);
+  padding-inline: 5px;
+  letter-spacing: -0.01em;
   box-sizing: border-box;
   justify-content: center;
   text-align: center;
