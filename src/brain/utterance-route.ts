@@ -92,7 +92,7 @@ export interface UtteranceRouteDeps {
     text: string,
     mogId: MogId,
     input: RouterInput,
-    opts?: RouteOptions,
+    opts: RouteOptions,
   ): Promise<RouterDecision>;
   /**
    * The exact text that a ⌥G ask sends (RTR-17a, ADR 0122): the deterministic pre-pass text,
@@ -119,7 +119,7 @@ export function ipcUtteranceDeps(
   const plainGate = createRouterContextGate({ model });
   return {
     route: (text, mogId, input, o) =>
-      (o?.dictation ? dictationGate : plainGate).route(text, mogId, input),
+      (o.dictation ? dictationGate : plainGate).route(text, mogId, input),
     insertText: (args) => call('insert_text', args),
   };
 }
@@ -142,8 +142,12 @@ export async function routeUtterance(
   // RTR-07, B1: in a session nothing sends without a click, so an ask is a chip. A session is
   // never dictated into the focused app.
   if (u.input.captureMode === 'session') {
+    // ADR 0122: no ask path sends model text. The chip holds the pre-pass text.
+    const asked = deps.askText ? deps.askText(u.text) : undefined;
+    const chipDecision =
+      asked === undefined ? decision : { ...decision, cleaned_text: asked, genie_question: asked };
     return u.forceAsk || decision.intent === 'question'
-      ? { route: 'chip', decision, warning }
+      ? { route: 'chip', decision: chipDecision, warning }
       : { route: 'other', decision };
   }
   if (u.forceAsk) {

@@ -62,7 +62,7 @@ export function offlineDecision(text: string): RouterDecision {
 export function withOfflineFallback(deps: UtteranceRouteDeps): UtteranceRouteDeps {
   return {
     ...deps,
-    async route(text: string, mogId: MogId, input: RouterInput, opts?: RouteOptions) {
+    async route(text: string, mogId: MogId, input: RouterInput, opts: RouteOptions) {
       if (input.profile === NO_HOME) return offlineDecision(text);
       try {
         return await deps.route(text, mogId, input, opts);

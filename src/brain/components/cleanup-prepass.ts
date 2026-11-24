@@ -440,13 +440,6 @@ const PROTECTED =
 /** The longest text the pre-pass edits. A longer text is no dictation: it stays as it is. */
 const MAX_PREPASS_CHARS = 8_000;
 
-/** The URLs, email addresses, code and quoted spans of `text`, in order. */
-export function protectedSpansOf(text: string): string[] {
-  return text.includes('@') || /[`"“]|https?:|www\./i.test(text)
-    ? (text.match(PROTECTED) ?? [])
-    : [];
-}
-
 /** Swaps each protected span for a mark with no letters and no digits, so no rule can match it. */
 function protectSpans(text: string): { masked: string; restore: (s: string) => string } {
   const spans: string[] = [];
@@ -470,7 +463,7 @@ function protectSpans(text: string): { masked: string; restore: (s: string) => s
 const DISCOURSE = '(?:you know|I mean|like)';
 
 /** Negators and yes/no words. A filler next to one of them stays: it may carry the meaning. */
-export const POLARITY_WORDS: ReadonlySet<string> = new Set(
+const POLARITY_WORDS: ReadonlySet<string> = new Set(
   (
     'no not never none nobody nothing neither nor nope cannot yes yeah yep yup ' +
     "dont doesnt didnt wont cant isnt arent wasnt werent wouldnt couldnt shouldnt don't doesn't didn't won't can't isn't aren't wasn't weren't wouldn't couldn't shouldn't"

@@ -2,15 +2,14 @@
  * Dictation cleanup around the router step (ADR 0122; CAP-66a, CAP-67a, CAP-67b, RTR-17a).
  *
  * `withDictationCleanup` wraps the route deps so that every pasted text is the pre-pass text or a
- * checked model rewrite of it:
+ * model rewrite that passes one exact rule (`modelTextGrounded`):
  * - The router input is the pre-pass text (`cleanup-prepass.ts`).
  * - Only a dictation call has the deadline. When it passes, the pre-pass text is used at once,
  *   with no retry. A late reply changes nothing. A ⌥G ask, a session capture and a command keep
  *   the plain router step.
- * - The model `cleaned_text` is pasted only if it passes `acceptModelText`: it keeps the words of
- *   the pre-pass text in order, adds none, drops at most 30 percent, keeps every negator, yes/no
- *   word, question mark, number and entity, and holds no new URL, email or injection pattern.
- *   Else the pre-pass text is pasted.
+ * - The model `cleaned_text` is pasted only if its word sequence equals the pre-pass word sequence
+ *   (see `modelTextGrounded`). Any other word added, dropped, reordered or changed gives the
+ *   pre-pass text. A model text with an injection pattern also gives the pre-pass text.
  * - A ⌥G ask sends the pre-pass text, never the model text (`askText`, RTR-17a, ADR 0122).
  * - With `cleanDictation()` false the raw `text.trim()` is used, as before ADR 0122. The pre-pass
  *   and the model `cleaned_text` are both skipped.
@@ -18,9 +17,8 @@
  * It never logs text.
  */
 import type { MogId, RouterDecision } from '../shared/interfaces';
-import { POLARITY_WORDS, prepass, protectedSpansOf } from './components/cleanup-prepass';
+import { prepass } from './components/cleanup-prepass';
 import { applyInjectionGuard, detectInjection } from './components/router-injection';
-import { groundedIn, numbersOf } from './components/router-grounding';
 import type { RouterInput } from './components/router-step';
 import { offlineDecision } from './offline-intent';
 import type { RouteOptions, UtteranceRouteDeps } from './utterance-route';
@@ -55,85 +53,80 @@ export interface DictationCleanupConfig {
   timer?: DeadlineTimer;
 }
 
-// ---------- the check of the model text (H1, H2) ----------
+// ---------- the check of the model text ----------
 
-/** Contraction forms the model may write for words of the input ("do not" to "don't"). */
-const CONTRACTIONS: ReadonlySet<string> = new Set(
-  (
-    'im ive ill id its thats theres whats lets dont doesnt didnt wont cant isnt arent wasnt werent ' +
-    'wouldnt couldnt shouldnt youre were theyre weve youve theyve youll well theyll hes shes'
-  ).split(' '),
+/** Words that a filler or a false start leaves out. The model may delete them and no others. */
+const DELETABLE: ReadonlySet<string> = new Set(
+  'um uh er ah hmm like so well okay right actually basically'.split(' '),
 );
 
-/** Negators. A contraction such as "dont" counts as one. */
-const NEGATORS: ReadonlySet<string> = new Set(
-  [...POLARITY_WORDS]
-    .filter((w) => !['yes', 'yeah', 'yep', 'yup'].includes(w))
-    .map(stripApostrophes),
-);
-const YES_WORDS: ReadonlySet<string> = new Set(['yes', 'yeah', 'yep', 'yup']);
-
-function stripApostrophes(w: string): string {
-  return w.replace(/['’]/g, '');
+/** The words of `s`: lower case, no punctuation, no quote marks. A contraction is one word. */
+function wordsOf(s: string): string[] {
+  return (
+    s
+      .toLowerCase()
+      .replace(/’/g, "'")
+      .match(/[\p{L}\p{N}']+/gu) ?? []
+  )
+    .map((w) => w.replace(/^'+|'+$/g, ''))
+    .filter((w) => w !== '');
 }
 
-interface Token {
-  word: string;
-  /** A contraction with an apostrophe: the model may write it for 2 words of the input. */
-  free: boolean;
+/** The words after the allowed deletions: fillers, "you know", "I mean", adjacent exact repeats. */
+function normalWords(s: string): string[] {
+  const out: string[] = [];
+  const ws = wordsOf(s);
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i] as string;
+    const pair = `${w} ${ws[i + 1] ?? ''}`;
+    if (pair === 'you know' || pair === 'i mean') {
+      i++;
+      continue;
+    }
+    if (!DELETABLE.has(w)) out.push(w);
+  }
+  // Collapse an exact adjacent repeat of 1 to 3 words, until nothing changes.
+  for (let again = true; again;) {
+    again = false;
+    for (let n = 1; n <= 3 && !again; n++) {
+      for (let i = 0; i + 2 * n <= out.length; i++) {
+        if (out.slice(i, i + n).join(' ') === out.slice(i + n, i + 2 * n).join(' ')) {
+          out.splice(i + n, n);
+          again = true;
+          break;
+        }
+      }
+    }
+  }
+  return out;
 }
 
-function tokens(s: string): Token[] {
-  return (s.toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? []).map((raw) => {
-    const word = stripApostrophes(raw);
-    return { word, free: word !== raw && CONTRACTIONS.has(word) };
-  });
+/** For each "?", the number of words before it. A moved or dropped "?" changes this list. */
+function questionMarks(s: string): number[] {
+  const at: number[] = [];
+  for (let i = s.indexOf('?'); i >= 0; i = s.indexOf('?', i + 1))
+    at.push(normalWords(s.slice(0, i)).length);
+  return at;
 }
-
-const count = (ts: Token[], set: ReadonlySet<string>) => ts.filter((t) => set.has(t.word)).length;
 
 /**
- * Whether the model text may be pasted for the pre-pass text `pre`. The model words must be an
- * in-order subset of the input words, with free contraction forms. This rules out an added word, a
- * reorder, an answer for a question and a summary.
+ * The one rule for the model text: its word sequence equals the pre-pass word sequence, after
+ * lower case, no punctuation and quote marks, the deletion of `DELETABLE` words, "you know" and
+ * "I mean", and the collapse of adjacent exact repeats. The model may change only punctuation,
+ * capitals and spacing, and delete those fillers and repeats. A contraction ("do not" and
+ * "don't"), a dropped qualifier, a reorder or a new word is a change. Each `?` must stand after the same word.
  */
 export function modelTextGrounded(modelText: string, pre: string): boolean {
   if (modelText.trim() === '') return false;
-  const m = tokens(modelText);
-  const p = tokens(pre);
-  // Order and no new word.
-  let j = 0;
-  let matched = 0;
-  let free = 0;
-  for (const t of m) {
-    if (t.free) {
-      free++;
-      continue;
-    }
-    while (j < p.length && (p[j] as Token).word !== t.word) j++;
-    if (j >= p.length) return false;
-    j++;
-    matched++;
-  }
-  // At most 30 percent of the input words may go (a contraction covers 2 input words).
-  if (p.length - matched - 2 * free > Math.floor(p.length * 0.3)) return false;
-  // Length: at most 10 percent more, with 2 characters for a final mark.
-  if (modelText.trim().length > Math.ceil(pre.trim().length * 1.1) + 2) return false;
-  // Meaning words: negators, yes words, question marks.
-  if (count(m, NEGATORS) !== count(p, NEGATORS)) return false;
-  if (count(m, YES_WORDS) !== count(p, YES_WORDS)) return false;
-  if (pre.includes('?') && !modelText.includes('?')) return false;
-  // Numbers and entities.
-  if (!groundedIn(modelText, pre)) return false;
-  const kept = new Set(numbersOf(modelText));
-  return numbersOf(pre).every((n) => kept.has(n));
+  if (questionMarks(modelText).join() !== questionMarks(pre).join()) return false;
+  const a = normalWords(modelText);
+  const b = normalWords(pre);
+  return a.length === b.length && a.every((w, i) => w === b[i]);
 }
 
-/** Whether the model text holds an injection pattern or a URL, email or code span that `pre` lacks. */
-function modelTextHostile(modelText: string, pre: string): boolean {
-  if (detectInjection(modelText).length > 0) return true;
-  const known = new Set(protectedSpansOf(pre));
-  return protectedSpansOf(modelText).some((s) => !known.has(s));
+/** Defence in depth: an injection pattern in the model text. */
+function modelTextHostile(modelText: string): boolean {
+  return detectInjection(modelText).length > 0;
 }
 
 function safePrepass(text: string): string {
@@ -163,10 +156,10 @@ export function withDictationCleanup(
       text: string,
       mogId: MogId,
       input: RouterInput,
-      opts?: RouteOptions,
+      opts: RouteOptions,
     ): Promise<RouterDecision> {
       // An ask, a session capture and a command keep the plain router step.
-      if (opts?.dictation === false) return deps.route(text, mogId, input, opts);
+      if (!opts.dictation) return deps.route(text, mogId, input, opts);
       if (!cleanOn()) {
         const decision = await deps.route(text, mogId, input, opts);
         return { ...decision, cleaned_text: text.trim() };
@@ -191,7 +184,7 @@ export function withDictationCleanup(
         return applyInjectionGuard(offlineDecision(pre), pre).decision;
       }
       const d = raced.decision;
-      if (modelTextHostile(d.cleaned_text, pre)) {
+      if (modelTextHostile(d.cleaned_text)) {
         // H2: the guard flags the decision and the pre-pass text goes on.
         return applyInjectionGuard(
           { ...d, cleaned_text: pre, injection_suspected: true },
@@ -199,10 +192,8 @@ export function withDictationCleanup(
         ).decision;
       }
       if (modelTextGrounded(d.cleaned_text, pre)) return d;
-      // The model text fails the check: the pre-pass text goes on. The question is checked again.
-      const genie =
-        d.genie_question !== '' && !groundedIn(d.genie_question, pre) ? pre : d.genie_question;
-      return { ...d, cleaned_text: pre, genie_question: genie };
+      // The model text fails the rule: the pre-pass text goes on, also as the question.
+      return { ...d, cleaned_text: pre, genie_question: d.genie_question === '' ? '' : pre };
     },
   };
 }
