@@ -91,6 +91,15 @@ impl TokenBroker for PoolBroker {
     }
 }
 
+#[derive(Debug)]
+struct AllowAll;
+
+impl mog_core::workspaces::WorkspaceGate for AllowAll {
+    fn allows(&self, _: &str) -> bool {
+        true
+    }
+}
+
 struct Target;
 
 impl GenieTargets for Target {
@@ -199,7 +208,9 @@ fn rtr_28_rtr_27_at_42_harness_env_and_memory_hold_no_token() {
             codex: runtime,
         },
         bottle_mcp: BottleMcpDeps::new(Arc::new(UnavailableLocalTools), Arc::new(UnavailableRelay))
-            .with_genie_proxy(GenieProxyDeps::new(r8, Arc::new(Target))),
+            .with_genie_proxy(
+                GenieProxyDeps::new(r8, Arc::new(Target)).with_gate(Some(Arc::new(AllowAll))),
+            ),
     });
     host.start_session(MOG, Harness::Claude).unwrap();
     // The turn that the user let go (RTR-29b, #141): it approves QUESTION for the agent's ask.

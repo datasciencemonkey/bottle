@@ -42,7 +42,7 @@ pub mod sse;
 pub mod tools;
 
 pub use client::*;
-pub use component::McpCallComponent;
+pub use component::{ConversationPairs, McpCallComponent};
 pub use poll::{PollInflightGuard, E_POLL_INFLIGHT};
 pub use tools::{ToolContract, ALLOWED_TOOLS};
 

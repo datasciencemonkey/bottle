@@ -15,16 +15,23 @@
 
 use std::sync::Arc;
 
+use mog_core::agent_guard::AgentActionLog;
 use mog_core::agent_host::ipc_route::{AgentComponent, BrainStatusSink};
 use mog_core::agent_host::model_proxy::{ModelProxy, ModelTarget, UnavailableUpstream};
 use mog_core::agent_host::runtime::{RuntimeConfig, StdRuntimeLauncher};
 use mog_core::agent_host::{
     AgentError, AgentHostDeps, ModelTargets, RuntimeConfigs, SharedAgentHost,
 };
+use mog_core::agent_run::guard::AgentGuard;
+use mog_core::agent_run::seam::{GuardDeps, RunEvents};
 use mog_core::bottle_mcp::{BottleMcpDeps, EventEmit, UnavailableLocalTools, UnavailableRelay};
+use mog_core::clock::SystemClock;
 use mog_core::error::CoreResult;
 use mog_core::ipc_gateway::GatewayComponents;
+use mog_core::mcp_transport::proxy::{GenieProxyDeps, UnavailableGenieTargets};
+use mog_core::mcp_transport::McpTransport;
 use mog_core::token_broker::StubTokenBroker;
+use mog_core::workspaces::WorkspaceGate;
 use serde_json::Value;
 use tauri::Manager;
 
@@ -55,6 +62,35 @@ impl GatewayComponents for AgentHostApp {
     fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
         self.0.call(command, args)
     }
+}
+
+/// The Genie One proxy deps of the main agent on the ONE R8 and the workspace allow-list `gate`
+/// (ADR 0117, FLAG 7). The proxy fails closed: without a gate it refuses every `genie_ask`, so
+/// the host always passes the `WorkspaceStore` gate (`WorkspacesHost::gate`). The Genie targets
+/// stay unavailable until #563, so no ask goes out yet.
+pub fn genie_proxy_deps(
+    transport: Arc<dyn McpTransport>,
+    gate: Arc<dyn WorkspaceGate>,
+) -> GenieProxyDeps {
+    GenieProxyDeps::new(transport, Arc::new(UnavailableGenieTargets)).with_gate(Some(gate))
+}
+
+/// The guard of the one Genie Code session (slice 2a, R2) on the ONE R8, the `WorkspaceStore`
+/// gate (a switch turned off applies at once), the brain event sink and the action log. The
+/// session host (R1) calls `listen` on it with the agent folder of the app data.
+pub fn agent_guard(
+    transport: Arc<dyn McpTransport>,
+    gate: Arc<dyn WorkspaceGate>,
+    events: Arc<dyn RunEvents>,
+    action_log: Arc<dyn AgentActionLog>,
+) -> Arc<AgentGuard> {
+    AgentGuard::new(GuardDeps {
+        transport,
+        gate,
+        events,
+        action_log,
+        clock: Arc::new(SystemClock::new()),
+    })
 }
 
 /// Build the one AgentHost. Its `agent.status` events go to `emit`. An `Err` means the model
@@ -91,4 +127,26 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()> {
     });
     handle.manage(build(emit)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mog_core::mcp_transport::StubMcpTransport;
+
+    #[derive(Debug)]
+    struct Closed;
+
+    impl WorkspaceGate for Closed {
+        fn allows(&self, _: &str) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_genie_proxy_deps_carry_the_workspace_gate() {
+        let deps = genie_proxy_deps(Arc::new(StubMcpTransport), Arc::new(Closed));
+        let gate = deps.gate.expect("the gate is wired");
+        assert!(!gate.allows("any"));
+    }
 }

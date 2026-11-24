@@ -788,18 +788,35 @@ fn ac_1_7_genie_ask_for_a_switched_off_profile_is_refused_before_any_send_on_eve
 }
 
 #[test]
-fn polls_cancels_and_listing_for_a_switched_off_profile_still_go_through() {
+fn polls_cancels_and_results_of_a_switched_off_profile_need_a_recorded_pair_and_listing_does_not() {
     let s = Scratch::new();
     let w = Arc::new(ready(&s));
     let r8 = Arc::new(CountingR8::default());
     let comp = McpCallComponent::with_gate(r8.clone(), Some(w));
-    for tool in [
-        "genie_poll_response",
-        "genie_cancel_response",
-        "genie_get_query_result",
-    ] {
+    let calls = [
+        (
+            "genie_poll_response",
+            json!({"conversation_id": "c-1", "response_id": "r-1"}),
+        ),
+        ("genie_cancel_response", json!({"conversation_id": "c-1"})),
+        (
+            "genie_get_query_result",
+            json!({"conversation_id": "c-1", "response_id": "r-1", "item_id": "pub_1_output"}),
+        ),
+    ];
+    // ADR 0117 follow-up: no recorded pair and a switched-off profile, so each is refused.
+    for (tool, args) in &calls {
+        let e = comp
+            .call("mcp_call", mcp_args("other", tool, json!({"args": args})))
+            .unwrap_err();
+        assert_eq!(e.code(), "workspace_not_available", "{tool}");
+    }
+    assert_eq!(r8.0.load(Ordering::SeqCst), 0, "nothing was sent");
+    // A pair that a successful ask recorded lets the call in flight end.
+    comp.pairs().record("other", "c-1");
+    for (tool, args) in &calls {
         assert!(
-            comp.call("mcp_call", mcp_args("other", tool, json!({})))
+            comp.call("mcp_call", mcp_args("other", tool, json!({"args": args})))
                 .is_ok(),
             "{tool}"
         );
