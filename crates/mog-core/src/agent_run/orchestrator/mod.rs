@@ -1,8 +1,7 @@
-//! The ask loop of ADR 0122: one orchestrator model replaces Genie Code.
+//! The ask loop of ADR 0122: one orchestrator model answers the ask.
 //!
-//! [`OrchestratorHost`] has the public API of the old `SessionHost`, and the same IPC and event
-//! shapes. There is no process, no GENIE_HOME, no shim and no socket. A turn is a chat tool loop
-//! on the home profile through [`crate::model_gateway::ChatClient`]. The one tool, `ask_genie`,
+//! [`OrchestratorHost`] serves the `agent_turn_*` and `agent_session_*` commands. A turn is a
+//! chat tool loop on the home profile through [`crate::model_gateway::ChatClient`]. The one tool, `ask_genie`,
 //! runs in process through the guard (`agent_run/guard`), so every check of the guard stays.
 //!
 //! - [`queue`] and [`deadlines`]: the waiting line, the rate cap and the time rules.

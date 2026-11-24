@@ -383,9 +383,9 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "workspace_list"
                         | "workspace_set_available"
                         | "workspace_make_home"
-                        // Slice 2a: the binary check, the install, the server and its process.
-                        | "genie_code_status"
-                        | "genie_code_install"
+                        // ADR 0122: the orchestrator status and the ask loop.
+                        | "orchestrator_models"
+                        | "orchestrator_status"
                         | "agent_turn_submit"
                         | "agent_turn_stop"
                         | "agent_turn_call"
@@ -825,8 +825,8 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "workspace_list"
                     | "workspace_set_available"
                     | "workspace_make_home"
-                    | "genie_code_status"
-                    | "genie_code_install"
+                    | "orchestrator_models"
+                    | "orchestrator_status"
                     | "agent_turn_submit"
                     | "agent_turn_stop"
                     | "agent_turn_call"
@@ -1595,15 +1595,15 @@ fn adr_0117_workspace_rows_reach_their_components_and_fail_closed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Slice 2a: the eight `genie_code_*`, `agent_turn_*` and `agent_session_*` commands reach the
+/// ADR 0122: the eight `orchestrator_*`, `agent_turn_*` and `agent_session_*` commands reach the
 /// agent session component from the brain only. With no component they answer `host_failed`, and
 /// the real component answers `host_failed` too until `install` fills it.
 #[test]
 fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
     let id = "0123456789abcdef0123456789abcdef";
     let rows = [
-        ("genie_code_status", json!({"recheck": true})),
-        ("genie_code_install", json!({"consent": true})),
+        ("orchestrator_models", json!({})),
+        ("orchestrator_status", json!({"recheck": true})),
         (
             "agent_turn_submit",
             json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
@@ -1668,8 +1668,8 @@ fn slice_2a_agent_rows_reach_their_component_from_the_brain_only() {
 #[test]
 fn slice_2a_agent_commands_run_off_the_main_thread() {
     for c in [
-        "genie_code_status",
-        "genie_code_install",
+        "orchestrator_models",
+        "orchestrator_status",
         "agent_turn_submit",
         "agent_turn_stop",
         "agent_turn_call",

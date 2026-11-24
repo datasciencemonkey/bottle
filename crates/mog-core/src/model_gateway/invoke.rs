@@ -17,7 +17,7 @@
 //! - The reply is in chat-completions shape (`{json: {choices: [...]}}`), the one that the brain
 //!   reads. A reply that is not one plain answer is `bad_reply`.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +30,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::ipc::{ModelInvokeArgs, ModelRole};
 use crate::ipc_gateway::GatewayComponents;
 use crate::model_request_guard::model_invoke_has_tools;
+use crate::wipe::AgentWipeHook;
 
 const ID: &str = "model_invoke";
 
@@ -107,6 +108,27 @@ impl ModelInvokeComponent {
     /// The flag that abandons every call in flight and refuses new ones while it is set.
     pub fn stop_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+}
+
+/// The Wipe hook of the agent session, plus the stop flag of `model_invoke`: the calls in flight
+/// are abandoned while the session ends, and calls are allowed again after the wipe hook returns.
+pub struct AbandonOnWipe {
+    inner: Arc<dyn AgentWipeHook>,
+    stop: Arc<AtomicBool>,
+}
+
+impl AbandonOnWipe {
+    pub fn new(inner: Arc<dyn AgentWipeHook>, stop: Arc<AtomicBool>) -> Self {
+        Self { inner, stop }
+    }
+}
+
+impl AgentWipeHook for AbandonOnWipe {
+    fn end_for_wipe(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.inner.end_for_wipe();
+        self.stop.store(false, Ordering::SeqCst);
     }
 }
 
@@ -355,5 +377,25 @@ mod tests {
         let e = c.call("model_invoke", args(json!({}))).unwrap_err();
         assert_eq!(e.code(), "host_failed");
         assert!(h.seen().is_empty());
+    }
+
+    #[test]
+    fn adr_0122_wipe_abandons_model_calls_during_the_wipe_and_allows_them_after() {
+        struct Inner(Arc<AtomicBool>, std::sync::Mutex<Vec<bool>>);
+        impl AgentWipeHook for Inner {
+            fn end_for_wipe(&self) {
+                self.1.lock().unwrap().push(self.0.load(Ordering::SeqCst));
+            }
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let inner = Arc::new(Inner(Arc::clone(&stop), std::sync::Mutex::new(Vec::new())));
+        let hook = AbandonOnWipe::new(inner.clone(), Arc::clone(&stop));
+        hook.end_for_wipe();
+        assert_eq!(
+            *inner.1.lock().unwrap(),
+            vec![true],
+            "set while the wipe runs"
+        );
+        assert!(!stop.load(Ordering::SeqCst), "clear after the wipe");
     }
 }

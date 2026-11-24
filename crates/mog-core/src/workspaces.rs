@@ -157,8 +157,8 @@ fn alias_slug(name: &str) -> String {
     }
 }
 
-impl crate::agent_run::session::WorkspaceView for WorkspaceStore {
-    fn snapshot(&self) -> CoreResult<crate::agent_run::session::Snapshot> {
+impl crate::agent_run::orchestrator::WorkspaceView for WorkspaceStore {
+    fn snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
         self.catalog_snapshot()
     }
 }
@@ -482,6 +482,13 @@ impl WorkspaceStore {
         self.load().ok()?.home
     }
 
+    /// The orchestrator model of the settings (ADR 0122), read only. `None` when the file cannot
+    /// be read.
+    pub fn orchestrator_model(&self) -> Option<String> {
+        let _g = self.guard();
+        Some(self.load().ok()?.agent.endpoint.as_str().to_owned())
+    }
+
     /// `workspace_list`.
     pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
         let data = {
@@ -655,12 +662,12 @@ impl WorkspaceStore {
         self.render(&data, false)
     }
 
-    /// The agent session snapshot (slice 2a): the catalog with model aliases, D1, D2 and the agent
-    /// profile with its host. It probes nothing. The catalog holds home and each available
+    /// The agent session snapshot: the catalog with model aliases, D1, D2, the home profile and
+    /// the orchestrator model. It probes nothing. The catalog holds home and each available
     /// profile that T7 supports, home first. A model alias is the profile name in lower case with
     /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
     /// the profile name itself in the prompt, only the alias and a display name.
-    pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::session::Snapshot> {
+    pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
         let data = {
             let _g = self.guard();
             self.load()?
@@ -669,7 +676,9 @@ impl WorkspaceStore {
             .profiles
             .profiles(false)
             .map_err(|_| refused("host_failed"))?;
-        let agent_profile = data.agent.run_profile.clone().or_else(|| data.home.clone());
+        // The model runs on the AI Gateway of the home profile (ADR 0122), so home is the agent
+        // workspace.
+        let home = data.home.clone();
         let mut names: Vec<&str> = t7
             .iter()
             .filter(|p| p.supported && data.allows(&p.name))
@@ -702,20 +711,15 @@ impl WorkspaceStore {
                 profile: name.to_owned(),
                 name: name.to_owned(),
                 is_home: data.home.as_deref() == Some(name),
-                is_agent_workspace: agent_profile.as_deref() == Some(name),
+                is_agent_workspace: home.as_deref() == Some(name),
             });
         }
-        let agent_host = agent_profile.as_deref().and_then(|ap| {
-            t7.iter()
-                .find(|p| p.name == ap && p.supported)
-                .map(|p| p.host.clone())
-        });
-        Ok(crate::agent_run::session::Snapshot {
+        Ok(crate::agent_run::orchestrator::Snapshot {
             catalog,
             cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
             budget: data.agent.genie_call_budget.get(),
-            agent_profile,
-            agent_host,
+            home_profile: home,
+            model: data.agent.endpoint.as_str().to_owned(),
         })
     }
 

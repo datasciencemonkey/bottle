@@ -321,11 +321,11 @@ pub fn run() {
         .manage(ipc::HubChannel::default())
         // ADR 0117: the `workspace_*` component. `workspaces_host::install` fills it in `setup`.
         .manage(workspaces_host::WorkspacesHost::default())
-        // Slice 2a: the agent component. `agent_session_host::install` fills it in `setup`.
+        // ADR 0122: the agent component. `agent_session_host::install` fills it in `setup`.
         .manage(agent_session_host::AgentSessionHost::default())
         // Slice 2a: the ⌥G latch. `hotkey_host` arms it at each ⌥G up; the agent host redeems it.
         .manage(std::sync::Arc::new(
-            mog_core::agent_run::session::approval::AskLatch::new(),
+            mog_core::agent_run::orchestrator::approval::AskLatch::new(),
         ))
         // #574 (ADR 0113): the one ticket store for user-only memory writes. `ipc.rs` reads it
         // with `try_state`; `memory_host` mints and redeems.
@@ -470,10 +470,9 @@ pub fn run() {
             // R16 for `agent_*` (#307): the one shared AgentHost. If its loopback model proxy
             // cannot bind, the app still runs; `agent_*` then answer `host_failed`.
             let _ = agent_host::install(handle);
-            // Slice 2a: the one Genie Code session host, on T7, R5, R6 and the workspace store.
-            // The `ask_genie` guard, its socket and the shim command come first: the session host
-            // takes them from managed state, and without them no session opens.
-            #[cfg(unix)]
+            // ADR 0122: the orchestrator host, on the chat client, R6 and the workspace store.
+            // The `ask_genie` guard comes first: the host takes it from managed state, and
+            // without it no session opens.
             agent_session_host::install_guard(handle);
             agent_session_host::install(handle);
             let host = app.state::<TauriWindowHost<tauri::Wry>>();
@@ -512,7 +511,7 @@ pub fn run() {
                 {
                     recording.shutdown();
                 }
-                // Slice 2a: kill the Genie Code process group and delete GENIE_HOME.
+                // ADR 0122: abandon the model calls in flight and end the agent session.
                 agent_session_host::shutdown(app);
                 // R2: stop every capture, so the mic closes, and end the cap timer (#425).
                 if let Some(capture) = app.try_state::<capture_host::CaptureHost>() {

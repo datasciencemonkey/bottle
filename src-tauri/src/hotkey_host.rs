@@ -420,7 +420,7 @@ pub struct PttForwarder<B: BrainSink, S: StatusSink> {
     /// Hooks for the `double_tap` that starts hands-free (ADR 0118): not the R4 preload.
     double_tap: Vec<KeyDownHook>,
     /// Slice 2a: the ⌥G latch that approves one `agent_turn_submit`.
-    ask_latch: Option<Arc<mog_core::agent_run::session::approval::AskLatch>>,
+    ask_latch: Option<Arc<mog_core::agent_run::orchestrator::approval::AskLatch>>,
     /// Hooks for each end of a press (ADR 0118: the mic gate). They run before the brain hears it.
     key_up: Vec<KeyDownHook>,
 }
@@ -445,7 +445,7 @@ impl<B: BrainSink, S: StatusSink> PttForwarder<B, S> {
     /// Arm `latch` at each ⌥G up (slice 2a): the brain then needs no ticket to ask the agent.
     pub fn with_ask_latch(
         mut self,
-        latch: Option<Arc<mog_core::agent_run::session::approval::AskLatch>>,
+        latch: Option<Arc<mog_core::agent_run::orchestrator::approval::AskLatch>>,
     ) -> Self {
         self.ask_latch = latch;
         self
@@ -1176,7 +1176,7 @@ where
             .with_key_down(target_note(NoteKind::KeyDown))
             .with_double_tap(target_note(NoteKind::HandsFreeStart))
             .with_ask_latch(
-                app.try_state::<Arc<mog_core::agent_run::session::approval::AskLatch>>()
+                app.try_state::<Arc<mog_core::agent_run::orchestrator::approval::AskLatch>>()
                     .map(|l| Arc::clone(l.inner())),
             ),
     )?;
@@ -1591,7 +1591,7 @@ mod tests {
 
     #[test]
     fn slice_2a_an_ask_up_arms_the_latch_once_and_a_plain_up_does_not() {
-        use mog_core::agent_run::session::approval::AskLatch;
+        use mog_core::agent_run::orchestrator::approval::AskLatch;
         let latch = Arc::new(AskLatch::new());
         let target = Arc::new(PttTarget::default());
         target.set("a1");

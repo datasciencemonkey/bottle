@@ -1176,7 +1176,40 @@ fn the_gateway_commands_serve_the_same_shapes() {
         .call("agent_session_end", json!({ "reason": "new_session" }))
         .unwrap();
     assert_eq!(r.host.session_state().state, AgentSessionPhase::None);
-    assert!(r.host.call("genie_code_status", json!({})).is_err());
+    assert!(r.host.call("not_a_command", json!({})).is_err());
+}
+
+#[test]
+fn adr_0122_orchestrator_commands_give_the_status_and_the_model_list() {
+    use crate::ipc_gateway::GatewayComponents;
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| no_source_final()),
+    );
+    let st = r.host.call("orchestrator_status", json!({})).unwrap();
+    assert_eq!(st["state"], "ready");
+    assert_eq!(st["model"], "system.ai.test-model");
+    *r.env.0.lock().unwrap() = OrchStatus::SignedOut;
+    let st = r
+        .host
+        .call("orchestrator_status", json!({"recheck": true}))
+        .unwrap();
+    assert_eq!(st["state"], "signed_out");
+    let m = r.host.call("orchestrator_models", json!({})).unwrap();
+    assert_eq!(m["selected"], "system.ai.test-model");
+    assert_eq!(m["defaultModel"], "system.ai.claude-haiku-5-5");
+    assert_eq!(m["models"][0]["id"], "system.ai.claude-haiku-5-5");
+    assert!(m["models"].as_array().unwrap().len() >= 2);
+    assert!(r
+        .host
+        .call("orchestrator_models", json!({"profile": "p"}))
+        .is_err());
+    r.ws.0.lock().unwrap().home_profile = None;
+    let st = r.host.call("orchestrator_status", json!({})).unwrap();
+    assert_eq!(st["state"], "no_home");
+    assert_eq!(r.chat.calls(), 0, "no model call for a status");
 }
 
 #[test]
@@ -1300,13 +1333,13 @@ fn a_call_of_a_stopped_turn_cannot_spend_the_budget_of_the_next_turn() {
     g.end_turn("t1");
     g.begin_turn("s1", turn("t2")).unwrap();
     let a = json!({"workspace": "sales", "question": "hello"});
-    let late = g.ask_genie_for("s1", Some("t1"), &a);
+    let late = g.ask_genie_for("s1", "t1", &a);
     assert!(late.is_error && late.text == "run_stopped", "{late:?}");
     // The whole budget of t2 is still there.
     for _ in 0..5 {
-        assert!(!g.ask_genie_for("s1", Some("t2"), &a).is_error);
+        assert!(!g.ask_genie_for("s1", "t2", &a).is_error);
     }
-    assert_eq!(g.ask_genie_for("s1", Some("t2"), &a).text, "budget_reached");
+    assert_eq!(g.ask_genie_for("s1", "t2", &a).text, "budget_reached");
 }
 
 #[test]

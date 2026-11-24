@@ -75,9 +75,9 @@ pub fn genie_proxy_deps(
     GenieProxyDeps::new(transport, Arc::new(UnavailableGenieTargets)).with_gate(Some(gate))
 }
 
-/// The guard of the one Genie Code session (slice 2a, R2) on the ONE R8, the `WorkspaceStore`
-/// gate (a switch turned off applies at once), the brain event sink and the action log. The
-/// session host (R1) calls `listen` on it with the agent folder of the app data.
+/// The guard of the agent session (R2) on the ONE R8, the `WorkspaceStore` gate (a switch turned
+/// off applies at once), the brain event sink and the action log. The orchestrator host calls
+/// it in process.
 pub fn agent_guard(
     transport: Arc<dyn McpTransport>,
     gate: Arc<dyn WorkspaceGate>,

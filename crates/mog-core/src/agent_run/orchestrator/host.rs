@@ -1,4 +1,4 @@
-//! The orchestrator host: the ask loop of ADR 0122 behind the public API of the old session host.
+//! The orchestrator host: the ask loop of ADR 0122, with a session, a turn queue and a tool loop.
 //!
 //! One actor thread owns all state. Commands from IPC, the network watch, the timer and the tool
 //! loop worker all arrive as messages, so no lock order can break and every rule has one place.
@@ -29,13 +29,16 @@ use crate::clock::{MonotonicClock, WallClock};
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::{
     AgentAskMode, AgentSessionEndArgs, AgentTurnCallArgs, AgentTurnResultArgs, AgentTurnStopArgs,
-    AgentTurnSubmitArgs,
+    AgentTurnSubmitArgs, OrchestratorStatusArgs,
 };
-use crate::model_gateway::{ChatClient, ChatRequest};
+use crate::model_gateway::models::list_orchestrator_models;
+use crate::model_gateway::{ChatClient, ChatRequest, DEFAULT_ORCHESTRATOR_MODEL};
 use crate::types::{
     AgentAnswerKind, AgentCallState, AgentSessionEndReason, AgentSessionEvent, AgentSessionPhase,
     AgentSessionState, AgentSource, AgentTurnAccepted, AgentTurnCall, AgentTurnEvent,
     AgentTurnOutcome, AgentTurnResult, AgentUsage, AgentWorkspace, GenieCallBudget,
+    OrchestratorModel, OrchestratorModelInfo, OrchestratorModels, OrchestratorState,
+    OrchestratorStatus,
 };
 use crate::wipe::AgentWipeHook;
 
@@ -107,7 +110,7 @@ pub trait OrchEnv: Send + Sync {
 
 /// The guard as the host sees it: the seam of the session, plus the in-process `ask_genie`.
 pub trait OrchGuard: SessionGuard {
-    /// Run one `ask_genie` call of `turn_id` with the same checks as the shim path. The call is
+    /// Run one `ask_genie` call of `turn_id` with the checks of the guard. The call is
     /// refused (`run_stopped`) unless that turn is the live one. Blocks until it ends.
     fn ask_genie(&self, session_id: &str, turn_id: &str, args: &Value) -> ToolOut;
     /// Set the function that runs when the third refusal of a turn stops it.
@@ -116,7 +119,7 @@ pub trait OrchGuard: SessionGuard {
 
 impl OrchGuard for AgentGuard {
     fn ask_genie(&self, session_id: &str, turn_id: &str, args: &Value) -> ToolOut {
-        AgentGuard::ask_genie_for(self, session_id, Some(turn_id), args)
+        AgentGuard::ask_genie_for(self, session_id, turn_id, args)
     }
     fn set_refusal_hook(&self, hook: Arc<dyn Fn(&str) + Send + Sync>) {
         AgentGuard::set_refusal_hook(self, hook);
@@ -526,13 +529,10 @@ impl Engine {
             catalog: snap.catalog.clone(),
             cross_workspace: snap.cross_workspace,
         };
-        // The run secret is for the shim only. There is no shim now: drop it at once.
-        drop(
-            self.d
-                .guard
-                .open_session(spec)
-                .map_err(|_| "agent_session_unavailable")?,
-        );
+        self.d
+            .guard
+            .open_session(spec)
+            .map_err(|_| "agent_session_unavailable")?;
         self.session = Some(Session {
             id: session_id.clone(),
             fp: Fingerprint::of(snap),
@@ -1350,7 +1350,7 @@ fn cites_many_workspaces(sources: &[AgentSource]) -> bool {
 
 // ---------- the public host ----------
 
-/// The orchestrator component. The API matches the old `SessionHost`, minus the process parts.
+/// The orchestrator component. One actor, one live session.
 pub struct OrchestratorHost {
     tx: Sender<Msg>,
     workspaces: Arc<dyn WorkspaceView>,
@@ -1442,6 +1442,55 @@ impl OrchestratorHost {
         }
     }
 
+    /// The `orchestrator_status` reply: the state and the model that a turn would use.
+    pub fn orchestrator_status(&self, recheck: bool) -> OrchestratorStatus {
+        OrchestratorStatus {
+            state: match self.status(recheck) {
+                OrchStatus::Ready => OrchestratorState::Ready,
+                OrchStatus::NoHome => OrchestratorState::NoHome,
+                OrchStatus::SignedOut => OrchestratorState::SignedOut,
+                OrchStatus::NoModel => OrchestratorState::NoModel,
+                OrchStatus::Unreachable => OrchestratorState::Unreachable,
+            },
+            model: self.selected_model(),
+        }
+    }
+
+    /// The `orchestrator_models` reply: the picker list, the chosen model and the default.
+    pub fn orchestrator_models(&self) -> OrchestratorModels {
+        let home = self
+            .workspaces
+            .snapshot()
+            .ok()
+            .and_then(|s| s.home_profile)
+            .unwrap_or_default();
+        let models = list_orchestrator_models(&home)
+            .into_iter()
+            .filter_map(|m| {
+                Some(OrchestratorModelInfo {
+                    id: OrchestratorModel::try_from(m.id).ok()?,
+                    label: m.label,
+                    tested: m.tested,
+                    tools: m.tools,
+                })
+            })
+            .collect();
+        OrchestratorModels {
+            models,
+            selected: self.selected_model(),
+            default_model: default_model(),
+        }
+    }
+
+    /// The model of the settings, or the default when the settings cannot be read.
+    fn selected_model(&self) -> OrchestratorModel {
+        self.workspaces
+            .snapshot()
+            .ok()
+            .and_then(|s| OrchestratorModel::try_from(s.model).ok())
+            .unwrap_or_else(default_model)
+    }
+
     pub fn submit(&self, a: &AgentTurnSubmitArgs) -> Result<AgentTurnAccepted, &'static str> {
         let mode = a.mode.unwrap_or(AgentAskMode::Ask);
         let mog: &str = &a.mog_id;
@@ -1514,6 +1563,11 @@ impl AgentWipeHook for OrchestratorHost {
     }
 }
 
+fn default_model() -> OrchestratorModel {
+    OrchestratorModel::try_from(DEFAULT_ORCHESTRATOR_MODEL.to_owned())
+        .expect("the default model id is valid")
+}
+
 fn refused(code: &'static str) -> CoreError {
     CoreError::IpcRefused { code }
 }
@@ -1553,6 +1607,14 @@ impl crate::ipc_gateway::GatewayComponents for OrchestratorHost {
                 to_value(&r)
             }
             "agent_session_state" => to_value(&self.session_state()),
+            "orchestrator_status" => {
+                let a: OrchestratorStatusArgs = parse(args)?;
+                to_value(&self.orchestrator_status(a.recheck.unwrap_or(false)))
+            }
+            "orchestrator_models" => {
+                let _: crate::ipc::NoArgs = parse(args)?;
+                to_value(&self.orchestrator_models())
+            }
             "agent_session_end" => {
                 let _a: AgentSessionEndArgs = parse(args)?;
                 self.end_blocking(AgentSessionEndReason::NewSession);
