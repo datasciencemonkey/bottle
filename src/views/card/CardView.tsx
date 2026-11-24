@@ -290,8 +290,13 @@ export function CardView({ mogId }: { mogId: MogId }) {
   }, [genie, panel, shown, onSize]);
   useEffect(() => {
     // R11 sets a hidden card back to one line when it shows it again: fit once more.
+    // The width fit can wrap the action row of the pop-up (`popup-actions`), which changes its
+    // height: read the section again, so a wrapped row is never cut by the window.
     const onResize = () => {
-      if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
+      const px = frame.current?.getBoundingClientRect().height ?? lastPx.current;
+      if (px === undefined) return;
+      lastPx.current = px;
+      void fit(px, window.innerHeight);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);

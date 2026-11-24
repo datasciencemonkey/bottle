@@ -28,14 +28,17 @@ body,
 .popup {
   position: relative;
   display: flex;
+  /* The controls drop under the text when they do not fit the window (340 px at most). */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   width: fit-content;
   max-width: 100%;
   box-sizing: border-box;
   padding: 5px 5px 5px 14px;
   border: 1px solid var(--mog-edge);
-  border-radius: var(--mog-radius-pill);
+  /* A full pill on one row (half of 39 px); a rounded box, not a stadium, when a row wraps. */
+  border-radius: calc(var(--mog-radius-lg) + 4px);
   background: var(--mog-surface);
   box-shadow: var(--mog-shadow);
   animation: popup-in 180ms var(--mog-ease-out) both;
@@ -65,6 +68,7 @@ body,
 .popup-text {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   margin: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -86,6 +90,17 @@ body,
   content: ', ';
 }
 
+/* All controls and the hint: one row that wraps with a gap. No clip, no `nowrap` on the row. */
+.popup-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .popup-action,
 .popup-dismiss {
   appearance: none;
@@ -94,11 +109,16 @@ body,
   border: 0;
   font: inherit;
   cursor: pointer;
+  /* Controls are not text: a drag or select-all never paints them with the ::selection blue. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .popup-action {
-  height: 28px;
+  min-height: 28px;
+  max-width: 100%;
   padding: 0 12px;
+  line-height: 1.2;
   border-radius: var(--mog-radius-pill);
   background: var(--mog-accent);
   color: var(--mog-on-accent);
@@ -117,12 +137,17 @@ body,
   color: var(--mog-text);
 }
 
-/* RTR-17a (ADR 0098): the ⌥G hint. Quiet text beside the action; it is not a control. */
+/* RTR-17a (ADR 0098): the ⌥G hint. Quiet text after the actions; it is not a control. The global
+   `::selection` paints selected text blue-grey, so a select-all made the hint look like a chip
+   with a background: it cannot be selected. */
 .popup-hint {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   color: var(--mog-text-muted);
   font-size: var(--mog-text-sm);
-  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
 }
 
 .popup-dismiss {

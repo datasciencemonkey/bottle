@@ -161,14 +161,18 @@ export function Popup({ mogId, card, onClose, saved, stacked = false }: PopupPro
           {why}
         </span>
       )}
-      {copy && chip(copy, close)}
-      {ask && chip(ask)}
-      {ask && (
-        <span className="popup-hint" data-popup-hint>
-          {POPUP_ASK_HINT}
-        </span>
-      )}
-      {others.map((c) => chip(c))}
+      {/* One wrapping row for all controls (1, 2 or 3 chips): it drops under the text and wraps
+          by itself, so a chip is never clipped by the window. */}
+      <div className="popup-actions" data-popup-actions>
+        {copy && chip(copy, close)}
+        {ask && chip(ask)}
+        {others.map((c) => chip(c))}
+        {ask && (
+          <span className="popup-hint" data-popup-hint>
+            {POPUP_ASK_HINT}
+          </span>
+        )}
+      </div>
       <MemorySavedLive line={saved.line} onUndo={saved.undo} />
       {copy && (
         <button

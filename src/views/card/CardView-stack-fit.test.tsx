@@ -134,3 +134,42 @@ describe('stacked pill and pop-up: the window fit (UX slice 1)', () => {
     expect(r.el.querySelector('[data-popup]')).toBeNull();
   });
 });
+
+describe('the pop-up that wraps its action row: the window fit measures again', () => {
+  let height = 48;
+  beforeEach(() => {
+    tauri.reset();
+    fits.calls = [];
+    height = 48;
+    vi.useFakeTimers();
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      return { ...realRect.call(this), height } as DOMRect;
+    };
+  });
+  afterEach(async () => {
+    await act(async () => roots.forEach((r) => r.unmount()));
+    roots = [];
+    HTMLElement.prototype.getBoundingClientRect = realRect;
+    vi.useRealTimers();
+    tauri.label = 'hub';
+  });
+
+  it('[#559] a window resize after the width fit reads the new height of a wrapped row', async () => {
+    tauri.label = `card-${ID}`;
+    const r = await render(<CardView mogId={ID} />);
+    roots.push(r.root);
+    await tauri.emitTo(`card-${ID}`, 'card:update', {
+      mogId: ID,
+      blurbs: [{ id: 'ask:u1', text: '"Top ten customers"', completed: true }],
+      chips: [
+        { id: 'ask_genie:u1', label: 'Ask Genie' },
+        { id: 'ws:other', label: 'Ask other workspaces too' },
+      ],
+    });
+    expect(fits.calls.at(-1)).toBe(48);
+    // The narrower window wraps the chips onto a second row: the section is taller now.
+    height = 92;
+    await act(async () => void window.dispatchEvent(new Event('resize')));
+    expect(fits.calls.at(-1)).toBe(92);
+  });
+});
