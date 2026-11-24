@@ -58,6 +58,15 @@ const RESULT: WipeCoreResult = {
 beforeEach(() => core.reset());
 
 describe('WipeFlow (#124)', () => {
+  it('[L-1] a throw of the onLocalWiped callback still counts as a local success', async () => {
+    const flow = new WipeFlow({ core: wipeCore(RESULT), genieOne: new GenieOneDeleteUtility() });
+    const done = await flow.confirm('everything', false, () => {
+      throw new Error('callback');
+    });
+    expect(done.phase).toBe('done');
+    expect(done.result?.local).toBe(12);
+  });
+
   it('[MEM-33a] the three options each have a confirm dialog that ends with You cannot undo this.', () => {
     const flow = new WipeFlow({ core: wipeCore(RESULT), genieOne: new GenieOneDeleteUtility() });
     const titles = (['older_than_30d', 'older_than_90d', 'everything'] as const).map((s) => {

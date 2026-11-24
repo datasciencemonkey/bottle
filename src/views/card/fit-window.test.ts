@@ -7,6 +7,7 @@ import {
   cardWindowHeight,
   cardWindowWidth,
   createWindowFit,
+  watchCardSide,
   type CardPlace,
   type CardWindow,
 } from './fit-window';
@@ -139,6 +140,31 @@ describe('lamp-alive: the pill is measured with its fraction', () => {
     document.body.innerHTML = '';
   });
 
+  it('[AC-1.13] takes the wider of a pill and a pop-up that show together', async () => {
+    const { measureCompactWidth } = await import('./fit-window');
+    document.body.innerHTML =
+      '<div class="genie genie-working" style="width: 190px"></div>' +
+      '<div class="popup" style="width: 260.5px"></div>';
+    const w = measureCompactWidth(document);
+    expect(w).toBeCloseTo(260.5, 2);
+    expect(cardWindowWidth(w)).toBe(261 + 1 + 22);
+    for (const el of document.querySelectorAll<HTMLElement>('.popup, .genie-working'))
+      expect(el.style.maxWidth).toBe('');
+    document.body.innerHTML = '';
+  });
+
+  it('[AC-1.13] the window takes the height of both rows, so no clear gap stays under them', async () => {
+    const f = fakeWindow(rightCard);
+    const fit = createWindowFit(() => f.w, { measureWidth: () => 260.5 });
+    // The pill (38 px), a gap (8 px) and the pop-up (40 px) with the window padding (24 px).
+    await fit(38 + 8 + 40 + 24);
+    expect(f.log).toHaveLength(1);
+    expect(f.log[0]?.r.h).toBe(110);
+    expect(f.log[0]?.r.w).toBe(261 + 1 + 22);
+    // The edge that faces the MOG stays where it was.
+    expect(f.log[0]?.r.x).toBe(rightCard.card.x);
+  });
+
   it('is undefined for the answer card, which keeps the full width', async () => {
     const { measureCompactWidth } = await import('./fit-window');
     document.body.innerHTML = '<div class="genie genie-answer"></div>';
@@ -182,5 +208,39 @@ describe('lamp-alive: the side mark', () => {
     applyCardSide('right');
     expect(document.documentElement.dataset['side']).toBe('right');
     delete document.documentElement.dataset['side'];
+  });
+});
+
+describe('lamp-alive: the side follows the MOG when the host moves the card', () => {
+  it('reads the title again after each move and stops when it is stopped', async () => {
+    let title = 'Bottle card (right)';
+    let moved: () => void = () => undefined;
+    const off = vi.fn();
+    const stop = watchCardSide(
+      {
+        onMoved: async (cb) => {
+          moved = cb;
+          return off;
+        },
+        title: async () => title,
+      },
+      document,
+    );
+    await Promise.resolve();
+    title = 'Bottle card (left)';
+    moved();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.documentElement.dataset['side']).toBe('left');
+    title = 'Bottle card (right)';
+    moved();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.documentElement.dataset['side']).toBe('right');
+    stop();
+    expect(off).toHaveBeenCalled();
+    delete document.documentElement.dataset['side'];
+  });
+
+  it('does nothing in a window without move events', () => {
+    expect(() => watchCardSide({})()).not.toThrow();
   });
 });

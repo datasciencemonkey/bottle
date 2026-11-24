@@ -66,6 +66,12 @@ describe('Table SEC-DISC disclosures', () => {
     for (const d of SEC_DISC) expect(d.v1).toBe(d.item.startsWith('(v1)'));
   });
 
+  it('[SEC-17] the agent disclosure says other answers stay out unless D1 is on', () => {
+    expect(text('agent-harness')).toContain(
+      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+    );
+  });
+
   it('[SEC-17] [AT-24] the hub data panel shows every SEC-DISC disclosure', async () => {
     // ui-1 (#97, #103): the data panel lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);
@@ -113,20 +119,33 @@ describe('Table SEC-DISC disclosures', () => {
 
   it('[SEC-17] home-profile processing names the model calls and the hop sentence', () => {
     const t = text('home-profile');
-    for (const w of ['cleanup', 'router step', 'memory writer', 'embeddings', 'main agent model']) {
+    for (const w of [
+      'cleanup',
+      'router step',
+      'memory writer',
+      'embeddings',
+      'orchestrator model',
+    ]) {
       expect(t).toContain(w);
     }
     expect(t).toContain('Questions about another workspace are processed in your home workspace.');
   });
 
-  it('[SEC-17] the main agent harness and model location, and tokens stay in the core', () => {
+  it('[SEC-17] the orchestrator model and its location, and tokens stay in the core', () => {
     const t = text('agent-harness');
-    expect(t).toMatch(/Claude or Codex harness/);
-    expect(t).toMatch(/on this computer/);
+    expect(t).toMatch(/one orchestrator model/);
     expect(t).toMatch(/Databricks AI Gateway/);
-    expect(t).toMatch(/local model/);
+    expect(t).toMatch(/sets store to false/);
+    expect(t).toMatch(/Clean up dictation/);
     expect(t).toMatch(/never gets your sign-in tokens/);
     expect(text('where-data-goes')).toMatch(/tokens stay in the Bottle core/);
+  });
+
+  it('[SEC-17] the Databricks dictation engine says that the voice goes to the home workspace', () => {
+    const t = text('stt-location');
+    expect(t).toMatch(/Dictation engine to Databricks/);
+    expect(t).toMatch(/audio of each talk-key hold goes to your home workspace to be transcribed/);
+    expect(t).toMatch(/uses the local model/);
   });
 
   it('[SEC-17] the summary names cleanup egress and the Appendix B side effects', () => {

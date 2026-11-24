@@ -40,6 +40,9 @@ import { sttModelApi } from './sttModelApi';
 import { StoreNotice } from './StoreNotice';
 import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import type { HubOrchestratorView } from '../../shared/hub-orchestrator';
+import { useHubAgent } from './use-hub-agent';
+import { useHubOrchestrator } from './use-hub-orchestrator';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 import { useHubWorkspaces, WorkspaceSettings } from './WorkspaceSettings';
@@ -56,14 +59,15 @@ const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) 
 );
 
 /**
- * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
- * stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one line.
+ * The product name and the experimental label (MB-10a, MB-10b); the title bar shows the label
+ * too. Both stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one
+ * line.
  */
 function HubHeader() {
   return (
     <>
       <h1 className="hub-title">Bottle</h1>
-      <p className="hub-labs">Databricks Labs / experimental</p>
+      <p className="hub-experimental">experimental</p>
     </>
   );
 }
@@ -105,8 +109,12 @@ function SettingsArea({
   workspaces,
   homeDomains,
   onChoose,
+  agentBusy,
+  orchestrator,
 }: {
   hidden: boolean;
+  agentBusy: boolean;
+  orchestrator: HubOrchestratorView | undefined;
   recording: HubRecording | undefined;
   workspaces: HubWorkspaceList | undefined;
   homeDomains: readonly MogViewState[];
@@ -117,7 +125,13 @@ function SettingsArea({
       {/* ADR 0117: one row for each workspace, with the switch "Available to your MOG". It ends
           with the "Connect another workspace…" row (#162 follow-up, W-07e), the one deliberate
           way to open "Connect a workspace" again once a usable profile exists. */}
-      <WorkspaceSettings list={workspaces} homeDomains={homeDomains} onChoose={onChoose} />
+      <WorkspaceSettings
+        list={workspaces}
+        homeDomains={homeDomains}
+        onChoose={onChoose}
+        agentBusy={agentBusy}
+        orchestrator={orchestrator}
+      />
       <MicPreference />
       <DictationWords />
       <RecordingSettings model={recording} />
@@ -201,6 +215,8 @@ export function Hub() {
   useViewEvent('mog.view_state', onState);
   const notice = useHubNotice();
   const workspaces = useHubWorkspaces();
+  const agent = useHubAgent();
+  const orchestrator = useHubOrchestrator();
   const homeDomains = [...mogs.values()].filter((m) => m.homeDomain !== undefined);
   const hp = workspaces?.homePick;
   const pickKey = hp ? `${hp.suggested}|${hp.candidates.join(',')}` : '';
@@ -230,7 +246,7 @@ export function Hub() {
   const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
   // Set on `<main>`, not `.hub-body` (ui-1, review of #602 round 4, blocker 1): a pinned rail
   // pushes `.hub-content` over by its own width instead of overlaying it (review of #602,
-  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-labs`, below) needs the same
+  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-experimental`, below) needs the same
   // push — they are direct children of `main`, outside `.hub-body` entirely (AT-37), so a
   // variable set only on `.hub-body` never reached them. A custom property set here still
   // inherits down into `.hub-body`/`.hub-content`/`.conv`/`.rec-area` exactly as before, just
@@ -295,6 +311,8 @@ export function Hub() {
             active={view === 'conversations'}
             onOpen={showConversations}
             composer={threadComposer}
+            agent={agent}
+            agentMogId={[...mogs.keys()][0]}
           />
           <MemoryArea active={view === 'memory'} forgetMogId={[...mogs.keys()][0]} />
           <Recordings
@@ -308,6 +326,8 @@ export function Hub() {
             workspaces={workspaces}
             homeDomains={homeDomains}
             onChoose={onChoose}
+            agentBusy={agent?.live !== undefined || agent?.session.state === 'busy'}
+            orchestrator={orchestrator}
           />
           <ForgetDialogHost />
           {/* ADR 0117 (FLAG 5): the one-time home pick shows over every area while it is set. */}

@@ -21,7 +21,13 @@
  *   its button (Settings, "Connect another workspace…").
  */
 import { emitTo } from '@tauri-apps/api/event';
-import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
+import {
+  CONNECT_EVENT,
+  CONNECT_VIEW_ID,
+  PROFILE_NAME_INVALID_TEXT,
+  PROFILE_NAME_TAKEN_TEXT,
+  type ConnectModel,
+} from '../shared/connect-view';
 import type { Profile, ProfileService } from '../shared/interfaces';
 import { onViewInput, type BrainBus } from './bus';
 
@@ -38,8 +44,8 @@ export const DATABRICKS_DOMAINS = [
 export const CONNECT_TEXT = {
   host_refused:
     'Use the URL of a Databricks workspace, for example https://<name>.cloud.databricks.com.',
-  profile_exists: 'A profile with this name exists. Type a different name.',
-  invalid_args: 'Use only letters, digits, dots, dashes and underscores, up to 64 characters.',
+  profile_exists: PROFILE_NAME_TAKEN_TEXT,
+  invalid_args: PROFILE_NAME_INVALID_TEXT,
   otherAuthNotice:
     'A personal access token or service principal profile exists for this workspace. Bottle does not change it. Bottle makes a new OAuth profile.',
   timeout: 'The sign-in did not finish in 5 minutes.',
@@ -179,12 +185,16 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
   let otherAuthNotice = false;
   let running = false;
   let reopen = false;
+  /** The other profile names of the last `profiles_list` read (W-07g): the view refuses a
+   * duplicate at once, without a round trip. */
+  let taken: string[] = [];
 
   const nameStep = (error?: string): ConnectModel => ({
     step: 'name',
     host: host ?? '',
     proposedName: profile,
     otherAuthNotice,
+    taken,
     ...(error === undefined ? {} : { error }),
   });
 
@@ -262,10 +272,8 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
     const list = await profiles();
     host = h;
     otherAuthNotice = list.some((p) => p.host === h && p.authType !== U2M);
-    profile = freeName(
-      proposedProfileName(h),
-      list.map((p) => p.name),
-    );
+    taken = list.map((p) => p.name);
+    profile = freeName(proposedProfileName(h), taken);
     show(nameStep());
   }
 

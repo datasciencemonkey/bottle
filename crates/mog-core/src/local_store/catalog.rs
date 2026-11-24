@@ -268,7 +268,9 @@ const MOG_UPSERT: Stmt = Stmt {
 // with no answer (a late `pending` event, a resume) never clears `final_answer_md`, the summary,
 // the key numbers or the deep link (MEM-26, U9), and never moves a finished status back to
 // `pending` or `uncertain`. No statement sets `expires_at`: an exchange has
-// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one.
+// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one. The hub
+// Conversations delete (`mem.exchange.delete`, ADR 0121, local only) leaves a tombstone, and the
+// upsert never brings a tombstone back (it keeps `deleted_at` and the erased text).
 
 const EXCHANGE_UPSERT: Stmt = Stmt {
     id: "mem.exchange.upsert",
@@ -276,12 +278,12 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           profile_name, workspace_host, workspace_id, is_home_workspace, space_id, \
           conversation_id, response_id, question_user, question_sent_sha256, status, \
           answer_summary, key_numbers, final_answer_md, deep_link, split_group_id, asked_at, \
-          completed_at, row_hlc, origin_device_id) \
+          completed_at, row_hlc, origin_device_id, citations) \
           VALUES (:exchangeId, :requestId, :mogId, :sessionId, :backendKind, :profileName, \
           :workspaceHost, :workspaceId, :homeWorkspace, :spaceId, :conversationId, :responseId, \
           :questionUser, :questionSentSha256, :status, :answerSummary, \
           coalesce(:keyNumbers, '[]'), :finalAnswerMd, :deepLink, :splitGroupId, :askedAt, \
-          :completedAt, :rowHlc, :deviceId) \
+          :completedAt, :rowHlc, :deviceId, coalesce(:citations, '[]')) \
           ON CONFLICT (request_id) DO UPDATE SET status = CASE \
           WHEN excluded.status IN ('pending','uncertain') \
           AND genie_exchange.status NOT IN ('pending','uncertain') \
@@ -291,13 +293,16 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           answer_summary = coalesce(excluded.answer_summary, genie_exchange.answer_summary), \
           key_numbers = CASE excluded.key_numbers WHEN '[]' THEN genie_exchange.key_numbers \
           ELSE excluded.key_numbers END, \
+          citations = CASE excluded.citations WHEN '[]' THEN genie_exchange.citations \
+          ELSE excluded.citations END, \
           final_answer_md = coalesce(excluded.final_answer_md, genie_exchange.final_answer_md), \
           deep_link = coalesce(excluded.deep_link, genie_exchange.deep_link), \
           session_id = coalesce(genie_exchange.session_id, excluded.session_id), \
           completed_at = coalesce(excluded.completed_at, genie_exchange.completed_at), \
           row_hlc = max(genie_exchange.row_hlc, excluded.row_hlc), \
           updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
-          WHERE genie_exchange.mog_id = excluded.mog_id",
+          WHERE genie_exchange.mog_id = excluded.mog_id \
+          AND genie_exchange.deleted_at IS NULL",
     params: &[
         req("exchangeId", UUID),
         req("requestId", UUID),
@@ -323,6 +328,8 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
         opt("completedAt", MS),
         ROW_HLC,
         DEVICE_ID,
+        // ADR 0122: the [n] citations of an agent turn row (`[{"n": 1, "profile": "p"}]`).
+        opt("citations", json(4096)),
     ],
     kind: Kind::Write,
     access: Access::Brain,
@@ -355,12 +362,45 @@ const EXCHANGE_RECENT: Stmt = Stmt {
           workspace_host AS workspaceHost, question_user AS questionUser, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
           deep_link AS deepLink, conversation_id AS conversationId, \
-          asked_at AS askedAt, completed_at AS completedAt \
+          backend_kind AS backendKind, split_group_id AS splitGroupId, \
+          asked_at AS askedAt, completed_at AS completedAt, citations \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \
           ORDER BY asked_at DESC, exchange_id DESC LIMIT :limit",
     params: &[MOG_ID, req("limit", LIMIT)],
     kind: Kind::Query,
+    access: Access::Brain,
+};
+
+/// Delete the named exchanges of one MOG, for the hub Conversations "Delete" (ADR 0121). It is a
+/// tombstone, not a row delete: it sets `deleted_at`, erases the question and answer text and
+/// keeps the ids, so a later Wipe or Forget with "Also delete Genie conversations" still reads
+/// the `conversation_id` and removes the Genie conversation. Wipe and Forget hard-delete the row
+/// later. It is a local delete only: it writes no `forget_log` row and calls no remote service.
+/// The brain sends 1 to 200 request ids; `Tags` checks the list is at most 200 strings of at
+/// most 36 characters. A value that is no request id matches no row, and a row that is already
+/// a tombstone matches none. A citing `memory_item` keeps its row. The correlated `EXISTS`
+/// repeats the `mog_id` filter, so the MEM-01 guard sees one in each `SELECT`.
+const EXCHANGE_DELETE: Stmt = Stmt {
+    id: "mem.exchange.delete",
+    sql: "UPDATE genie_exchange SET deleted_at = :now, question_user = NULL, \
+          question_sent_sha256 = '', answer_summary = NULL, final_answer_md = NULL, key_numbers = '[]', \
+          citations = '[]', updated_at = :now \
+          WHERE mog_id = :mogId AND deleted_at IS NULL AND EXISTS \
+          (SELECT 1 FROM json_each(:requestIds) j \
+          WHERE genie_exchange.mog_id = :mogId AND j.value = genie_exchange.request_id)",
+    params: &[
+        MOG_ID,
+        req("now", MS),
+        req(
+            "requestIds",
+            ParamType::Tags {
+                max_items: 200,
+                max_chars: 36,
+            },
+        ),
+    ],
+    kind: Kind::Write,
     access: Access::Brain,
 };
 
@@ -439,7 +479,10 @@ const ITEM_UPSERT: Stmt = Stmt {
           THEN 'quarantined' ELSE 'active' END, \
           coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), \
           coalesce(:sourceSessionIds, '[]'), coalesce(:sourceUtteranceIds, '[]'), \
-          :workspaceHost, :workspaceId, :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, \
+          :workspaceHost, :workspaceId, :spaceId, \
+          CASE WHEN EXISTS (SELECT 1 FROM genie_exchange t WHERE t.mog_id = :mogId \
+          AND t.exchange_id = :sourceExchangeId AND t.deleted_at IS NOT NULL) THEN NULL \
+          ELSE :sourceExchangeId END, :seenAt, :seenAt, :rowHlc, \
           :deviceId, coalesce(nullif(trim(:title), ''), substr(coalesce(:text, :body), 1, 80)), \
           coalesce(:body, ''), coalesce(:tags, '[]'), \
           coalesce(:origin, CASE WHEN :source = 'agent' THEN 'agent' ELSE 'legacy' END), \
@@ -480,7 +523,9 @@ const ITEM_UPSERT: Stmt = Stmt {
           FROM json_each(memory_item.source_utterance_ids) UNION \
           SELECT value FROM json_each(excluded.source_utterance_ids))), \
           source_exchange_id = coalesce(memory_item.source_exchange_id, \
-          excluded.source_exchange_id), \
+          CASE WHEN EXISTS (SELECT 1 FROM genie_exchange t WHERE t.mog_id = memory_item.mog_id \
+          AND t.exchange_id = excluded.source_exchange_id AND t.deleted_at IS NOT NULL) \
+          THEN NULL ELSE excluded.source_exchange_id END), \
           last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
           mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
           updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \
@@ -1335,6 +1380,7 @@ pub const STATEMENTS: &[Stmt] = &[
     EXCHANGE_RECENT,
     EXCHANGE_DEPENDENTS,
     EXCHANGE_BY_SESSION,
+    EXCHANGE_DELETE,
     ITEM_UPSERT,
     ITEM_GET,
     ITEM_LIST_ROWS,

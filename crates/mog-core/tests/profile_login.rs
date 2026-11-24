@@ -122,6 +122,8 @@ struct FakeCli {
     mode: Cli,
     calls: Mutex<Vec<(Vec<String>, Duration)>>,
     started: AtomicBool,
+    /// The `auth describe` reply; `None` answers `NotImplemented` (storage unchecked).
+    describe: Option<Value>,
 }
 
 impl FakeCli {
@@ -130,6 +132,15 @@ impl FakeCli {
             mode,
             calls: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
+            describe: None,
+        })
+    }
+    fn with_describe(mode: Cli, describe: Value) -> Arc<Self> {
+        Arc::new(Self {
+            mode,
+            calls: Mutex::new(Vec::new()),
+            started: AtomicBool::new(false),
+            describe: Some(describe),
         })
     }
     fn calls(&self) -> Vec<(Vec<String>, Duration)> {
@@ -142,7 +153,9 @@ impl CliRunner for FakeCli {
         Ok(PathBuf::from("/usr/local/bin/databricks"))
     }
     fn run_json(&self, _args: &[&str]) -> CoreResult<Value> {
-        Err(CoreError::NotImplemented { component: "R5" })
+        self.describe
+            .clone()
+            .ok_or(CoreError::NotImplemented { component: "R5" })
     }
     fn run_login(&self, args: &[&str], timeout: Duration, cancel: &AtomicBool) -> CoreResult<()> {
         self.calls
@@ -730,5 +743,198 @@ fn w_07g_a_scheme_less_paste_with_a_url_in_its_query_keeps_its_host() {
     assert_eq!(
         workspace_host("acme-prod.cloud.databricks.com/?next=https://x.example").as_deref(),
         Some(HOST)
+    );
+}
+
+// ---------- profile_reauth (ADR 0117) ----------
+
+fn reauth_args(profile: &str) -> Value {
+    json!({ "profile": profile })
+}
+
+/// [ADR 0117] a U2M profile signs in again on its own host, with no `--client-id`, then the W-06a check
+#[test]
+fn adr_0117_reauth_runs_auth_login_for_a_u2m_profile_and_the_check() {
+    let cli = FakeCli::new(Cli::Ok);
+    let verifier = FakeVerifier::new(Ok(()));
+    let t7 = login(
+        vec![profile("work", HOST, "databricks-cli")],
+        cli.clone(),
+        verifier.clone(),
+    );
+    assert_eq!(
+        t7.call("profile_reauth", reauth_args("work")).unwrap(),
+        json!({})
+    );
+    let calls = cli.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].0,
+        login_args(HOST, "work", None)
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(calls[0].1, LOGIN_TIMEOUT);
+    assert_eq!(*verifier.checked.lock().unwrap(), vec!["work"]);
+}
+
+/// [ADR 0117] a PAT, service-principal or unknown profile is `profile_invalid` and starts no CLI
+#[test]
+fn adr_0117_reauth_refuses_a_non_u2m_profile_without_running_the_cli() {
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![profile("pat", HOST, ""), profile("sp", HOST, "oauth-m2m")],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    for name in ["pat", "sp", "nobody"] {
+        assert_eq!(
+            code(t7.call("profile_reauth", reauth_args(name))),
+            "profile_invalid",
+            "{name}"
+        );
+    }
+    assert!(cli.calls().is_empty());
+}
+
+/// [ADR 0117] a host outside the Databricks list is refused, and a bad name is `invalid_args`
+#[test]
+fn adr_0117_reauth_refuses_a_bad_host_and_a_bad_name() {
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![profile("odd", "https://example.com", "databricks-cli")],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    assert_eq!(
+        code(t7.call("profile_reauth", reauth_args("odd"))),
+        "host_refused"
+    );
+    assert_eq!(
+        code(t7.call("profile_reauth", reauth_args("-x"))),
+        "invalid_args"
+    );
+    assert!(cli.calls().is_empty());
+}
+
+/// [ADR 0117] Cancel stops a waiting re-sign-in; it answers `login_cancelled`
+#[test]
+fn adr_0117_reauth_can_be_cancelled_with_profile_login_cancel() {
+    let cli = FakeCli::new(Cli::WaitForCancel);
+    let verifier = FakeVerifier::new(Ok(()));
+    let t7 = login(
+        vec![profile("work", HOST, "databricks-cli")],
+        cli.clone(),
+        verifier.clone(),
+    );
+    let t = t7.clone();
+    let waiting = std::thread::spawn(move || t.call("profile_reauth", reauth_args("work")));
+    while !cli.started.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        code(t7.call("profile_reauth", reauth_args("work"))),
+        "profile_exists"
+    );
+    t7.call("profile_login_cancel", json!({ "profile": "work" }))
+        .unwrap();
+    assert_eq!(code(waiting.join().unwrap()), "login_cancelled");
+    assert!(verifier.checked.lock().unwrap().is_empty());
+}
+
+/// [ADR 0117] a timeout and a failed CLI answer fixed codes; a failed check answers a W-ERR code
+#[test]
+fn adr_0117_reauth_timeout_cli_failed_and_check_failed() {
+    let cfg = || vec![profile("work", HOST, "databricks-cli")];
+    let t = login(cfg(), FakeCli::new(Cli::TimeOut), FakeVerifier::new(Ok(())));
+    assert_eq!(
+        code(t.call("profile_reauth", reauth_args("work"))),
+        "timeout"
+    );
+    let t = login(cfg(), FakeCli::new(Cli::Fail), FakeVerifier::new(Ok(())));
+    assert_eq!(
+        code(t.call("profile_reauth", reauth_args("work"))),
+        "cli_failed"
+    );
+    let t = login(
+        cfg(),
+        FakeCli::new(Cli::Ok),
+        FakeVerifier::new(Err("auth_expired")),
+    );
+    assert_eq!(
+        code(t.call("profile_reauth", reauth_args("work"))),
+        "auth_expired"
+    );
+}
+
+/// [ADR 0117] same names in other cases: any non-U2M twin refuses, and the exact case must exist
+#[test]
+fn adr_0117_reauth_fails_closed_on_a_same_name_section_in_another_case() {
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![
+            profile("Work", HOST, "databricks-cli"),
+            profile("work", HOST, ""),
+        ],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    for name in ["work", "Work", "WORK"] {
+        assert_eq!(
+            code(t7.call("profile_reauth", reauth_args(name))),
+            "profile_invalid",
+            "{name}"
+        );
+    }
+    assert!(cli.calls().is_empty());
+    // A lone U2M section: only its exact case runs.
+    let cli = FakeCli::new(Cli::Ok);
+    let t7 = login(
+        vec![profile("Work", HOST, "databricks-cli")],
+        cli.clone(),
+        FakeVerifier::new(Ok(())),
+    );
+    assert_eq!(
+        code(t7.call("profile_reauth", reauth_args("work"))),
+        "profile_invalid"
+    );
+    assert!(cli.calls().is_empty());
+    t7.call("profile_reauth", reauth_args("Work")).unwrap();
+    assert_eq!(cli.calls().len(), 1);
+}
+
+/// [ADR 0117] plaintext or failed token storage is `profile_invalid`; secure storage runs
+#[test]
+fn adr_0117_reauth_needs_secure_token_storage() {
+    let cfg = || vec![profile("work", HOST, "databricks-cli")];
+    for describe in [
+        json!({ "details": { "token_storage": { "mode": "plaintext" } } }),
+        json!({}),
+    ] {
+        let cli = FakeCli::with_describe(Cli::Ok, describe);
+        let t7 = login(cfg(), cli.clone(), FakeVerifier::new(Ok(())));
+        assert_eq!(
+            code(t7.call("profile_reauth", reauth_args("work"))),
+            "profile_invalid"
+        );
+        assert!(cli.calls().is_empty());
+    }
+    let cli = FakeCli::with_describe(
+        Cli::Ok,
+        json!({ "details": { "token_storage": { "mode": "secure" } } }),
+    );
+    let t7 = login(cfg(), cli.clone(), FakeVerifier::new(Ok(())));
+    t7.call("profile_reauth", reauth_args("work")).unwrap();
+    assert_eq!(cli.calls().len(), 1);
+}
+
+/// [ADR 0117] a cancel with a bad name is `invalid_args`
+#[test]
+fn adr_0117_cancel_checks_the_name() {
+    let t7 = login(vec![], FakeCli::new(Cli::Ok), FakeVerifier::new(Ok(())));
+    assert_eq!(
+        code(t7.call("profile_login_cancel", json!({ "profile": "-x" }))),
+        "invalid_args"
     );
 }

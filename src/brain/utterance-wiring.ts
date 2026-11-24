@@ -41,6 +41,12 @@ export interface UtteranceHandlerDeps {
   onDone(r: Exclude<UtteranceRoute, AskRoute | RememberRoute>, owned: OwnedUtterance): void;
   /** ADR 0113: a "remember this" order, after the owner is released. Nothing is pasted. */
   onRemember?(r: RememberRoute, owned: OwnedUtterance): void;
+  /**
+   * UX slice 1: the route of an utterance ended. `pasted` is true when `insert_text` inserted the
+   * text. `segment` names the hold's lease, so a late resolve never frees a newer hold. The
+   * arrival gate applies held arrivals 1.2 s later. It runs on every end, also a fault.
+   */
+  onPasteResolved?(pasted: boolean, segment: { segmentId: string; leaseId: string }): void;
 }
 
 const isAsk = (r: UtteranceRoute): r is AskRoute => r.route === 'ask' || r.route === 'chip';
@@ -50,14 +56,19 @@ export function createUtteranceHandler(
 ): (u: CapturedUtterance) => Promise<void> {
   return async (u) => {
     const owned = deps.owner.begin(u.mogId);
-    if (!owned) return;
+    if (!owned) {
+      deps.onPasteResolved?.(false, u.segment);
+      return;
+    }
     let handedOff = false;
+    let pasted = false;
     try {
       const input = await deps.routerInput(owned.mogId);
       const r = await routeUtterance(
         {
           mogId: owned.mogId,
           text: u.text,
+          leaseId: u.segment.leaseId,
           forceAsk: u.forceAsk,
           insertionOn: deps.insertionOn(owned.mogId),
           input: { ...input, speakerTrack: 'you', captureMode: u.mode },
@@ -65,6 +76,7 @@ export function createUtteranceHandler(
         },
         deps.route,
       );
+      pasted = r.route === 'inserted' || (r.route === 'chip' && r.dictated?.route === 'inserted');
       if (isAsk(r)) {
         deps.onAsk(r, owned);
         // Only a call that returns hands the owner off; a throw releases it below.
@@ -80,6 +92,7 @@ export function createUtteranceHandler(
       // A failed route sends nothing and inserts nothing (B1). The capture lifecycle goes on.
     } finally {
       if (!handedOff) deps.owner.release(owned.utteranceId);
+      deps.onPasteResolved?.(pasted, u.segment);
     }
   };
 }

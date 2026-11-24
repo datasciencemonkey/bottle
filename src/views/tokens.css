@@ -55,6 +55,7 @@
   /* Shape and depth. */
   --mog-radius-sm: 4px;
   --mog-radius-md: 10px;
+  --mog-radius-lg: 16px;
   --mog-radius-pill: 999px;
   --mog-shadow: 0 6px 16px rgb(8 10 18 / 38%), 0 1px 3px rgb(8 10 18 / 30%);
   --mog-focus-ring: 0 0 0 2px var(--mog-surface), 0 0 0 4px var(--mog-focus);

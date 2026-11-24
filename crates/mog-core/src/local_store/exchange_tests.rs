@@ -261,8 +261,9 @@ fn mem_26_no_statement_or_trigger_purges_exchanges_by_age() {
         }
         if sql.contains("genie_exchange") {
             assert!(!sql.contains("expires_at"), "{}: no TTL (U9)", st.id);
+            // The hub delete tombstone erases the text on purpose (ADR 0121).
             assert!(
-                !sql.contains("final_answer_md = null"),
+                st.id == "mem.exchange.delete" || !sql.contains("final_answer_md = null"),
                 "{}: never clears the answer",
                 st.id
             );
@@ -457,4 +458,280 @@ fn genie_followup_exchange_recent_carries_the_conversation_id() {
     for row in r {
         assert_eq!(row["conversationId"], "test-conv");
     }
+}
+
+// ---- ADR 0121: agent turn rows and the local Conversations delete -------------------------------
+
+const TURN_REQ: &str = "41111111-2222-4333-8444-555555555510";
+const TURN_EXCH: &str = "31111111-2222-4333-8444-555555555510";
+const CALL_REQ: &str = "41111111-2222-4333-8444-555555555511";
+const CALL_EXCH: &str = "31111111-2222-4333-8444-555555555511";
+const ROOT: &str = "41111111-2222-4333-8444-555555555512";
+
+/// A turn row (`genie_agent`) with the thread root in `split_group_id`, and a call row of that turn.
+fn seed_turn(s: &SqlCipherLocalStore) {
+    let mut turn = home(TURN_EXCH, TURN_REQ, T0);
+    {
+        let o = turn.as_object_mut().unwrap();
+        o.insert("backendKind".into(), json!("genie_agent"));
+        o.insert("splitGroupId".into(), json!(ROOT));
+        o.insert("conversationId".into(), Value::Null);
+        o.insert("answerSummary".into(), Value::Null);
+    }
+    exec(s, "mem.exchange.upsert", turn);
+    let mut call = home(CALL_EXCH, CALL_REQ, T0 + 1_000);
+    call["splitGroupId"] = json!(TURN_REQ);
+    exec(s, "mem.exchange.upsert", call);
+}
+
+#[test]
+fn adr_0121_recent_returns_backend_kind_and_split_group_id() {
+    let t = TempDir::new("0121-recent");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0 + 2_000));
+    let got = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let by = |req: &str| {
+        rows(&got)
+            .iter()
+            .find(|r| r["requestId"] == req)
+            .unwrap()
+            .clone()
+    };
+    let turn = by(TURN_REQ);
+    assert_eq!(turn["backendKind"], "genie_agent");
+    assert_eq!(turn["splitGroupId"], ROOT);
+    let call = by(CALL_REQ);
+    assert_eq!(call["backendKind"], "genie_one_mcp");
+    assert_eq!(call["splitGroupId"], TURN_REQ);
+    let plain = by(REQ_1);
+    assert_eq!(plain["splitGroupId"], Value::Null);
+}
+
+fn delete(s: &SqlCipherLocalStore, mog: &str, ids: Value) -> i64 {
+    changes(&exec(
+        s,
+        "mem.exchange.delete",
+        json!({"mogId": mog, "requestIds": ids, "now": T0 + 10 * DAY}),
+    ))
+}
+
+/// The row of one request, deleted or not: id, conversation id, deleted_at and the text parts.
+fn raw(s: &SqlCipherLocalStore, request_id: &str) -> (Option<String>, Option<i64>, bool, String) {
+    s.with_conn(|c| {
+        c.query_row(
+            "SELECT conversation_id, deleted_at, question_user IS NULL AND answer_summary IS NULL \
+             AND final_answer_md IS NULL, key_numbers FROM genie_exchange WHERE request_id = ?1",
+            [request_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+    })
+    .unwrap()
+}
+
+#[test]
+fn adr_0121_delete_removes_only_the_named_ids_of_that_mog() {
+    let t = TempDir::new("0121-delete");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0 + 2_000));
+    let mut other = home(EXCH_2, REQ_2, T0 + 3_000);
+    other["mogId"] = json!(MOG_B);
+    exec(&s, "mem.exchange.upsert", other);
+
+    // MEM-01: another MOG's id in the list matches nothing.
+    assert_eq!(delete(&s, MOG_A, json!([REQ_2])), 0);
+    assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
+    // Two named ids go (as tombstones); the rest stay.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ, CALL_REQ])), 2);
+    assert!(get(&s, MOG_A, TURN_REQ).is_empty());
+    assert!(get(&s, MOG_A, CALL_REQ).is_empty());
+    assert_eq!(get(&s, MOG_A, REQ_1).len(), 1);
+    assert_eq!(get(&s, MOG_B, REQ_2).len(), 1);
+    // A repeat (a tombstone), an empty list and an unknown id delete nothing.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ])), 0);
+    assert_eq!(delete(&s, MOG_A, json!([])), 0);
+    // A local delete leaves no forget_log row.
+    let n: i64 = s
+        .with_conn(|c| c.query_row("SELECT count(*) FROM forget_log", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(n, 0);
+    // The statement is a brain write that passes the MEM-01 guard.
+    let st = super::catalog::find("mem.exchange.delete").expect("delete");
+    assert_eq!(st.access, Access::Brain);
+    assert_eq!(st.kind, super::catalog::Kind::Write);
+    super::mog_guard::require_mog_id_filter(st.sql).expect("mog_guard");
+}
+
+#[test]
+fn adr_0121_delete_is_a_tombstone_that_keeps_the_ids_and_upsert_cannot_revive_it() {
+    let t = TempDir::new("0121-tomb");
+    let s = open(&t);
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    assert_eq!(delete(&s, MOG_A, json!([REQ_1])), 1);
+    // The row stays with its conversation id; the text is erased; the reads skip it.
+    let (conv, at, erased, kn) = raw(&s, REQ_1);
+    assert_eq!(conv.as_deref(), Some("test-conv"));
+    assert_eq!(at, Some(T0 + 10 * DAY));
+    assert!(erased, "question, summary and answer are NULL");
+    assert_eq!(kn, "[]");
+    assert!(get(&s, MOG_A, REQ_1).is_empty());
+    let list = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    assert!(rows(&list).is_empty());
+    // A late upsert of the same request keeps the tombstone and the erased text.
+    exec(&s, "mem.exchange.upsert", home(EXCH_1, REQ_1, T0));
+    let (conv, at, erased, kn) = raw(&s, REQ_1);
+    assert_eq!(conv.as_deref(), Some("test-conv"));
+    assert_eq!(at, Some(T0 + 10 * DAY));
+    assert!(erased);
+    assert_eq!(kn, "[]");
+    assert!(get(&s, MOG_A, REQ_1).is_empty());
+}
+
+#[test]
+fn adr_0121_delete_matches_no_non_uuid_id_and_checks_the_list_shape() {
+    let t = TempDir::new("0121-shape");
+    let s = open(&t);
+    seed_turn(&s);
+    // Values that are no request id match nothing, even in a list with a real one removed.
+    assert_eq!(
+        delete(
+            &s,
+            MOG_A,
+            json!(["%", "*", "' OR 1=1 --", "", "null", "c:test-conv"])
+        ),
+        0
+    );
+    assert_eq!(get(&s, MOG_A, TURN_REQ).len(), 1);
+    assert_eq!(get(&s, MOG_A, CALL_REQ).len(), 1);
+    // The list is 200 strings of 36 characters at most; any other shape is refused.
+    let too_many: Vec<String> = (0..201).map(|_| REQ_1.to_owned()).collect();
+    let ok: Vec<String> = (0..200).map(|_| REQ_1.to_owned()).collect();
+    assert_eq!(delete(&s, MOG_A, json!(ok)), 0);
+    for bad in [
+        json!(too_many),
+        json!([REQ_1, "x".repeat(37)]),
+        json!({"a": REQ_1}),
+        json!(REQ_1),
+        json!([[REQ_1]]),
+        json!([7]),
+    ] {
+        let r = s.exec(
+            "mem.exchange.delete",
+            json!({"mogId": MOG_A, "requestIds": bad, "now": T0}),
+        );
+        assert!(r.is_err(), "{bad}");
+    }
+    assert!(s
+        .exec("mem.exchange.delete", json!({"mogId": MOG_A}))
+        .is_err());
+    assert_eq!(get(&s, MOG_A, TURN_REQ).len(), 1);
+}
+
+#[test]
+fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange() {
+    let t = TempDir::new("0121-cite");
+    let s = open(&t);
+    seed_turn(&s);
+    exec(
+        &s,
+        "mem.item.write",
+        json!({"mogId": MOG_A, "itemId": ITEM_1, "itemType": "fact", "text": "Q3 is up",
+               "source": "you", "confidence": 0.9, "sourceExchangeId": CALL_EXCH,
+               "seenAt": T0, "rowHlc": 1, "deviceId": "test-device", "now": T0}),
+    );
+    assert_eq!(delete(&s, MOG_A, json!([CALL_REQ])), 1);
+    let src: Option<String> = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT source_exchange_id FROM memory_item WHERE item_id = ?1",
+                [ITEM_1],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    // The exchange row stays as a tombstone, so the pointer stays too.
+    assert_eq!(src.as_deref(), Some(CALL_EXCH));
+}
+
+#[test]
+fn adr_0121_delete_clears_the_question_hash_and_an_item_never_links_to_a_tombstone() {
+    let t = TempDir::new("0121-link");
+    let s = open(&t);
+    seed_turn(&s);
+    assert_eq!(delete(&s, MOG_A, json!([CALL_REQ])), 1);
+    let sha: String = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT question_sent_sha256 FROM genie_exchange WHERE request_id = ?1",
+                [CALL_REQ],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(sha, "");
+    // A later write that cites the tombstone saves the item with no link.
+    exec(
+        &s,
+        "mem.item.write",
+        json!({"mogId": MOG_A, "itemId": ITEM_1, "itemType": "fact", "text": "Q3 is up",
+               "source": "you", "confidence": 0.9, "sourceExchangeId": CALL_EXCH,
+               "seenAt": T0, "rowHlc": 1, "deviceId": "test-device", "now": T0}),
+    );
+    let src: Option<String> = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT source_exchange_id FROM memory_item WHERE item_id = ?1",
+                [ITEM_1],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(src, None);
+}
+
+#[test]
+fn adr_0122_a_turn_row_keeps_its_citations_and_a_delete_erases_them() {
+    let t = TempDir::new("0122-cites");
+    let s = open(&t);
+    seed_turn(&s);
+    let cites = json!([{"n": 1, "profile": "logfood"}]).to_string();
+    let mut turn = home(TURN_EXCH, TURN_REQ, T0);
+    turn["backendKind"] = json!("genie_agent");
+    turn["splitGroupId"] = json!(ROOT);
+    turn["citations"] = json!([{"n": 1, "profile": "logfood"}]);
+    exec(&s, "mem.exchange.upsert", turn.clone());
+    // A later upsert with no citations keeps them.
+    let mut again = turn.clone();
+    again.as_object_mut().unwrap().remove("citations");
+    exec(&s, "mem.exchange.upsert", again);
+    let list = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let row = |req: &str, list: &Value| rows(list).iter().find(|r| r["requestId"] == req).cloned();
+    assert_eq!(row(TURN_REQ, &list).unwrap()["citations"], json!(cites));
+    // A call row has none.
+    assert_eq!(row(CALL_REQ, &list).unwrap()["citations"], "[]");
+    // A delete erases them with the answer text.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ])), 1);
+    let left: String = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT citations FROM genie_exchange WHERE request_id = ?1",
+                [TURN_REQ],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(left, "[]");
 }

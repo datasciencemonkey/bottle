@@ -25,6 +25,7 @@ import {
 } from './forget-flow';
 import { conversationOf, type ForgetConversation } from './memory-service';
 import { call } from '../../shared/ipc';
+import { createBrainLog } from '../log';
 import { storeGate, type StoreGate } from '../store-gate';
 import type { MogId } from '../../shared/interfaces';
 import { isWipeScope, type WipeDialogModel, type WipeScope } from '../../shared/wipe-view';
@@ -152,9 +153,20 @@ export class WipeFlow {
   }
 
   /** The user selected Wipe: wipe the local rows, then the Genie conversations if chosen. */
-  async confirm(scope: WipeScope, alsoGenie: boolean): Promise<WipeDialogModel> {
+  async confirm(
+    scope: WipeScope,
+    alsoGenie: boolean,
+    /** Runs when the local wipe worked, before the remote deletes. */
+    onLocalWiped?: () => void,
+  ): Promise<WipeDialogModel> {
     const base = this.dialog(scope, alsoGenie);
     const { local, conversations } = await this.core.wipe(scope);
+    // A throw of the callback never turns the local wipe that worked into a failure.
+    try {
+      onLocalWiped?.();
+    } catch {
+      createBrainLog().event('agent.turn', { ok: 0 });
+    }
     const empty = local === 0 && conversations.length === 0;
     const result: NonNullable<WipeDialogModel['result']> = {
       local,

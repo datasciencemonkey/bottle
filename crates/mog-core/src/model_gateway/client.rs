@@ -1,0 +1,618 @@
+//! `GatewayChatClient` (ADR 0122): the [`ChatClient`] over the existing R7 transport.
+//!
+//! One call is one `POST /ai-gateway/mlflow/v1/responses` (route `mlflow.responses`, the Responses API,
+//! NFR-21a) through [`RecordingHttp`]. The real one is `ReqwestHttpTransport`, so the host rules
+//! (workspace host policy, no cross-host redirect), the token broker (R6), the request tags and
+//! the one shared rate bucket all apply. This module builds no URL and holds no token.
+//!
+//! Errors are `CoreError::Unavailable` with one of [`CODES`]. They hold no prompt, reply, token
+//! or upstream message: the code comes from the HTTP status, the Databricks `error_code` or the
+//! transport's own content-free code.
+
+use serde_json::Value;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
+
+use super::{ChatClient, ChatRequest};
+use crate::error::{CoreError, CoreResult};
+use crate::ipc::JsonObject;
+use crate::recording_cloud::http::{CallBounds, RecordingHttp, ReqBody};
+use crate::types::{TagApp, TagOp, Tags};
+
+const ID: &str = "model_gateway";
+/// How often a waiting call looks at the cancel flag.
+const CANCEL_POLL: Duration = Duration::from_millis(20);
+/// The route ID of the Unity AI Gateway Responses call.
+pub const RESPONSES_ROUTE: &str = "mlflow.responses";
+/// The route ID of the Unity AI Gateway chat completions call (cloud dictation, ADR 0123).
+pub const CHAT_COMPLETIONS_ROUTE: &str = "mlflow.chat_completions";
+
+/// The sign-in is missing or expired.
+pub const SIGNED_OUT: &str = "signed_out";
+/// The gateway does not serve the model, or the user cannot use it.
+pub const MODEL_NOT_FOUND: &str = "model_not_found";
+/// The call was refused: a host rule, a permission or a bad request.
+pub const REFUSED: &str = "refused";
+/// The gateway or the shared bucket asked Bottle to wait.
+pub const RATE_LIMITED: &str = "rate_limited";
+/// The deadline passed.
+pub const TIMEOUT: &str = "timeout";
+/// The gateway is not reachable.
+pub const OFFLINE: &str = "offline";
+/// The caller set the cancel flag (Stop, Wipe, session end). Stays inside Rust.
+pub const CANCELLED: &str = "cancelled";
+/// The reply is not a Responses reply.
+pub const BAD_REPLY: &str = "bad_reply";
+
+/// The complete set of error codes of this client.
+pub const CODES: &[&str] = &[
+    SIGNED_OUT,
+    MODEL_NOT_FOUND,
+    REFUSED,
+    RATE_LIMITED,
+    TIMEOUT,
+    OFFLINE,
+    BAD_REPLY,
+    CANCELLED,
+];
+
+fn err(reason: &'static str) -> CoreError {
+    CoreError::Unavailable {
+        component: ID,
+        reason,
+    }
+}
+
+/// A transport fault (a content-free R7 code) as one of [`CODES`].
+fn from_transport(e: &CoreError) -> CoreError {
+    err(match e.code() {
+        "auth_expired" | "token_unusable" | "login_required" => SIGNED_OUT,
+        "rate_limited" => RATE_LIMITED,
+        "timeout" => TIMEOUT,
+        "offline" | "transport_failed" => OFFLINE,
+        "non_json_reply" | "reply_too_large" => BAD_REPLY,
+        _ => REFUSED,
+    })
+}
+
+/// A non-2xx reply as one of [`CODES`]. Only the status and the `error_code` are read.
+fn from_status(status: u16, error_code: &str) -> CoreError {
+    err(match status {
+        401 => SIGNED_OUT,
+        404 => MODEL_NOT_FOUND,
+        400 if error_code == "ENDPOINT_NOT_FOUND" => MODEL_NOT_FOUND,
+        429 => RATE_LIMITED,
+        408 | 504 => TIMEOUT,
+        s if s >= 500 => OFFLINE,
+        _ => REFUSED,
+    })
+}
+
+/// The chat call of the orchestrator model over the gateway.
+#[derive(Clone)]
+pub struct GatewayChatClient {
+    http: Arc<dyn RecordingHttp>,
+    mog: String,
+    /// The calls whose worker thread has not ended ([`MAX_IN_FLIGHT`]).
+    in_flight: Arc<AtomicUsize>,
+}
+
+/// The most calls in flight at once. A call that gave up (a timeout, a cancel) still counts until
+/// its worker ends, so an abandoned call cannot pile up threads: the next one is `rate_limited`.
+pub const MAX_IN_FLIGHT: usize = 4;
+
+impl std::fmt::Debug for GatewayChatClient {
+    /// Shows nothing: no profile, host or MOG ID.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayChatClient").finish_non_exhaustive()
+    }
+}
+
+/// Counts one call in flight; the count drops when the worker ends.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Sets the abandoned flag when the caller stops waiting, on every exit (the worker has ended by
+/// then on success, so a late set is harmless).
+struct Abandon(Arc<AtomicBool>);
+
+impl Drop for Abandon {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+impl GatewayChatClient {
+    /// A client over `http`. `mog` is the MOG ID of the request tags that [`ChatClient::chat`]
+    /// sends (op `agent`); `model_invoke` sends the tags of the IPC call instead.
+    pub fn new(http: Arc<dyn RecordingHttp>, mog: impl Into<String>) -> Self {
+        Self {
+            http,
+            mog: mog.into(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// As [`ChatClient::chat`], with the request `tags` of the IPC call (SEC-06a).
+    ///
+    /// The call runs on a worker thread. When the caller stops waiting (deadline, cancel), it sets
+    /// an abandoned flag. The transport ends its wait for the rate bucket at the deadline and does
+    /// not send an abandoned call, and its HTTP timeout is capped at the deadline.
+    pub fn chat_tagged(&self, req: ChatRequest<'_>, tags: Tags) -> CoreResult<Value> {
+        let Value::Object(mut body) = req.body else {
+            return Err(err(REFUSED));
+        };
+        body.insert("model".to_owned(), Value::String(req.model.to_owned()));
+        body.insert("store".to_owned(), Value::Bool(false));
+        let reply = self.call_route(
+            RESPONSES_ROUTE,
+            req.profile,
+            Value::Object(body),
+            tags,
+            req.deadline,
+            req.cancel,
+        )?;
+        if !reply.ok() {
+            return Err(from_status(reply.status, reply.error_code()));
+        }
+        let json = reply.json();
+        // A Responses reply has an `output` array and a status other than `failed` or
+        // `cancelled`. An `incomplete` reply (the token cap) is passed on with its status: the
+        // gateway answered, so it is no fault of the link. The caller decides whether a cut-off
+        // reply is enough (`responses::checked_text` refuses it; the ask loop takes a whole
+        // `submit_answer`).
+        let finished = !matches!(
+            json.get("status").and_then(Value::as_str),
+            Some("failed" | "cancelled")
+        );
+        match json.get("output").and_then(Value::as_array) {
+            Some(_) if finished => Ok(json.clone()),
+            _ => Err(err(BAD_REPLY)),
+        }
+    }
+
+    /// One call on the chat completions route (`mlflow.chat_completions`) with a ready `body`
+    /// (it holds the `model`), for cloud dictation (ADR 0123). The same in-flight cap, deadline,
+    /// cancel and content-free codes as [`Self::chat_tagged`]. Returns the JSON of a 2xx reply.
+    pub fn chat_completions(
+        &self,
+        profile: &str,
+        body: Value,
+        tags: Tags,
+        deadline: Duration,
+        cancel: Option<&AtomicBool>,
+    ) -> CoreResult<Value> {
+        let reply = self.call_route(
+            CHAT_COMPLETIONS_ROUTE,
+            profile,
+            body,
+            tags,
+            deadline,
+            cancel,
+        )?;
+        if !reply.ok() {
+            return Err(from_status(reply.status, reply.error_code()));
+        }
+        Ok(reply.json().clone())
+    }
+
+    /// One bounded call on `route` on a worker thread, and its reply of any status.
+    fn call_route(
+        &self,
+        route: &'static str,
+        profile: &str,
+        body: Value,
+        tags: Tags,
+        deadline: Duration,
+        cancel: Option<&AtomicBool>,
+    ) -> CoreResult<crate::recording_cloud::http::Reply> {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            return Err(err(CANCELLED));
+        }
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return Err(err(RATE_LIMITED));
+        }
+        let slot = Slot(Arc::clone(&self.in_flight));
+        let profile = profile.to_owned();
+        let http = Arc::clone(&self.http);
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let _abandon = Abandon(Arc::clone(&abandoned));
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("model-gateway-chat".to_owned())
+            .spawn({
+                let abandoned = Arc::clone(&abandoned);
+                move || {
+                    let _slot = slot;
+                    if abandoned.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let r = http.send_bounded(
+                        &profile,
+                        route,
+                        &JsonObject::new(),
+                        ReqBody::Json(&body),
+                        Some(&tags),
+                        CallBounds {
+                            budget: deadline,
+                            abandoned: &abandoned,
+                        },
+                    );
+                    let _ = tx.send(r);
+                }
+            })
+            .map_err(|_| err(OFFLINE))?;
+        // Wait in short slices so a cancel is seen promptly.
+        let end = Instant::now() + deadline;
+        loop {
+            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                return Err(err(CANCELLED));
+            }
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(err(TIMEOUT));
+            }
+            match rx.recv_timeout(left.min(CANCEL_POLL)) {
+                Ok(r) => return r.map_err(|e| from_transport(&e)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(err(OFFLINE)),
+            }
+        }
+    }
+}
+
+impl ChatClient for GatewayChatClient {
+    fn chat(&self, req: ChatRequest<'_>) -> CoreResult<Value> {
+        let tags = Tags {
+            app: TagApp::Bottle,
+            mog: self.mog.clone(),
+            op: TagOp::Agent,
+        };
+        self.chat_tagged(req, tags)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recording_cloud::http::{Reply, ReplyBody, ScriptedHttp};
+    use serde_json::json;
+
+    fn client(h: &Arc<ScriptedHttp>) -> GatewayChatClient {
+        GatewayChatClient::new(h.clone(), "orchestrator")
+    }
+
+    fn req(body: Value, ms: u64) -> ChatRequest<'static> {
+        ChatRequest {
+            profile: "home",
+            model: "system.ai.claude-haiku-5-5",
+            body,
+            deadline: Duration::from_millis(ms),
+            cancel: None,
+        }
+    }
+
+    fn ok_reply() -> Value {
+        json!({"output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}]})
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_sends_model_in_body_on_the_gateway_route() {
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(RESPONSES_ROUTE, 200, ok_reply());
+        let out = client(&h)
+            .chat(req(
+                json!({"messages": [{"role": "user", "content": "x"}]}),
+                1000,
+            ))
+            .unwrap();
+        assert_eq!(out, ok_reply());
+        let seen = h.seen();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].route, "mlflow.responses");
+        let body = seen[0].json.clone().unwrap();
+        assert_eq!(body["model"], "system.ai.claude-haiku-5-5");
+        assert_eq!(body["store"], false);
+        assert!(body["messages"].is_array());
+        let tags = seen[0].tags.clone().unwrap();
+        assert_eq!((tags.mog.as_str(), tags.op), ("orchestrator", TagOp::Agent));
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_maps_status_to_content_free_codes() {
+        let cases: [(u16, &str, &str); 8] = [
+            (401, "", SIGNED_OUT),
+            (403, "PERMISSION_DENIED", REFUSED),
+            (404, "NOT_FOUND", MODEL_NOT_FOUND),
+            (400, "ENDPOINT_NOT_FOUND", MODEL_NOT_FOUND),
+            (400, "BAD_REQUEST", REFUSED),
+            (429, "", RATE_LIMITED),
+            (504, "", TIMEOUT),
+            (503, "", OFFLINE),
+        ];
+        for (status, code, want) in cases {
+            let h = Arc::new(ScriptedHttp::new());
+            h.json(
+                RESPONSES_ROUTE,
+                status,
+                json!({"error_code": code, "message": "SECRET PROMPT TEXT"}),
+            );
+            let e = client(&h).chat(req(json!({}), 1000)).unwrap_err();
+            assert_eq!(e.code(), want, "status {status}");
+            let shown = format!("{e} {e:?}");
+            assert!(!shown.contains("SECRET"));
+        }
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_maps_transport_faults() {
+        let cases = [
+            ("auth_expired", SIGNED_OUT),
+            ("token_unusable", SIGNED_OUT),
+            ("login_required", SIGNED_OUT),
+            ("rate_limited", RATE_LIMITED),
+            ("timeout", TIMEOUT),
+            ("offline", OFFLINE),
+            ("non_json_reply", BAD_REPLY),
+            ("host_refused", REFUSED),
+            ("redirect_refused", REFUSED),
+        ];
+        for (reason, want) in cases {
+            let h = Arc::new(ScriptedHttp::new());
+            h.on(
+                RESPONSES_ROUTE,
+                Err(CoreError::Unavailable {
+                    component: "R7",
+                    reason,
+                }),
+            );
+            let e = client(&h).chat(req(json!({}), 1000)).unwrap_err();
+            assert_eq!(e.code(), want, "{reason}");
+            assert!(CODES.contains(&e.code()));
+        }
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_refuses_a_reply_that_is_not_a_chat_completion() {
+        for body in [json!({"choices": []}), json!({"x": 1}), json!("text")] {
+            let h = Arc::new(ScriptedHttp::new());
+            h.json(RESPONSES_ROUTE, 200, body);
+            let e = client(&h).chat(req(json!({}), 1000)).unwrap_err();
+            assert_eq!(e.code(), BAD_REPLY);
+        }
+        let h = Arc::new(ScriptedHttp::new());
+        h.on(
+            RESPONSES_ROUTE,
+            Ok(Reply {
+                status: 200,
+                body: ReplyBody::Empty,
+            }),
+        );
+        assert_eq!(
+            client(&h).chat(req(json!({}), 1000)).unwrap_err().code(),
+            BAD_REPLY
+        );
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_refuses_a_body_that_is_not_an_object() {
+        let h = Arc::new(ScriptedHttp::new());
+        let e = client(&h).chat(req(json!([1]), 1000)).unwrap_err();
+        assert_eq!(e.code(), REFUSED);
+        assert!(h.seen().is_empty());
+    }
+
+    /// A transport that does not answer until the test lets it go.
+    struct Stuck(std::sync::Mutex<mpsc::Receiver<()>>);
+    impl RecordingHttp for Stuck {
+        fn send(
+            &self,
+            _: &str,
+            _: &str,
+            _: &JsonObject,
+            _: ReqBody<'_>,
+            _: Option<&Tags>,
+        ) -> CoreResult<Reply> {
+            let _ = self.0.lock().unwrap().recv();
+            Err(err(OFFLINE))
+        }
+        fn send_bounded(
+            &self,
+            p: &str,
+            r: &str,
+            q: &JsonObject,
+            b: ReqBody<'_>,
+            t: Option<&Tags>,
+            _: CallBounds<'_>,
+        ) -> CoreResult<Reply> {
+            self.send(p, r, q, b, t)
+        }
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_enforces_the_deadline() {
+        let (release, wait) = mpsc::channel();
+        let c = GatewayChatClient::new(Arc::new(Stuck(std::sync::Mutex::new(wait))), "m");
+        let e = c.chat(req(json!({}), 30)).unwrap_err();
+        assert_eq!(e.code(), TIMEOUT);
+        drop(release);
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_two_clients_over_one_transport_have_separate_caps() {
+        let (release, wait) = mpsc::channel();
+        let http = Arc::new(Stuck(std::sync::Mutex::new(wait)));
+        let (ask, dictation) = (
+            GatewayChatClient::new(http.clone(), "m"),
+            GatewayChatClient::new(http, "m"),
+        );
+        // Calls that gave up still hold a slot until their worker ends.
+        for _ in 0..MAX_IN_FLIGHT {
+            assert_eq!(ask.chat(req(json!({}), 10)).unwrap_err().code(), TIMEOUT);
+        }
+        assert_eq!(
+            ask.chat(req(json!({}), 10)).unwrap_err().code(),
+            RATE_LIMITED
+        );
+        // The other client still has its own slots.
+        assert_eq!(
+            dictation.chat(req(json!({}), 10)).unwrap_err().code(),
+            TIMEOUT
+        );
+        drop(release);
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_cancel_returns_promptly() {
+        let (release, wait) = mpsc::channel();
+        let c = GatewayChatClient::new(Arc::new(Stuck(std::sync::Mutex::new(wait))), "m");
+        let flag = AtomicBool::new(false);
+        let started = Instant::now();
+        let e = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::SeqCst);
+            });
+            let mut r = req(json!({}), 60_000);
+            r.cancel = Some(&flag);
+            c.chat(r).unwrap_err()
+        });
+        assert_eq!(e.code(), CANCELLED);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(release);
+    }
+
+    /// A transport that waits for the test, then behaves like the real one: an abandoned call is
+    /// not sent, so it is not recorded.
+    struct Gated {
+        gate: std::sync::Mutex<mpsc::Receiver<()>>,
+        sent: std::sync::Mutex<u32>,
+    }
+    impl RecordingHttp for Gated {
+        fn send(
+            &self,
+            _: &str,
+            _: &str,
+            _: &JsonObject,
+            _: ReqBody<'_>,
+            _: Option<&Tags>,
+        ) -> CoreResult<Reply> {
+            *self.sent.lock().unwrap() += 1;
+            Err(err(OFFLINE))
+        }
+        fn send_bounded(
+            &self,
+            p: &str,
+            r: &str,
+            q: &JsonObject,
+            b: ReqBody<'_>,
+            t: Option<&Tags>,
+            bounds: CallBounds<'_>,
+        ) -> CoreResult<Reply> {
+            let _ = self.gate.lock().unwrap().recv();
+            if bounds.abandoned.load(Ordering::SeqCst) {
+                return Err(err(TIMEOUT));
+            }
+            self.send(p, r, q, b, t)
+        }
+    }
+
+    fn wait_idle(c: &GatewayChatClient) {
+        for _ in 0..500 {
+            if c.in_flight.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("workers did not end");
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_a_timed_out_or_cancelled_call_is_never_sent_later() {
+        for cancel in [false, true] {
+            let (release, gate) = mpsc::channel();
+            let http = Arc::new(Gated {
+                gate: std::sync::Mutex::new(gate),
+                sent: std::sync::Mutex::new(0),
+            });
+            let c = GatewayChatClient::new(http.clone(), "m");
+            let flag = AtomicBool::new(cancel);
+            let mut r = req(json!({}), 30);
+            if cancel {
+                // Set while in flight, so the worker has started.
+                flag.store(false, Ordering::SeqCst);
+                r.cancel = Some(&flag);
+                let e = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        std::thread::sleep(Duration::from_millis(40));
+                        flag.store(true, Ordering::SeqCst);
+                    });
+                    let mut r2 = req(json!({}), 10_000);
+                    r2.cancel = Some(&flag);
+                    c.chat(r2).unwrap_err()
+                });
+                assert_eq!(e.code(), CANCELLED);
+            } else {
+                assert_eq!(c.chat(r).unwrap_err().code(), TIMEOUT);
+            }
+            // The worker was still waiting for the bucket. Now it gets its slot.
+            drop(release);
+            wait_idle(&c);
+            assert_eq!(*http.sent.lock().unwrap(), 0, "cancel={cancel}");
+        }
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_caps_calls_in_flight() {
+        let (release, wait) = mpsc::channel();
+        let h = Arc::new(Stuck(std::sync::Mutex::new(wait)));
+        let c = GatewayChatClient::new(h, "m");
+        for _ in 0..MAX_IN_FLIGHT {
+            assert_eq!(c.chat(req(json!({}), 20)).unwrap_err().code(), TIMEOUT);
+        }
+        let started = Instant::now();
+        assert_eq!(
+            c.chat(req(json!({}), 5_000)).unwrap_err().code(),
+            RATE_LIMITED
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(release);
+        wait_idle(&c);
+        // The slots are free again.
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(RESPONSES_ROUTE, 200, ok_reply());
+        let c2 = GatewayChatClient::new(h, "m");
+        assert!(c2.chat(req(json!({}), 1000)).is_ok());
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_an_incomplete_reply_is_passed_on_and_a_failed_one_is_bad_reply() {
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(
+            RESPONSES_ROUTE,
+            200,
+            json!({"status": "incomplete", "output": []}),
+        );
+        let r = client(&h).chat(req(json!({}), 1000)).unwrap();
+        assert_eq!(r["status"], "incomplete");
+        for status in ["failed", "cancelled"] {
+            let h = Arc::new(ScriptedHttp::new());
+            h.json(
+                RESPONSES_ROUTE,
+                200,
+                json!({"status": status, "output": []}),
+            );
+            assert_eq!(
+                client(&h).chat(req(json!({}), 1000)).unwrap_err().code(),
+                BAD_REPLY
+            );
+        }
+    }
+}

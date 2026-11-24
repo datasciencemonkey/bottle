@@ -36,6 +36,20 @@ impl WorkspaceGate for HostGate {
     }
 }
 
+/// The orchestrator host's view of the store.
+struct HostView(Arc<OnceLock<Arc<WorkspaceStore>>>);
+
+impl mog_core::agent_run::orchestrator::WorkspaceView for HostView {
+    fn snapshot(&self) -> CoreResult<mog_core::agent_run::orchestrator::Snapshot> {
+        match self.0.get() {
+            Some(s) => s.catalog_snapshot(),
+            None => Err(CoreError::IpcRefused {
+                code: "host_failed",
+            }),
+        }
+    }
+}
+
 impl WorkspacesHost {
     /// A host over `store`.
     pub fn with_store(store: Arc<WorkspaceStore>) -> Self {
@@ -52,6 +66,33 @@ impl WorkspacesHost {
     /// The allow-list for R8. It allows nothing until a store is set.
     pub fn gate(&self) -> Arc<dyn WorkspaceGate> {
         Arc::new(HostGate(self.store.clone()))
+    }
+
+    /// The store as the orchestrator host's workspace view. It fails with `host_failed` until a
+    /// store is set.
+    pub fn view(&self) -> Arc<dyn mog_core::agent_run::orchestrator::WorkspaceView> {
+        Arc::new(HostView(self.store.clone()))
+    }
+
+    /// A read-only source of the home profile, for `model_invoke` (ADR 0122). It returns `None`
+    /// until a store is set, and never picks a profile.
+    pub fn home_source(&self) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().and_then(|s| s.home()))
+    }
+
+    /// A read-only source of the user's orchestrator model (ADR 0122). It returns `None` until a
+    /// store is set, and then the caller uses the default model.
+    pub fn model_source(&self) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().and_then(|s| s.orchestrator_model()))
+    }
+
+    /// A read-only source of "Dictation engine: Databricks" (ADR 0123). It is `false` until a
+    /// store is set: dictation then stays on this Mac.
+    pub fn cloud_dictation_source(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().is_some_and(|s| s.cloud_dictation_fast()))
     }
 
     /// Bind R6 to the store, for the sign-in column and the probe.

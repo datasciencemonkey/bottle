@@ -105,6 +105,7 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
       host: HOST,
       proposedName: 'bottle-acme-prod',
       otherAuthNotice: false,
+      taken: [],
       inline: true,
     });
     expect(deps.login).not.toHaveBeenCalled();
@@ -126,6 +127,18 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
     click(bus, { target: 'connect_url', url: HOST });
     await flush();
     expect(last()).toMatchObject({ step: 'name', proposedName: 'bottle-acme-prod-2' });
+  });
+
+  it('[W-07g] the name step carries every other profile name, so the view can refuse a duplicate at once', async () => {
+    const { bus, last } = setup({
+      profiles: async () => [
+        { name: 'bottle-acme-prod', host: HOST, authType: 'databricks-cli', supported: true },
+        { name: 'bottle-other', host: HOST, authType: 'databricks-cli', supported: true },
+      ],
+    });
+    click(bus, { target: 'connect_url', url: HOST });
+    await flush();
+    expect(last()).toMatchObject({ taken: ['bottle-acme-prod', 'bottle-other'] });
   });
 });
 
@@ -202,6 +215,7 @@ describe('Connect a workspace: sign-in (W-07c, W-07g, W-07h, W-15)', () => {
       host: HOST,
       proposedName: 'acme',
       otherAuthNotice: false,
+      taken: [],
       error: CONNECT_TEXT.profile_exists,
     });
   });
@@ -353,6 +367,7 @@ describe('Connect a workspace: first run and other profiles (W-07f, W-07i)', () 
       host: HOST,
       proposedName: 'bottle-acme-prod',
       otherAuthNotice: true,
+      taken: ['acme', 'acme-sp'],
     });
     expect(CONNECT_TEXT.otherAuthNotice).toContain('does not change');
   });

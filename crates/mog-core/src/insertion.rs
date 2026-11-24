@@ -25,15 +25,19 @@ use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 mod macos;
+mod target;
 #[cfg(windows)]
 mod windows;
+
+pub use target::{now_ms, targets, AppId, NoteKind, TargetTable};
 
 #[cfg(target_os = "macos")]
 pub use macos::MacInsertHost;
 #[cfg(windows)]
 pub use windows::{WindowsClipboard, WindowsInsertHost};
 
-/// The reply of `insert_text` (section 4.5): `{result: inserted|no_permission|no_focus|secure_field}`.
+/// The reply of `insert_text` (section 4.5):
+/// `{result: inserted|no_permission|no_focus|secure_field|target_changed}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InsertOutcome {
@@ -45,6 +49,9 @@ pub enum InsertOutcome {
     NoFocus,
     /// The focused field is a secure (password) field.
     SecureField,
+    /// ADR 0118 (UX slice 2): the focused app is not the app that had the focus when the
+    /// capture lease was granted. No key event was sent; the clipboard is as ADR 0048 restores it.
+    TargetChanged,
 }
 
 /// What has the keyboard focus, as the host sees it.
@@ -179,6 +186,21 @@ pub fn windows_control_focus(class: &str, style: u32, password_char: usize) -> F
     }
 }
 
+/// The app of a Windows foreground process (ADR 0118). A UWP app window belongs to the process
+/// `ApplicationFrameHost.exe`, which hosts every UWP app: its pid names no one app, so a paste
+/// check on it would pass for a switch from one UWP app to another. It fails closed: NONE. An
+/// unreadable image name fails closed too. The rule is a pure function, so its tests run on every OS.
+pub fn windows_app_id(pid: u32, created: u64, image_path: Option<&str>) -> AppId {
+    let Some(path) = image_path else {
+        return AppId::NONE;
+    };
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    if name.eq_ignore_ascii_case("ApplicationFrameHost.exe") {
+        return AppId::NONE;
+    }
+    AppId::new(pid, created)
+}
+
 /// The wait between the clipboard write and the chord (Handy `paste_delay_ms` default).
 pub const SETTLE_BEFORE_PASTE: Duration = Duration::from_millis(60);
 /// How long the modifier stays down after the V key (Handy keeps 100 ms, Handy #165).
@@ -223,6 +245,11 @@ pub trait InsertHost: Send + Sync {
     /// The identity of the focused element (macOS: the AX element and its app; Windows: the
     /// focused window). It changes when the focus moves. 0 when nothing has the focus.
     fn focus_target(&self) -> u64;
+    /// The app that has the focus now (ADR 0118, decision 18). macOS: the pid of the system-wide
+    /// AX focused element (`AXUIElementGetPid`), the same source as the focus checks. Windows:
+    /// the process of the foreground or focused window, with its creation time.
+    /// [`AppId::NONE`] when nothing has the focus or the read fails: the paste then fails closed.
+    fn focused_app_pid(&self) -> AppId;
     /// Save the whole clipboard content (every item and type).
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot>;
     /// Whether the saved content is a concealed or transient item (a password manager secret).
@@ -250,6 +277,9 @@ impl<H: InsertHost> InsertHost for &H {
     fn focus_target(&self) -> u64 {
         (**self).focus_target()
     }
+    fn focused_app_pid(&self) -> AppId {
+        (**self).focused_app_pid()
+    }
     fn snapshot_clipboard(&self) -> CoreResult<Self::Snapshot> {
         (**self).snapshot_clipboard()
     }
@@ -276,12 +306,51 @@ impl<H: InsertHost> InsertHost for &H {
 /// Serializes pastes: overlapping ones would save each other's text as the user's clipboard.
 static PASTE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Whether the app with the focus now is `expected`. An `expected` of pid 0, or a failed read
+/// now, is no match: the paste fails closed (ADR 0118, decision 17).
+fn target_matches<H: InsertHost>(host: &H, expected: AppId) -> bool {
+    expected.is_same_app(host.focused_app_pid())
+}
+
+/// Note the app that has the focus, at the talk-key down or the hands-free start (ADR 0118,
+/// decision 17). It must not block the key hook: the begin is a short lock, and the OS read (an
+/// AX call can wait on a hung app) runs on a thread. R2 binds the note to the lease at the grant
+/// ([`TargetTable::bind`]). The handle is for tests; the hook drops it.
+pub fn note_focus_at_key_down<H: InsertHost + 'static>(
+    table: &'static TargetTable,
+    kind: NoteKind,
+    host: H,
+) -> Option<std::thread::JoinHandle<()>> {
+    let gen = table.begin_note(kind, now_ms());
+    std::thread::Builder::new()
+        .name("bottle-target-note".into())
+        .spawn(move || table.finish_note(gen, host.focused_app_pid()))
+        .ok()
+}
+
+/// [`note_focus_at_key_down`] over the OS host of this build. A build with no paste host notes
+/// nothing, so every paste there fails closed.
+pub fn note_os_focus_at_key_down(kind: NoteKind) {
+    #[cfg(target_os = "macos")]
+    let _ = note_focus_at_key_down(targets(), kind, <MacInsertHost>::default());
+    #[cfg(windows)]
+    let _ = note_focus_at_key_down(targets(), kind, <WindowsInsertHost>::default());
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = kind;
+}
+
 /// Paste `text` into the focused app (MOG-06a), with the chord only (MOG-06b), and put the
 /// earlier clipboard back (MOG-06c). Blocks for about 0.4 s: call it off the UI thread.
+///
+/// `expected` is the app of the lease ([`TargetTable::expected`], ADR 0118). The order of the
+/// checks: the permission, the focus, the app (a mismatch writes nothing to the clipboard), the
+/// snapshot and the write, and the same app check again in [`refusal_before_chord`] as the last
+/// step before the keys. The gap after that check is the one of ADR 0048: some microseconds.
 pub fn insert_text<H: InsertHost>(
     host: &H,
     platform: ClipboardPlatform,
     text: &str,
+    expected: AppId,
 ) -> CoreResult<InsertOutcome> {
     let _paste = PASTE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     // Check first, so a refusal leaves the clipboard and the keyboard alone (MOG-06d shows Copy).
@@ -292,6 +361,9 @@ pub fn insert_text<H: InsertHost>(
         Focus::Nothing => return Ok(InsertOutcome::NoFocus),
         Focus::SecureField => return Ok(InsertOutcome::SecureField),
         Focus::Field => {}
+    }
+    if !target_matches(host, expected) {
+        return Ok(InsertOutcome::TargetChanged);
     }
     let target = host.focus_target();
     let saved = host.snapshot_clipboard()?;
@@ -312,7 +384,7 @@ pub fn insert_text<H: InsertHost>(
     // The snapshot and the settle wait take time, and the chord goes to whatever has the focus
     // then. Check again: if the focus moved, became a secure field or the permission went away,
     // send no key and put the earlier clipboard back (ADR 0048, decision 14).
-    if let Some(refusal) = refusal_before_chord(host, target) {
+    if let Some(refusal) = refusal_before_chord(host, target, expected) {
         if host.clipboard_mark() == ours {
             host.restore_clipboard(saved)?;
         }
@@ -336,13 +408,20 @@ pub fn insert_text<H: InsertHost>(
 }
 
 /// The refusal when the target of the chord is not the field checked before the snapshot.
-fn refusal_before_chord<H: InsertHost>(host: &H, target: u64) -> Option<InsertOutcome> {
+fn refusal_before_chord<H: InsertHost>(
+    host: &H,
+    target: u64,
+    expected: AppId,
+) -> Option<InsertOutcome> {
     if !host.input_permitted() {
         return Some(InsertOutcome::NoPermission);
     }
     match host.focus() {
         Focus::Nothing => Some(InsertOutcome::NoFocus),
         Focus::SecureField => Some(InsertOutcome::SecureField),
+        // Another app: ADR 0118. It comes before the field check, which an app change also
+        // trips. A move to another field of the same app stays `no_focus` (AC-2.8).
+        Focus::Field if !target_matches(host, expected) => Some(InsertOutcome::TargetChanged),
         // Another field: the checked field lost the focus.
         Focus::Field if host.focus_target() != target => Some(InsertOutcome::NoFocus),
         Focus::Field => None,
@@ -354,13 +433,27 @@ fn refusal_before_chord<H: InsertHost>(host: &H, target: u64) -> Option<InsertOu
 pub struct InsertTextComponent<H> {
     host: H,
     platform: Option<ClipboardPlatform>,
+    targets: &'static TargetTable,
 }
 
 impl<H: InsertHost> InsertTextComponent<H> {
     /// A component that pastes through `host` with the conventions of `platform`.
     /// `None` (no clipboard flags on this OS) refuses every call with `host_failed`.
     pub fn new(host: H, platform: Option<ClipboardPlatform>) -> Self {
-        Self { host, platform }
+        Self::with_targets(host, platform, targets())
+    }
+
+    /// As [`InsertTextComponent::new`], with the paste targets in `targets` (tests use their own).
+    pub fn with_targets(
+        host: H,
+        platform: Option<ClipboardPlatform>,
+        targets: &'static TargetTable,
+    ) -> Self {
+        Self {
+            host,
+            platform,
+            targets,
+        }
     }
 }
 
@@ -374,8 +467,13 @@ impl<H: InsertHost> GatewayComponents for InsertTextComponent<H> {
             serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
         let platform = self.platform.ok_or(refused("host_failed"))?;
         // A host error never carries the text; it crosses only as `host_failed` (SEC-03).
-        let outcome =
-            insert_text(&self.host, platform, &a.text).map_err(|_| refused("host_failed"))?;
+        // The app of the lease: no entry, a lease of another MOG or an expired one gives NONE,
+        // and the paste answers `target_changed` (ADR 0118, decision 20).
+        let expected = self
+            .targets
+            .expected(a.lease_id.as_str(), a.mog_id.as_str(), now_ms());
+        let outcome = insert_text(&self.host, platform, &a.text, expected)
+            .map_err(|_| refused("host_failed"))?;
         Ok(json!({ "result": outcome }))
     }
 }
@@ -401,6 +499,7 @@ pub fn os_component() -> InsertTextComponent<WindowsInsertHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CaptureMode;
 
     #[derive(Debug, Clone, PartialEq)]
     enum Ev {
@@ -430,7 +529,14 @@ mod tests {
         /// taken: the user moved the focus while the clipboard was saved.
         after_snapshot: Option<(bool, Focus, u64)>,
         live: Mutex<Option<(bool, Focus, u64)>>,
+        /// The app that has the focus, and the app it becomes once the snapshot is taken.
+        app: AppId,
+        app_after_snapshot: Option<AppId>,
+        live_app: Mutex<Option<AppId>>,
     }
+
+    const APP: AppId = AppId::new(4242, 7);
+    const OTHER_APP: AppId = AppId::new(5151, 7);
 
     impl Fake {
         fn new(earlier: &str) -> Self {
@@ -447,6 +553,9 @@ mod tests {
                 target: 7,
                 after_snapshot: None,
                 live: Mutex::new(None),
+                app: APP,
+                app_after_snapshot: None,
+                live_app: Mutex::new(None),
             }
         }
         fn now(&self) -> (bool, Focus, u64) {
@@ -484,8 +593,14 @@ mod tests {
         fn focus_target(&self) -> u64 {
             self.now().2
         }
+        fn focused_app_pid(&self) -> AppId {
+            self.live_app.lock().unwrap().unwrap_or(self.app)
+        }
         fn snapshot_clipboard(&self) -> CoreResult<String> {
             self.log.lock().unwrap().push(Ev::Snapshot);
+            if let Some(app) = self.app_after_snapshot {
+                *self.live_app.lock().unwrap() = Some(app);
+            }
             if let Some(after) = self.after_snapshot {
                 *self.live.lock().unwrap() = Some(after);
             }
@@ -535,7 +650,7 @@ mod tests {
         for p in BOTH {
             let f = Fake::new("earlier");
             assert_eq!(
-                insert_text(&f, p, "hello").unwrap(),
+                insert_text(&f, p, "hello", APP).unwrap(),
                 InsertOutcome::Inserted
             );
             let log = f.log();
@@ -573,7 +688,7 @@ mod tests {
     #[test]
     fn mog_06a_the_modifier_is_held_between_v_and_its_release() {
         let f = Fake::new("earlier");
-        insert_text(&f, ClipboardPlatform::MacOs, "hello").unwrap();
+        insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap();
         let log = f.log();
         let first_keys = log.iter().position(|e| matches!(e, Ev::Keys(_))).unwrap();
         assert_eq!(log[first_keys + 1], Ev::Sleep(CHORD_HOLD));
@@ -587,7 +702,10 @@ mod tests {
         for p in BOTH {
             let f = Fake::new("earlier");
             let text = "line one\nline two\r\nline three\n";
-            assert_eq!(insert_text(&f, p, text).unwrap(), InsertOutcome::Inserted);
+            assert_eq!(
+                insert_text(&f, p, text, APP).unwrap(),
+                InsertOutcome::Inserted
+            );
             let writes: Vec<_> = f
                 .log()
                 .into_iter()
@@ -620,7 +738,7 @@ mod tests {
     fn mog_06c_restores_the_earlier_clipboard_after_the_paste() {
         for p in BOTH {
             let f = Fake::new("earlier");
-            insert_text(&f, p, "hello").unwrap();
+            insert_text(&f, p, "hello", APP).unwrap();
             assert_eq!(f.clip(), "earlier");
             let log = f.log();
             let n = log.len();
@@ -639,7 +757,7 @@ mod tests {
     fn mog_06c_a_newer_copy_during_the_wait_wins() {
         let mut f = Fake::new("earlier");
         f.user_copies_during_wait = true;
-        insert_text(&f, ClipboardPlatform::MacOs, "hello").unwrap();
+        insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap();
         assert_eq!(f.clip(), "newer");
         assert!(!f.log().iter().any(|e| matches!(e, Ev::Restore(_))));
     }
@@ -648,7 +766,7 @@ mod tests {
     fn mog_06c_failed_chord_still_releases_the_modifier_and_restores() {
         let mut f = Fake::new("earlier");
         f.fail_keys = true;
-        assert!(insert_text(&f, ClipboardPlatform::Windows, "hello").is_err());
+        assert!(insert_text(&f, ClipboardPlatform::Windows, "hello", APP).is_err());
         assert_eq!(f.clip(), "earlier");
         let ups: Vec<_> = f.keys().into_iter().filter(|k| !k.down).collect();
         assert!(ups.contains(&KeyStroke {
@@ -661,7 +779,7 @@ mod tests {
     fn mog_06c_failed_write_restores_and_sends_no_keys() {
         let mut f = Fake::new("earlier");
         f.fail_write = true;
-        assert!(insert_text(&f, ClipboardPlatform::MacOs, "hello").is_err());
+        assert!(insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).is_err());
         assert!(f.keys().is_empty());
         assert_eq!(f.clip(), "earlier");
         assert!(f.log().contains(&Ev::Restore("earlier".into())));
@@ -679,7 +797,7 @@ mod tests {
             f.permitted = permitted;
             f.focus = focus;
             assert_eq!(
-                insert_text(&f, ClipboardPlatform::MacOs, "pw").unwrap(),
+                insert_text(&f, ClipboardPlatform::MacOs, "pw", APP).unwrap(),
                 want
             );
             assert!(f.log().is_empty(), "{want:?}: {:?}", f.log());
@@ -687,17 +805,37 @@ mod tests {
         }
     }
 
+    const MOG: &str = "00000000-0000-4000-8000-0000000000a1";
+
+    /// A table of its own with lease 1 of `MOG` bound to `app`.
+    fn table_with(app: AppId) -> &'static TargetTable {
+        let t: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
+        let g = t.begin_note(NoteKind::KeyDown, now_ms());
+        t.finish_note(g, app);
+        t.bind(1, MOG, CaptureMode::Ptt, now_ms());
+        t
+    }
+
+    fn comp(f: Fake, t: &'static TargetTable) -> InsertTextComponent<Fake> {
+        InsertTextComponent::with_targets(f, Some(ClipboardPlatform::MacOs), t)
+    }
+
+    fn args(lease: &str) -> Value {
+        json!({"mogId": MOG, "text": "hi", "leaseId": lease})
+    }
+
     #[test]
     fn mog_06a_component_replies_with_the_result_code() {
-        let c = InsertTextComponent::new(Fake::new("e"), Some(ClipboardPlatform::MacOs));
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi"});
+        let c = comp(Fake::new("e"), table_with(APP));
+        let args =
+            json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi", "leaseId": "1"});
         assert_eq!(
             c.call("insert_text", args.clone()).unwrap(),
             json!({"result": "inserted"})
         );
         let mut secure = Fake::new("e");
         secure.focus = Focus::SecureField;
-        let c = InsertTextComponent::new(secure, Some(ClipboardPlatform::MacOs));
+        let c = comp(secure, table_with(APP));
         assert_eq!(
             c.call("insert_text", args.clone()).unwrap(),
             json!({"result": "secure_field"})
@@ -705,6 +843,7 @@ mod tests {
         for (outcome, code) in [
             (InsertOutcome::NoPermission, "no_permission"),
             (InsertOutcome::NoFocus, "no_focus"),
+            (InsertOutcome::TargetChanged, "target_changed"),
         ] {
             assert_eq!(serde_json::to_value(outcome).unwrap(), json!(code));
         }
@@ -712,8 +851,9 @@ mod tests {
 
     #[test]
     fn mog_06a_component_refuses_other_commands_bad_args_and_no_platform() {
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi"});
-        let c = InsertTextComponent::new(Fake::new("e"), Some(ClipboardPlatform::MacOs));
+        let args =
+            json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi", "leaseId": "1"});
+        let c = comp(Fake::new("e"), table_with(APP));
         assert_eq!(
             c.call("config_list", json!({})).unwrap_err().code(),
             "not_implemented"
@@ -736,8 +876,8 @@ mod tests {
     fn mog_06b_component_errors_carry_no_text() {
         let mut f = Fake::new("e");
         f.fail_write = true;
-        let c = InsertTextComponent::new(f, Some(ClipboardPlatform::MacOs));
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "secret words"});
+        let c = comp(f, table_with(APP));
+        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "secret words", "leaseId": "1"});
         let err = c.call("insert_text", args).unwrap_err();
         assert_eq!(err.code(), "host_failed");
         assert!(!err.to_string().contains("secret"));
@@ -749,7 +889,7 @@ mod tests {
             let mut f = Fake::new("pw-from-manager");
             f.concealed = true;
             assert_eq!(
-                insert_text(&f, p, "hello").unwrap(),
+                insert_text(&f, p, "hello", APP).unwrap(),
                 InsertOutcome::Inserted
             );
             assert_eq!(f.clip(), "", "{p:?}");
@@ -766,7 +906,7 @@ mod tests {
         let mut f = Fake::new("pw-from-manager");
         f.concealed = true;
         f.fail_write = true;
-        assert!(insert_text(&f, ClipboardPlatform::MacOs, "hello").is_err());
+        assert!(insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).is_err());
         assert_eq!(f.clip(), "");
     }
 
@@ -862,7 +1002,7 @@ mod tests {
                 let mut f = Fake::new("earlier");
                 f.after_snapshot = Some(after);
                 assert_eq!(
-                    insert_text(&f, p, "hello").unwrap(),
+                    insert_text(&f, p, "hello", APP).unwrap(),
                     want,
                     "{p:?} {after:?}"
                 );
@@ -883,7 +1023,7 @@ mod tests {
         let mut f = Fake::new("earlier");
         f.after_snapshot = Some((true, Focus::Field, 7));
         assert_eq!(
-            insert_text(&f, ClipboardPlatform::MacOs, "hello").unwrap(),
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
             InsertOutcome::Inserted
         );
         assert_eq!(f.keys(), paste_chord(ClipboardPlatform::MacOs));
@@ -930,5 +1070,242 @@ mod tests {
             ]
         );
         assert_eq!(windows_write_order(&formats).len(), formats.len());
+    }
+
+    // ---------- ADR 0118: the paste target lock (UX slice 2) ----------
+
+    #[test]
+    fn ux2_ac_2_3_another_app_gives_target_changed_with_no_write_and_no_key() {
+        // AC-2.3, AC-2.4: the check comes before the snapshot, so the fake counts 0 writes and 0 keys.
+        for p in BOTH {
+            let mut f = Fake::new("earlier");
+            f.app = OTHER_APP;
+            assert_eq!(
+                insert_text(&f, p, "hello", APP).unwrap(),
+                InsertOutcome::TargetChanged
+            );
+            assert!(f.log().is_empty(), "{p:?}: {:?}", f.log());
+            assert_eq!(f.clip(), "earlier");
+        }
+    }
+
+    #[test]
+    fn ux2_ac_2_5_an_app_change_in_the_settle_wait_restores_and_sends_no_key() {
+        for p in BOTH {
+            let mut f = Fake::new("earlier");
+            f.app_after_snapshot = Some(OTHER_APP);
+            assert_eq!(
+                insert_text(&f, p, "hello", APP).unwrap(),
+                InsertOutcome::TargetChanged,
+                "{p:?}"
+            );
+            assert!(f.keys().is_empty(), "{p:?}: {:?}", f.log());
+            assert_eq!(f.clip(), "earlier");
+            assert!(f.log().contains(&Ev::Restore("earlier".into())));
+        }
+    }
+
+    #[test]
+    fn ux2_sec_3_the_same_app_still_pastes() {
+        let mut f = Fake::new("earlier");
+        f.app_after_snapshot = Some(APP);
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
+            InsertOutcome::Inserted
+        );
+    }
+
+    #[test]
+    fn ux2_ac_2_8_a_field_change_inside_the_same_app_is_still_no_focus() {
+        let mut f = Fake::new("earlier");
+        f.after_snapshot = Some((true, Focus::Field, 8));
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
+            InsertOutcome::NoFocus
+        );
+        assert!(f.keys().is_empty());
+        assert_eq!(f.clip(), "earlier");
+    }
+
+    #[test]
+    fn ux2_an_app_change_with_a_field_change_is_target_changed() {
+        let mut f = Fake::new("earlier");
+        f.after_snapshot = Some((true, Focus::Field, 8));
+        f.app_after_snapshot = Some(OTHER_APP);
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+    }
+
+    #[test]
+    fn ux2_sec_2_a_pid_of_zero_expected_or_now_fails_closed() {
+        let mut f = Fake::new("earlier");
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", AppId::NONE).unwrap(),
+            InsertOutcome::TargetChanged,
+            "record pid 0"
+        );
+        assert!(f.log().is_empty());
+        f.app = AppId::NONE;
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
+            InsertOutcome::TargetChanged,
+            "read error now"
+        );
+        let mut g = Fake::new("earlier");
+        g.app_after_snapshot = Some(AppId::NONE);
+        assert_eq!(
+            insert_text(&g, ClipboardPlatform::MacOs, "hello", APP).unwrap(),
+            InsertOutcome::TargetChanged,
+            "read error at the second check"
+        );
+        assert!(g.keys().is_empty());
+        let mut both = Fake::new("earlier");
+        both.app = AppId::NONE;
+        assert_eq!(
+            insert_text(&both, ClipboardPlatform::MacOs, "hello", AppId::NONE).unwrap(),
+            InsertOutcome::TargetChanged,
+            "NONE never matches NONE"
+        );
+    }
+
+    #[test]
+    fn ux2_sec_2_the_permission_and_the_focus_are_checked_before_the_app() {
+        let mut f = Fake::new("earlier");
+        f.app = OTHER_APP;
+        f.permitted = false;
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "x", APP).unwrap(),
+            InsertOutcome::NoPermission
+        );
+        f.permitted = true;
+        f.focus = Focus::SecureField;
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "x", APP).unwrap(),
+            InsertOutcome::SecureField
+        );
+    }
+
+    #[test]
+    fn ux2_sec_8_bottle_frontmost_follows_the_same_rule_both_ways() {
+        // The record holds the Bottle pid while another app has the focus, and the reverse.
+        let bottle = AppId::new(std::process::id(), 0);
+        let mut f = Fake::new("earlier");
+        f.app = APP;
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::MacOs, "x", bottle).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+        let mut g = Fake::new("earlier");
+        g.app = bottle;
+        assert_eq!(
+            insert_text(&g, ClipboardPlatform::MacOs, "x", APP).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+        assert!(f.log().is_empty() && g.log().is_empty());
+    }
+
+    #[test]
+    fn ux2_m2_the_uwp_frame_host_and_an_unreadable_image_fail_closed() {
+        let ok = windows_app_id(10, 5, Some(r"C:\Windows\System32\notepad.exe"));
+        assert_eq!(ok, AppId::new(10, 5));
+        for host in [
+            r"C:\Windows\System32\ApplicationFrameHost.exe",
+            r"c:\windows\system32\applicationframehost.EXE",
+            "ApplicationFrameHost.exe",
+        ] {
+            assert!(windows_app_id(10, 5, Some(host)).is_none(), "{host}");
+        }
+        assert!(windows_app_id(10, 5, None).is_none());
+        // A fake host that reports it never matches, so the paste fails closed with no write.
+        let mut f = Fake::new("earlier");
+        f.app = windows_app_id(10, 5, Some("ApplicationFrameHost.exe"));
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::Windows, "x", AppId::new(10, 5)).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+        assert!(f.log().is_empty());
+    }
+
+    #[test]
+    fn ux2_the_creation_time_tells_a_reused_pid_apart() {
+        let mut f = Fake::new("earlier");
+        f.app = AppId::new(4242, 8);
+        assert_eq!(
+            insert_text(&f, ClipboardPlatform::Windows, "x", AppId::new(4242, 7)).unwrap(),
+            InsertOutcome::TargetChanged
+        );
+    }
+
+    #[test]
+    fn ux2_component_resolves_the_lease_and_answers_target_changed_when_it_cannot() {
+        let t = table_with(APP);
+        let ok = comp(Fake::new("e"), t);
+        assert_eq!(
+            ok.call("insert_text", args("1")).unwrap(),
+            json!({"result": "inserted"})
+        );
+        for (name, lease, mog) in [
+            ("unknown lease", "2", MOG),
+            ("parse failure", "one", MOG),
+            ("not canonical", "01", MOG),
+            ("another MOG", "1", "00000000-0000-4000-8000-0000000000b2"),
+        ] {
+            let c = comp(Fake::new("e"), t);
+            let a = json!({"mogId": mog, "text": "hi", "leaseId": lease});
+            assert_eq!(
+                c.call("insert_text", a).unwrap(),
+                json!({"result": "target_changed"}),
+                "{name}"
+            );
+            assert!(c.host.log().is_empty(), "{name}");
+        }
+        // No record (no note at grant): pid 0, fail closed.
+        let none = Box::leak(Box::new(TargetTable::new()));
+        none.bind(1, MOG, CaptureMode::Ptt, now_ms());
+        let c = comp(Fake::new("e"), none);
+        assert_eq!(
+            c.call("insert_text", args("1")).unwrap(),
+            json!({"result": "target_changed"})
+        );
+    }
+
+    #[test]
+    fn ux2_ac_2_7_the_reply_holds_only_the_result_and_no_pid_leaks() {
+        let pid = 987_654u32;
+        let app = AppId::new(pid, 123_456_789);
+        let t = table_with(app);
+        let mut f = Fake::new("e");
+        f.app = AppId::new(pid + 1, 123_456_789);
+        let c = comp(f, t);
+        let reply = c.call("insert_text", args("1")).unwrap();
+        assert_eq!(reply, json!({"result": "target_changed"}));
+        let mut shown = format!("{reply} {app:?} {:?} {t:?}", c.host.focused_app_pid());
+        let mut failing = Fake::new("e");
+        failing.app = app;
+        failing.fail_write = true;
+        let err = comp(failing, t).call("insert_text", args("1")).unwrap_err();
+        shown.push_str(&format!("{err} {err:?}"));
+        for needle in ["987654", "987655", "123456789"] {
+            assert!(!shown.contains(needle), "{needle} in {shown}");
+        }
+    }
+
+    #[test]
+    fn ux2_ac_2_1_the_note_is_taken_off_the_hook_thread_and_bound_at_grant() {
+        let t: &'static TargetTable = Box::leak(Box::new(TargetTable::new()));
+        let mut f = Fake::new("e");
+        f.app = APP;
+        note_focus_at_key_down(t, NoteKind::KeyDown, f)
+            .unwrap()
+            .join()
+            .unwrap();
+        t.bind(3, MOG, CaptureMode::Ptt, now_ms());
+        assert_eq!(t.expected("3", MOG, now_ms()), APP);
+        // A hook that is still reading binds nothing: fail closed.
+        t.begin_note(NoteKind::KeyDown, now_ms());
+        t.bind(4, MOG, CaptureMode::Ptt, now_ms());
+        assert!(t.expected("4", MOG, now_ms()).is_none());
     }
 }

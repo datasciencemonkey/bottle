@@ -11,7 +11,7 @@
  * The Rust catalog runs the same check again on every item write (`local_store/quarantine.rs`),
  * so a caller cannot skip it. Both sides run `tests/fixtures/memory-adversarial/items.json`.
  */
-import { detectInjection, type InjectionCategory } from './router-injection';
+import { detectInjection, normalize, type InjectionCategory } from './router-injection';
 
 /** The reason codes: the RTR-INJ categories and the two memory patterns. Fixed codes only. */
 export type QuarantineReason = InjectionCategory | 'ignore_previous' | 'addresses_assistant';
@@ -31,23 +31,6 @@ const ADDRESSES_ASSISTANT: readonly RegExp[] = [
   /\bif you are (?:an? )?(?:ai|assistant|llm|language model|chatbot|agent)\b/,
   /\bwhen you (?:read|see|recall|process|retrieve) this\b/,
 ];
-
-/** Zero-width and soft-hyphen code points, built from numbers so the source has no hidden text. */
-const ZERO_WIDTH = new RegExp(
-  `[${[
-    [0x200b, 0x200f],
-    [0x2060, 0x2064],
-    [0xfeff, 0xfeff],
-    [0x00ad, 0x00ad],
-  ]
-    .map(([a, b]) => `${String.fromCharCode(a ?? 0)}-${String.fromCharCode(b ?? 0)}`)
-    .join('')}]`,
-  'g',
-);
-
-function normalize(text: string): string {
-  return text.normalize('NFKC').replace(ZERO_WIDTH, '').toLowerCase().replace(/\s+/g, ' ');
-}
 
 /** The reasons to quarantine `text`, in a fixed order. Empty for clean text. */
 export function quarantineReasons(text: string): QuarantineReason[] {

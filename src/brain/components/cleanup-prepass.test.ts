@@ -107,8 +107,8 @@ describe('cleanup pre-pass (glossary "pre-pass": fillers, dictionary, numerals)'
     expect(spokenNumeralsToDigits('twenty, thirty, forty')).toBe('twenty, thirty, forty');
     expect(spokenNumeralsToDigits('it costs a dollar fifty')).toBe('it costs a dollar fifty');
     expect(spokenNumeralsToDigits('it costs a euro twenty')).toBe('it costs a euro twenty');
-    expect(prepass('twenty uh five rows')).toBe('twenty five rows');
-    expect(prepass('twenty uh, five rows')).toBe('twenty five rows');
+    expect(prepass('twenty uh five rows')).toBe('Twenty five rows');
+    expect(prepass('twenty uh, five rows')).toBe('Twenty five rows');
     // A plain run still converts.
     expect(prepass('um twenty five rows')).toBe('25 rows');
   });
@@ -144,14 +144,14 @@ describe('cleanup pre-pass (glossary "pre-pass": fillers, dictionary, numerals)'
     // A dictionary entry with no number still applies.
     expect(
       prepass('um open data bricks', { dictionary: [{ from: 'data bricks', to: 'Databricks' }] }),
-    ).toBe('open Databricks');
+    ).toBe('Open Databricks');
   });
 
   it('[CAP-66a] runs fillers, dictionary and numerals, and is deterministic and idempotent', () => {
     const dict = [{ from: 'data bricks', to: 'Databricks' }];
     const raw = 'um so so so we moved twenty five tables to uh data bricks';
     const once = prepass(raw, { dictionary: dict });
-    expect(once).toBe('so we moved 25 tables to Databricks');
+    expect(once).toBe('So we moved 25 tables to Databricks');
     expect(prepass(raw, { dictionary: dict })).toBe(once);
     expect(prepass(once, { dictionary: dict })).toBe(once);
     expect(prepass('   ')).toBe('');

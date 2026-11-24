@@ -7,7 +7,9 @@
  * the brain events to those R2 calls, in the task that gets the event (no timer, no await before
  * the call):
  *
- * - `down`: start a PTT lease through the consent gate (CAP-12a, MB-08a).
+ * - `down`: start a PTT lease through the consent gate (CAP-12a, MB-08a). During a call recording
+ *   the host grants it as an overlay on the recording's lease (ADR 0118); the brain does the same
+ *   work, and `onHold` tells the MOG that a hold runs. Hands-free is still refused then.
  * - `up`: release the lease; R2 stops it after the post-roll (CAP-12b).
  * - `cancel` (a tap, or another key, CAP-44c): discard the lease (CAP-44b).
  * - `hotkey:record_toggle` (⌥R, ADR 0103): it follows the `cancel` that discarded the press, so no
@@ -96,6 +98,12 @@ export interface CaptureLifecycleDeps {
    * recording can take the mic. The callee starts or stops the recording.
    */
   onRecordToggle?(e: { mogId: MogId }): void;
+  /**
+   * ADR 0118: a PTT hold runs (`on`: its lease is granted and its key is still down) or ended
+   * (`on` false: the key-up or cancel). It fires in pairs. During a call recording the MOG shows
+   * "Call only" while it runs. The brain never opens or closes the mic gate: Rust does at the key.
+   */
+  onHold?(e: { mogId: MogId; on: boolean }): void;
   /** The capture settings of a MOG. Default: the Appendix F defaults. */
   config?: (mogId: MogId) => LifecycleConfig;
 }
@@ -154,6 +162,8 @@ interface Live {
 interface Press extends Live {
   downAt: number;
   overHandsFree: boolean;
+  /** `onHold` fired `on` for this press and not yet `off`. */
+  holding?: boolean;
 }
 
 export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifecycle {
@@ -268,12 +278,22 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     // A refused press stays until its key-up or cancel, so a tap still stops hands-free
     // (CAP-14b) and the key-up sends nothing.
     start(p, () => undefined);
+    // The grant comes later. A press that ended before it never shows a hold.
+    whenGranted(p, () => {
+      if (press !== p) return;
+      p.holding = true;
+      deps.onHold?.({ mogId: p.mogId, on: true });
+    });
   };
 
   const onEnd = (e: PttEvent, keep: boolean) => {
     const p = press;
     if (!p || p.mogId !== e.mogId) return;
     press = undefined;
+    if (p.holding) {
+      p.holding = false;
+      deps.onHold?.({ mogId: p.mogId, on: false });
+    }
     // RTR-17a (ADR 0098): ⌥G during the hold makes the kept utterance an ask. The flag comes
     // with the key-up, which can come before or after the grant.
     if (keep && e.ask === true) {

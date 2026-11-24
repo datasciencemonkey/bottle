@@ -32,13 +32,13 @@ use serde_json::Value;
 
 use super::host_policy::AllowlistEgressPolicy;
 use super::rate_bucket::{parse_retry_after, retry_after_from_body, CallClass, RateBucket};
-use super::rate_limit::acquire;
+use super::rate_limit::{acquire, acquire_within_or_stop};
 use super::routes::{self, Method};
 use super::{outbound_headers, route_call_kind, HttpTransport, ID};
 use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
-use crate::recording_cloud::http::{RecordingHttp, Reply, ReplyBody, ReqBody};
+use crate::recording_cloud::http::{CallBounds, RecordingHttp, Reply, ReplyBody, ReqBody};
 use crate::request_identity::{BottleIdentity, CallKind, RequestDecorator};
 use crate::token_broker::{ScimMe, TokenBroker, TokenLease};
 use crate::token_guard::scrub_json;
@@ -269,10 +269,19 @@ impl ReqwestHttpTransport {
         method: Method,
         url: &str,
         headers: &[(&'static str, String)],
-        (body, limits): (Option<SendBody<'_>>, Limits),
+        (body, limits, abandoned): (
+            Option<SendBody<'_>>,
+            Limits,
+            Option<&std::sync::atomic::AtomicBool>,
+        ),
     ) -> CoreResult<(Raw, TokenLease)> {
         let mut out: Option<CoreResult<Raw>> = None;
         let lease = self.seams.tokens.with_token(profile, host, &mut |token| {
+            // A call that was abandoned while the token was fetched or refreshed is not sent.
+            if abandoned.is_some_and(|a| a.load(std::sync::atomic::Ordering::SeqCst)) {
+                out = Some(Err(err(TIMEOUT)));
+                return;
+            }
             out = Some(self.send_with(token, method, url, headers, body, limits));
         })?;
         out.unwrap_or(Err(err(TOKEN_UNUSABLE)))
@@ -424,7 +433,7 @@ impl ReqwestHttpTransport {
                 method,
                 &url,
                 &headers,
-                (body.as_deref().map(SendBody::Json), Limits::default()),
+                (body.as_deref().map(SendBody::Json), Limits::default(), None),
             )?;
             if (300..400).contains(&raw.status) {
                 // Rule 3: same host only; anything else is dropped, never followed.
@@ -501,7 +510,9 @@ impl ReqwestHttpTransport {
         params: &JsonObject,
         body: ReqBody<'_>,
         tags: Option<&Tags>,
+        bounds: Option<CallBounds<'_>>,
     ) -> CoreResult<Reply> {
+        let started = std::time::Instant::now();
         let route = routes::recording_route(route_id)?;
         let class = CallClass::Ask;
         let model = routes::RECORDING_MODEL_ROUTES.contains(&route_id);
@@ -533,7 +544,7 @@ impl ReqwestHttpTransport {
             ReqBody::Json(_) => json_bytes.as_deref().map(SendBody::Json),
             ReqBody::Bytes(b) => Some(SendBody::Raw(b)),
         };
-        let limits = Limits {
+        let mut limits = Limits {
             timeout: if model {
                 Some(MODEL_TIMEOUT)
             } else {
@@ -549,9 +560,39 @@ impl ReqwestHttpTransport {
         let mut retried_401 = false;
         let mut hops = 0u8;
         loop {
-            self.wait_for_bucket(profile, class);
-            let (raw, lease) =
-                self.send_once(profile, &host, method, &url, &headers, (send_body, limits))?;
+            match bounds {
+                // ADR 0122: the bucket wait ends at the budget, and an abandoned call is not sent.
+                Some(b) => {
+                    let left = b.budget.saturating_sub(started.elapsed());
+                    let stop = || b.abandoned.load(std::sync::atomic::Ordering::SeqCst);
+                    let got = acquire_within_or_stop(
+                        &*self.seams.bucket,
+                        &*self.seams.pause,
+                        profile,
+                        class,
+                        left,
+                        &mut |_| {},
+                        &stop,
+                    );
+                    let left = b.budget.saturating_sub(started.elapsed());
+                    if got.is_none() || stop() || left.is_zero() {
+                        return Err(err(TIMEOUT));
+                    }
+                    // The HTTP timeout of this attempt is what is left of the budget.
+                    if model {
+                        limits.timeout = Some(left.min(MODEL_TIMEOUT));
+                    }
+                }
+                None => self.wait_for_bucket(profile, class),
+            }
+            let (raw, lease) = self.send_once(
+                profile,
+                &host,
+                method,
+                &url,
+                &headers,
+                (send_body, limits, bounds.map(|b| b.abandoned)),
+            )?;
             if (300..400).contains(&raw.status) {
                 let to = raw
                     .location
@@ -637,7 +678,19 @@ impl RecordingHttp for ReqwestHttpTransport {
         body: ReqBody<'_>,
         tags: Option<&Tags>,
     ) -> CoreResult<Reply> {
-        self.recording_raw(profile, route_id, params, body, tags)
+        self.recording_raw(profile, route_id, params, body, tags, None)
+    }
+
+    fn send_bounded(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+        bounds: CallBounds<'_>,
+    ) -> CoreResult<Reply> {
+        self.recording_raw(profile, route_id, params, body, tags, Some(bounds))
     }
 }
 

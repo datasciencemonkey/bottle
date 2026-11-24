@@ -30,12 +30,9 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert!(!s.enabled);
     assert!(!s.consent_ack);
     assert!(s.storage.is_none());
-    assert_eq!(
-        s.transcribe_endpoint.as_str(),
-        "databricks-gemini-3-8-flash"
-    );
-    assert_eq!(s.notes_endpoint.as_str(), "databricks-claude-sonnet-5-5");
-    assert_eq!(RECORDING_DEFAULT_ENDPOINT, "databricks-claude-sonnet-5-5");
+    assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    assert_eq!(RECORDING_DEFAULT_ENDPOINT, "system.ai.claude-sonnet-5-5");
     assert_eq!(s.length_min.get(), 60);
     assert_eq!(
         s.preset_instructions.as_str(),
@@ -46,7 +43,7 @@ fn cap_06_the_knob_is_off_by_default_with_the_brief_defaults() {
     assert_eq!(wire["storage"], Value::Null);
     assert_eq!(
         wire["transcribeEndpoint"],
-        json!("databricks-gemini-3-8-flash")
+        json!("system.ai.gemini-3-8-flash")
     );
     assert_eq!(wire["lengthMin"], json!(60));
 }
@@ -150,6 +147,7 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
         ("recording_list", json!({"profile": "p"})),
         ("recording_detail", json!({"profile": "p", "id": "rec-1"})),
         ("recording_retry", json!({"profile": "p", "id": "rec-1"})),
+        ("recording_delete", json!({"profile": "p", "id": "rec-1"})),
         (
             "recording_open",
             json!({"profile": "p", "id": "rec-1", "target": "folder"}),
@@ -175,6 +173,7 @@ fn recording_cloud_commands_require_the_home_profile() {
         ("recording_list", json!({})),
         ("recording_detail", json!({"id": "rec-1"})),
         ("recording_retry", json!({"id": "rec-1"})),
+        ("recording_delete", json!({"id": "rec-1"})),
         ("recording_open", json!({"id": "rec-1", "target": "folder"})),
     ] {
         assert_eq!(code(c.call(name, args)), "invalid_args", "{name}");

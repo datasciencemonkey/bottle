@@ -1,0 +1,16 @@
+{
+  "callId": "c-0123abcd",
+  "turnId": "0123456789abcdef0123456789abcdef",
+  "workspaceId": "1234567890123456",
+  "profile": "DEFAULT",
+  "question": "Revenue last quarter?",
+  "state": "answered",
+  "reply": {
+    "structuredContent": {
+      "rows": [["EMEA", "4.2 M"]]
+    },
+    "text": "EMEA 4.2 M",
+    "isError": false,
+    "httpStatus": 200
+  }
+}

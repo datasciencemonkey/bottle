@@ -234,8 +234,8 @@ impl WindowKind {
             WindowKind::Hub => WindowSpec {
                 label,
                 url: "hub.html",
-                // MB-10b: the hub title bar shows the Labs label.
-                title: "Bottle (Databricks Labs / experimental)",
+                // MB-10b: the hub title bar shows the experimental label.
+                title: "Bottle (experimental)",
                 visible: true,
                 transparent: false,
                 decorations: true,

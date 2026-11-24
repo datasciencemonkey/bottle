@@ -177,14 +177,6 @@ pub trait RecordingCloud: Send + Sync {
         part: &FinishedPart,
         context: &[RecordingSegment],
     ) -> RecordingResult<Vec<RecordingSegment>>;
-    /// The notes Markdown from one chat call with the instructions and the joined transcript.
-    fn write_notes(
-        &self,
-        profile: &ProfileName,
-        endpoint: &crate::types::EndpointName,
-        instructions: &Instructions,
-        transcript_md: &str,
-    ) -> RecordingResult<String>;
     /// Write the instructions, `job.json`, the transcript files and the notes to the volume
     /// folder, and give the summary of the job. `request.profile` is the same profile; the
     /// explicit argument keeps every `RecordingCloud` method the same shape.
@@ -235,6 +227,18 @@ pub trait RecordingCloud: Send + Sync {
     /// The recordings that are only on this device, newest first. They need no storage: this
     /// is what the list shows while Settings has no usable storage.
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>>;
+    /// Delete a recording that never reached the volume: its audio files, temp files and
+    /// sidecar on this device. `Ok(false)`: no such recording on this device. A recording that
+    /// captures, runs, or has parts in the volume gives `recording_busy`. It never writes to
+    /// the volume. `storage` is `None` when Settings has none: the volume cannot be read then,
+    /// so the device must prove that no part was ever uploaded, or the call is `recording_busy`.
+    /// Files that remain after the delete give an error.
+    fn delete(
+        &self,
+        profile: &ProfileName,
+        storage: Option<&RecordingStorage>,
+        id: &RecordingId,
+    ) -> RecordingResult<bool>;
 }
 
 // ---------- the settings stub ----------
@@ -434,6 +438,21 @@ impl GatewayComponents for RecordingComponent {
                     reply(&cloud.detail(&a.profile, &storage, &a.id)?)
                 } else {
                     reply(&cloud.retry(&a.profile, &storage, &a.id)?)
+                }
+            }
+            "recording_delete" => {
+                let a: RecordingIdArgs =
+                    serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+                let cloud = self.cloud()?;
+                let storage = match self.storage() {
+                    Ok(s) => Some(s),
+                    Err(CoreError::IpcRefused { code: "no_storage" }) => None,
+                    Err(e) => return Err(e),
+                };
+                if cloud.delete(&a.profile, storage.as_ref(), &a.id)? {
+                    Ok(serde_json::json!({}))
+                } else {
+                    Err(refused("invalid_args"))
                 }
             }
             "recording_open" => {

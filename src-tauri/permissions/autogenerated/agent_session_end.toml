@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-session-end"
+description = "Enables the agent_session_end command without any pre-configured scope."
+commands.allow = ["agent_session_end"]
+
+[[permission]]
+identifier = "deny-agent-session-end"
+description = "Denies the agent_session_end command without any pre-configured scope."
+commands.deny = ["agent_session_end"]

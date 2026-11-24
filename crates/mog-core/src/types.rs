@@ -718,6 +718,8 @@ pub enum CardSection {
         stt_badge: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deep_link: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_host: Option<String>,
     },
     DataFlow {
         text: String,
@@ -730,6 +732,9 @@ pub enum CardSection {
 pub struct CardUpdate {
     pub mog_id: MogId,
     pub blurbs: Vec<CardBlurbView>,
+    /// Slice 2a chip ids of an agent turn: `agent-stop:<turnId>`, `agent-more:<opId>` and
+    /// `agent-resend:<turnId>` (the host mints an Ask ticket for the last two) and
+    /// `agent-open:<turnId>` (opens the hub Agent area).
     pub chips: Vec<CardChip>,
     /// Chips after the 4th (UX-20a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -748,6 +753,9 @@ pub struct CardUpdate {
     pub page_domain: Option<DomainPickerView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages_checklist: Option<PagesChecklistView>,
+    /// Slice 2a: the live agent turn in compact form, with "Open in Agent".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_turn: Option<AgentTurnView>,
 }
 
 /// The `mog.level` payload: one mic level sample (UX-06a). `owner` is the MOG that owns the
@@ -925,8 +933,21 @@ pub struct AgentSettings {
     pub cross_workspace_locked: bool,
     /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
     pub genie_call_budget: GenieCallBudget,
-    /// D9: the agent's model endpoint name. Default `databricks-claude-sonnet-5-5`.
-    pub endpoint: EndpointName,
+    /// D9, ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default
+    /// `model_gateway::DEFAULT_ORCHESTRATOR_MODEL`. The field keeps its old name `endpoint`.
+    pub endpoint: OrchestratorModel,
+    /// ADR 0122: "Clean up dictation". Default true. A file from before ADR 0122 reads as true.
+    #[serde(default = "default_clean_dictation")]
+    pub clean_dictation: bool,
+    /// ADR 0123: "Dictation engine: Databricks". The talk-key audio goes to a `system.ai` Gemini
+    /// model on the home AI Gateway. Default false (local Parakeet).
+    #[serde(default)]
+    pub cloud_dictation: bool,
+}
+
+/// The default of [`AgentSettings::clean_dictation`].
+pub fn default_clean_dictation() -> bool {
+    true
 }
 
 /// The answer of every `workspace_*` command.
@@ -942,13 +963,488 @@ pub struct WorkspaceList {
     pub agent: AgentSettings,
 }
 
+// ---------- the ask loop (ADR 0122) ----------
+
+/// One workspace in the catalog of a session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWorkspace {
+    /// The model alias of the workspace (`CatalogEntry.alias`), not a Databricks workspace ID.
+    pub workspace_id: String,
+    pub profile: ProfileName,
+    pub name: String,
+    pub is_home: bool,
+    pub is_agent_workspace: bool,
+}
+
+/// The reply of `agent_turn_submit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnAccepted {
+    pub turn_id: String,
+    pub session_id: String,
+    /// 0 is the live turn.
+    pub position: u32,
+    pub new_session: bool,
+    pub budget: GenieCallBudget,
+    pub cross_workspace: bool,
+    pub catalog: Vec<AgentWorkspace>,
+}
+
+/// The state of one Genie call of an agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCallState {
+    Queued,
+    Asking,
+    Answered,
+    NoAnswer,
+    Failed,
+    Timeout,
+    SignedOut,
+    Stopped,
+}
+
+/// The `mcp_call` reply, as `CommandReturns['mcp_call']` has it.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallReply {
+    pub structured_content: serde_json::Value,
+    pub text: String,
+    pub is_error: bool,
+    pub http_status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_error: Option<serde_json::Value>,
+}
+
+impl std::fmt::Debug for McpCallReply {
+    /// Shows only the status and the error flag: no server text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpCallReply")
+            .field("http_status", &self.http_status)
+            .field("is_error", &self.is_error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<&crate::mcp_transport::McpReply> for McpCallReply {
+    fn from(r: &crate::mcp_transport::McpReply) -> Self {
+        McpCallReply {
+            structured_content: r.structured_content.clone(),
+            text: r.text.clone(),
+            is_error: r.is_error,
+            http_status: r.http_status,
+            rpc_error: r.rpc_error.clone(),
+        }
+    }
+}
+
+/// Why a reply is hidden from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWithheld {
+    InjectionSuspected,
+}
+
+/// `agent_turn_call`: the question and the reply of one Genie call, for the card and history.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnCall {
+    pub call_id: String,
+    pub turn_id: String,
+    /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
+    pub workspace_id: String,
+    pub profile: ProfileName,
+    pub question: String,
+    pub state: AgentCallState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<McpCallReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<AgentWithheld>,
+}
+
+impl std::fmt::Debug for AgentTurnCall {
+    /// The question and the reply are user content: `Debug` shows ids and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnCall")
+            .field("call_id", &self.call_id)
+            .field("turn_id", &self.turn_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How the answer of a turn was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAnswerKind {
+    Note,
+    Combined,
+    Hidden,
+}
+
+/// One source of an agent answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSource {
+    /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
+    pub workspace_id: String,
+    pub call_id: String,
+    pub turn_id: String,
+}
+
+/// The token counts of one turn. Counts only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+}
+
+/// `agent_turn_result`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    pub answer_kind: AgentAnswerKind,
+    pub sources: Vec<AgentSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsage>,
+}
+
+impl std::fmt::Debug for AgentTurnResult {
+    /// The answer is user content: `Debug` shows its size only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnResult")
+            .field("answer_kind", &self.answer_kind)
+            .field(
+                "answer",
+                &format_args!(
+                    "<redacted {} chars>",
+                    self.answer.as_deref().map_or(0, |a| a.chars().count())
+                ),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why the one agent session ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionEndReason {
+    NewSession,
+    Quit,
+    Wipe,
+    ProfileChanged,
+    D1Changed,
+    CatalogChanged,
+    Tainted,
+    Idle,
+}
+
+/// The phase of the one agent session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionPhase {
+    None,
+    Idle,
+    Busy,
+}
+
+/// `agent_session_state`: for the hub panel at open. Counts only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSessionState {
+    pub state: AgentSessionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    /// The home profile, whose AI Gateway runs the orchestrator model. Required and nullable.
+    #[serde(deserialize_with = "nullable")]
+    pub agent_profile: Option<ProfileName>,
+    pub turns: u32,
+    pub queued: u32,
+    pub tokens: u64,
+}
+
+/// The `agent.session` payload (core to brain only, content-free).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AgentSessionEvent {
+    Started {
+        session_id: String,
+    },
+    Ended {
+        session_id: String,
+        reason: AgentSessionEndReason,
+    },
+}
+
+/// Why a tool call of the model was refused. Model-facing codes, content-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRefusal {
+    WorkspaceNotAvailable,
+    BudgetReached,
+    CrossWorkspaceOff,
+    InvalidArgs,
+}
+
+/// How an agent turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTurnOutcome {
+    Answered,
+    Stopped,
+    Removed,
+    Timeout,
+    Offline,
+    SignedOut,
+    Failed,
+    Refusals,
+    SessionEnded,
+}
+
+/// The `agent.turn` payload (core to brain only, content-free).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AgentTurnEvent {
+    Queued {
+        turn_id: String,
+        position: u32,
+    },
+    Started {
+        turn_id: String,
+    },
+    Thinking {
+        turn_id: String,
+    },
+    Call {
+        turn_id: String,
+        call_id: String,
+        /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
+        workspace_id: String,
+        state: AgentCallState,
+        used: u32,
+        budget: u32,
+    },
+    Refused {
+        turn_id: String,
+        code: AgentRefusal,
+        used: u32,
+    },
+    Slow {
+        turn_id: String,
+    },
+    Ended {
+        turn_id: String,
+        outcome: AgentTurnOutcome,
+        calls: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+    },
+}
+
+/// A workspace name and colour on the card and in the hub.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWsChip {
+    pub name: String,
+    /// `mog.ui.variant` (`src/shared/mog-palette.ts`). Never a raw hex.
+    pub color_variant: String,
+}
+
+/// The state of one Genie call row on the card and in the hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCallViewState {
+    Queued,
+    Asking,
+    Ready,
+    NoAnswer,
+    NeedsYou,
+    Failed,
+    Stopped,
+}
+
+/// One Genie call row of an agent turn view.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentCallView {
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    pub question: String,
+    pub state: AgentCallViewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+}
+
+impl std::fmt::Debug for AgentCallView {
+    /// The question is user content: `Debug` shows the id and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCallView")
+            .field("call_id", &self.call_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One folded part (one Genie answer) of an agent turn view.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPartView {
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    pub sections: Vec<CardSection>,
+    /// "From an earlier answer".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_earlier: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_shown_to_agent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded: Option<bool>,
+}
+
+impl std::fmt::Debug for AgentPartView {
+    /// The sections are answer text: `Debug` shows the id and the section count only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentPartView")
+            .field("call_id", &self.call_id)
+            .field("sections", &self.sections.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The state of an agent turn view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTurnViewState {
+    Queued,
+    Planning,
+    Running,
+    Slow,
+    Done,
+    Stopped,
+    TimedOut,
+    Offline,
+    Failed,
+    /// The turn ended `signed_out` and the question is kept (UX slice 5).
+    NeedsYou,
+}
+
+/// Whether the summary of a turn is one note or a combined answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSummaryKind {
+    Note,
+    Combined,
+}
+
+/// The summary of an agent turn view.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSummaryView {
+    pub md: String,
+    pub kind: AgentSummaryKind,
+    pub workspaces: Vec<AgentWsChip>,
+    /// ADR 0122: the `[n]` markers of `md`. Absent when the summary cites nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citations: Option<Vec<AgentCitation>>,
+}
+
+/// ADR 0122: one `[n]` citation in a combined summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentCitation {
+    /// The number in the summary text, 1-based (an index into the turn result `sources`).
+    pub n: u32,
+    pub call_id: String,
+    pub workspace: AgentWsChip,
+    /// The Open in Databricks link of that part. A renderer must never use it without
+    /// re-checking it at render time against `workspace_host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deep_link: Option<String>,
+    /// The workspace host that `deep_link` must belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_host: Option<String>,
+}
+
+impl std::fmt::Debug for AgentSummaryView {
+    /// The summary is model text about user data: `Debug` shows its size only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentSummaryView")
+            .field("kind", &self.kind)
+            .field(
+                "md",
+                &format_args!("<redacted {} chars>", self.md.chars().count()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// One agent turn as the card and the hub Agent panel show it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTurnView {
+    pub turn_id: String,
+    pub question: String,
+    pub state: AgentTurnViewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
+    pub used: u32,
+    pub budget: u32,
+    pub agent_workspace: AgentWsChip,
+    pub calls: Vec<AgentCallView>,
+    pub parts: Vec<AgentPartView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<AgentSummaryView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u64>,
+    /// When the user saw the answer, Unix ms (UX slice 4, Activity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_at: Option<u64>,
+}
+
+impl std::fmt::Debug for AgentTurnView {
+    /// The question and the answer are user content: `Debug` shows the id and the state only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnView")
+            .field("turn_id", &self.turn_id)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
 // ---------- call recording (ADR 0103) ----------
 
 /// The default notes model of a new install (ADR 0103). A Settings value.
-pub const RECORDING_DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+pub const RECORDING_DEFAULT_ENDPOINT: &str = "system.ai.claude-sonnet-5-5";
+/// The notes default before ADR 0123. A saved value that is exactly this reads as the default.
+pub const RECORDING_LEGACY_NOTES_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The transcribe default before ADR 0123. A saved value that is exactly this reads as the default.
+pub const RECORDING_LEGACY_TRANSCRIBE_ENDPOINT: &str = "databricks-gemini-3-8-flash";
 /// The default transcribe model of a new install (ADR 0103): a chat model that takes audio
 /// (`audio_url` data URLs). A Settings value.
-pub const RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT: &str = "databricks-gemini-3-8-flash";
+pub const RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT: &str = "system.ai.gemini-3-8-flash";
 /// The default recording length in minutes. The recording stops by itself at this length.
 pub const RECORDING_DEFAULT_LENGTH_MIN: u16 = 60;
 /// The shortest and the longest recording length that Settings accepts, in minutes.
@@ -1058,11 +1554,61 @@ checked_string!(
 
 checked_string!(
     /// A model endpoint name (the `model` of an AI Gateway chat call): 1-128 characters of
-    /// `[A-Za-z0-9_-]`.
+    /// `[A-Za-z0-9_.-]`. The dot is for `system.ai.<name>` ids (ADR 0123).
     EndpointName,
-    "^[A-Za-z0-9_-]{1,128}$",
-    |s| ascii_id(s, 128, &['_', '-'])
+    "^[A-Za-z0-9_.-]{1,128}$",
+    |s| ascii_id(s, 128, &['_', '.', '-'])
 );
+
+checked_string!(
+    /// The orchestrator model (ADR 0122): `system.ai.` plus a name of 1-128 characters of
+    /// `[A-Za-z0-9_-]` (the rule of `EndpointName`).
+    OrchestratorModel,
+    "^system\\.ai\\.[A-Za-z0-9_-]{1,128}$",
+    |s| s
+        .strip_prefix("system.ai.")
+        .is_some_and(|n| ascii_id(n, 128, &['_', '-']))
+);
+
+/// One chat model the home AI Gateway serves, for the picker (ADR 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorModelInfo {
+    pub id: OrchestratorModel,
+    pub label: String,
+    /// There is an eval record for the model (NFR-22a).
+    pub tested: bool,
+    /// The model supports tool calls.
+    pub tools: bool,
+}
+
+/// The `orchestrator_models` reply. No token, no profile name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorModels {
+    pub models: Vec<OrchestratorModelInfo>,
+    pub selected: OrchestratorModel,
+    pub default_model: OrchestratorModel,
+}
+
+/// The state of the orchestrator for routing (ADR 0122).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorState {
+    Ready,
+    NoHome,
+    SignedOut,
+    NoModel,
+    Unreachable,
+}
+
+/// The `orchestrator_status` reply. Content-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestratorStatus {
+    pub state: OrchestratorState,
+    pub model: OrchestratorModel,
+}
 
 checked_string!(
     /// A Unity Catalog catalog or schema name for `recording_volume_create`: 1-255 characters
@@ -1198,6 +1744,10 @@ pub struct RecordingSettings {
     pub notes_endpoint: EndpointName,
     pub preset_instructions: Instructions,
     pub length_min: LengthMin,
+    /// ADR 0118: the one-time "Your call can still hear you." note was shown. A settings file
+    /// from before ADR 0118 has no such field, so it reads as false.
+    #[serde(default)]
+    pub held_note_shown: bool,
 }
 
 impl Default for RecordingSettings {
@@ -1210,6 +1760,7 @@ impl Default for RecordingSettings {
             notes_endpoint: EndpointName(RECORDING_DEFAULT_ENDPOINT.to_owned()),
             preset_instructions: Instructions(RECORDING_DEFAULT_INSTRUCTIONS.to_owned()),
             length_min: LengthMin::default(),
+            held_note_shown: false,
         }
     }
 }
@@ -1233,6 +1784,8 @@ pub struct RecordingSettingsPatch {
     pub preset_instructions: Option<Instructions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_min: Option<LengthMin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_note_shown: Option<bool>,
 }
 
 impl RecordingSettings {
@@ -1246,6 +1799,7 @@ impl RecordingSettings {
             notes_endpoint,
             preset_instructions,
             length_min,
+            held_note_shown,
         } = patch;
         if let Some(v) = enabled {
             self.enabled = v;
@@ -1267,6 +1821,9 @@ impl RecordingSettings {
         }
         if let Some(v) = length_min {
             self.length_min = v;
+        }
+        if let Some(v) = held_note_shown {
+            self.held_note_shown = v;
         }
         self
     }

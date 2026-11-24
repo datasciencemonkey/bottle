@@ -42,7 +42,9 @@ function cfg(name: string, home: string, variant: string): MogConfig {
 
 function rig(
   initial: WorkspaceList,
-  opts: { exchanges?: Record<string, { askedAt: number; profileName: string }[]> } = {},
+  opts: {
+    exchanges?: Record<string, { askedAt: number; profileName: string; backendKind?: string }[]>;
+  } = {},
 ) {
   let state = initial;
   const configs = memoryConfigs();
@@ -85,6 +87,9 @@ function rig(
       calls.push(['settings_write', a]);
       state = { ...state, agent: { ...state.agent, ...a } };
       return state;
+    },
+    cancelLogin: async (profile) => {
+      calls.push(['cancel_login', profile]);
     },
     reauth: async (profile) => {
       calls.push(['reauth', profile]);
@@ -212,6 +217,31 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     await r.ws.refresh();
     expect(r.last()?.homePick?.suggested).toBe('b');
     expect(r.names()).not.toContain('make_home');
+  });
+
+  it('[ADR 0121] an agent turn row counts for no workspace in the suggestion', async () => {
+    const r = rig(
+      workspaceList(null, [
+        { profile: 'a', mogIds: [id(1)], available: true },
+        { profile: 'b', mogIds: [id(2)], available: true },
+      ]),
+      {
+        exchanges: {
+          [id(1)]: [
+            { askedAt: NOW - 1 * DAY, profileName: 'a' },
+            { askedAt: NOW - 1 * DAY, profileName: 'b', backendKind: 'genie_agent' },
+            { askedAt: NOW - 1 * DAY, profileName: 'b', backendKind: 'genie_agent' },
+          ],
+          [id(2)]: [
+            { askedAt: NOW - 2 * DAY, profileName: 'b' },
+            { askedAt: NOW - 2 * DAY, profileName: 'b' },
+          ],
+        },
+      },
+    );
+    await r.ws.refresh();
+    // With the turn rows counted, `b` would have 4 and `a` 1; without them `b` has 2.
+    expect(r.last()?.homePick?.suggested).toBe('b');
   });
 
   it('[AC-1.10] with no exchanges the suggestion is the first candidate; one candidate gives no pick dialog', async () => {
@@ -350,13 +380,160 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     const done = r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
     await flush();
     expect(r.last()?.busyProfile).toBe('home');
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.waiting });
     r.set(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]));
     release();
     await done;
     expect(r.last()?.busyProfile).toBeUndefined();
     expect(r.last()?.rows[0]?.signIn).toBe('signed_in');
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.signed_in });
     expect(r.calls.at(-1)).toEqual(['list', true]);
   });
+
+  it('Cancel during a waiting sign-in calls profile_login_cancel at once and shows Sign-in cancelled.', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    let reject: (e: unknown) => void = () => undefined;
+    r.deps.reauth = () => new Promise((_, no) => (reject = no));
+    const done = r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    await flush();
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.calls).toContainEqual(['cancel_login', 'home']);
+    reject({ error: 'login_cancelled' });
+    await done;
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: 'Sign-in cancelled.' });
+  });
+
+  it('a Cancel that the host refuses shows an error instead of staying silent', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.cancelLogin = async () => Promise.reject({ error: 'host_failed' });
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.failed });
+  });
+
+  it('workspace.refresh sets refreshing while it re-reads the list, then clears it', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    r.sent.length = 0;
+    const done = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(r.last()?.refreshing).toBe(true);
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await done;
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.calls.at(-1)).toEqual(['list', true]);
+  });
+
+  it('[M1] a second workspace.refresh while one is already running does nothing', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    const listCalls = () => r.calls.filter((c) => c[0] === 'list').length;
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    const before = listCalls();
+    const first = r.ws.act({ action: 'workspace.refresh' });
+    const second = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(listCalls()).toBe(before + 1);
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await Promise.all([first, second]);
+    expect(listCalls()).toBe(before + 1);
+    // Once it ends, a later click runs a new read.
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return Promise.resolve(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    };
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(listCalls()).toBe(before + 2);
+  });
+
+  it('[M2] workspace.refresh carries the current notice into its refreshing push, so it is not wiped', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    // The home row cannot be switched off: this leaves an info notice on screen.
+    await r.ws.act({ action: 'workspace.set_available', profile: 'home', available: false });
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.home_always_available });
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    const done = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(r.last()?.refreshing).toBe(true);
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.home_always_available });
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await done;
+  });
+
+  it('[L] workspace.refresh clears refreshing (never stuck) when the list read fails', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    r.deps.list = async () => Promise.reject({ error: 'workspace_storage_failed' });
+    r.sent.length = 0;
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.last()?.notice?.kind).toBe('error');
+    // The flag was cleared on the failure, so a later refresh runs again rather than skipping.
+    r.deps.list = async (refresh) => {
+      r.calls.push(['list', refresh]);
+      return workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]);
+    };
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.calls.at(-1)).toEqual(['list', true]);
+  });
+
+  it('a sign-in click for a row that is no longer expired runs nothing; a cancel for an unknown row says so', async () => {
+    const r = rig(
+      workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]),
+    );
+    await r.ws.refresh();
+    await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    expect(r.calls.some((c) => c[0] === 'reauth')).toBe(false);
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'nope' });
+    expect(r.calls.some((c) => c[0] === 'cancel_login')).toBe(false);
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.not_listed });
+  });
+
+  it('profile_invalid from a sign-in says Bottle cannot sign it in again', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.reauth = async () => Promise.reject({ error: 'profile_invalid' });
+    await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.not_browser });
+  });
+
+  it.each([
+    ['timeout', WORKSPACE_TEXT.timeout],
+    ['cli_failed', WORKSPACE_TEXT.cli_failed],
+    ['auth_expired', WORKSPACE_TEXT.auth_expired],
+    ['offline', WORKSPACE_TEXT.offline],
+    ['something_else', WORKSPACE_TEXT.failed],
+  ])(
+    'a sign-in that ends with %s shows an error and clears the waiting state',
+    async (code, text) => {
+      const r = rig(
+        workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]),
+      );
+      await r.ws.refresh();
+      r.deps.reauth = async () => Promise.reject({ error: code });
+      await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+      expect(r.last()?.busyProfile).toBeUndefined();
+      expect(r.last()?.notice).toEqual({ kind: 'error', text });
+    },
+  );
 
   it('[S1-B change] a sign-in that answers not_implemented clears busyProfile and tells the user to use the CLI', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
@@ -366,7 +543,7 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
     expect(r.last()?.busyProfile).toBeUndefined();
     expect(r.last()?.notice).toEqual({
-      kind: 'info',
+      kind: 'error',
       text: 'To sign in again, run "databricks auth login --profile home" in Terminal, then reopen Settings.',
     });
     expect(signInByHand('home')).toBe(r.last()?.notice?.text);
@@ -724,5 +901,50 @@ describe('workspaces: data MOG, lamp and identity (ADR 0117)', () => {
     const m = lampOnlyManager(base, async () => id(2));
     expect((await m.list()).mogs.map((x) => x.mogId)).toEqual([id(2)]);
     expect((await lampOnlyManager(base, async () => undefined).list()).mogs).toEqual([]);
+  });
+});
+
+describe('workspaces: the agent settings relays (ADR 0122)', () => {
+  const list = () =>
+    workspaceList('work', [
+      { profile: 'work', mogIds: [id(1)] },
+      { profile: 'lab', mogIds: [id(2)], available: true },
+      { profile: 'off', mogIds: [id(3)], available: false },
+      { profile: 'gone', mogIds: [id(4)], available: true, signIn: 'missing' },
+    ]);
+
+  function agentRig() {
+    const r = rig(list());
+    r.configs.files.set(id(1), cfg('Sales', 'work', 'coral'));
+    r.configs.files.set(id(2), cfg('Lab', 'lab', 'amber'));
+    return r;
+  }
+
+  it('writeSettings writes the orchestrator model and the dictation switch, then sends the list', async () => {
+    const r = agentRig();
+    await r.ws.refresh();
+    const before = r.sent.length;
+    await r.ws.writeSettings({ agentEndpoint: 'system.ai.gpt-oss-20b' });
+    await r.ws.writeSettings({ cleanDictation: false });
+    const writes = r.calls.filter((c) => c[0] === 'settings_write').map((c) => c[1]);
+    expect(writes).toEqual([{ agentEndpoint: 'system.ai.gpt-oss-20b' }, { cleanDictation: false }]);
+    expect(r.sent.length).toBe(before + 2);
+  });
+
+  it('a refused write shows a notice and keeps the list', async () => {
+    const r = agentRig();
+    await r.ws.refresh();
+    r.deps.settingsWrite = async () => Promise.reject({ error: 'invalid_args' });
+    await r.ws.writeSettings({ agentEndpoint: 'bad' });
+    expect(r.last()?.notice?.kind).toBe('error');
+  });
+
+  it('the catalog lists the usable available workspaces with their names, home first', async () => {
+    const r = agentRig();
+    await r.ws.refresh();
+    expect(r.ws.catalog().map((c) => [c.profile, c.name, c.isHome])).toEqual([
+      ['work', 'Sales', true],
+      ['lab', 'Lab', false],
+    ]);
   });
 });

@@ -22,6 +22,7 @@ export const LOCAL_STMT_IDS = [
   'mem.exchange.recent',
   'mem.exchange.dependents',
   'mem.exchange.by_session',
+  'mem.exchange.delete',
   'mem.item.get',
   'mem.item.write',
   'mem.item.list',

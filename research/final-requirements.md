@@ -56,9 +56,9 @@
 1. **Bottle** is a desktop app for macOS 14.4+ (first) and Windows 11 (second). It runs locally, and it creates and manages **MOGs**.
 2. A **MOG** is a floating, always-resident agent with a Rive mascot. The user can define many MOGs, and by default 8 MOGs are active at the same time.
 3. A MOG listens only after an explicit act: push-to-talk (PTT), a hands-free toggle, or a meeting session that the user starts. An idle MOG never opens the microphone.
-4. Bottle has three core use cases (binding change B5). **UC1 dictation:** local Parakeet STT, then cleanup by a small model on Databricks, then insertion into the active app. UC1 does not use the main agent or Genie. **UC2 Q&A:** the user asks by voice or text, the main agent checks local memory, then asks Genie One MCP, polls with progress and shows a blurb with key numbers and a deep link. **UC3 send context to Genie:** the user picks context from a meeting transcript or from memory, sees a preview and approves it, and approved definitions become the user's DRAFT Unity Catalog Pages.
-5. A **main agent** drives each MOG (binding change B4). It is a Claude or a Codex harness, with its model served through the Databricks AI Gateway under the user's identity, or a local model. The router step is its first step. Bottle gives the agent its own tools through the local `bottle-mcp` server. The agent can never start capture, approve outbound context, publish a Page or switch the workspace without a user action or approval.
-6. **Genie One MCP is the only Genie backend in the MVP.** The `genie_agent` and `custom_agent` backends come in v1, and every MOG keeps a Genie One companion binding.
+4. Bottle has three core use cases (binding change B5). **UC1 dictation:** local Parakeet STT, then a local filler pre-pass. Then the orchestrator model cleans up the text on the home workspace's AI Gateway (1.5 s budget). Then Bottle inserts the text into the active app. UC1 does not call Genie. **UC2 Q&A:** the user asks by voice or text. The orchestrator model asks Genie One MCP in each switched-on workspace through the guard. Bottle shows a blurb with key numbers, citations and a deep link. **UC3 send context to Genie:** the user picks context from a meeting transcript or from memory, sees a preview and approves it, and approved definitions become the user's DRAFT Unity Catalog Pages.
+5. One **orchestrator model** serves Bottle (binding change B6, ADR 0122). The default is `system.ai.claude-haiku-5-5`. The user picks it in Settings → Workspace from the `system.ai` chat models. Each call uses the Responses route of the home workspace's AI Gateway, under the user's identity, with `store` set to false. The model has two tools in the Ask loop: `ask_genie(workspace, question)` and `submit_answer`. The model can never start capture, approve outbound context, publish a Page or switch the workspace.
+6. **Genie One MCP is the only Genie backend in the MVP.** The `genie_agent` and `custom_agent` backends come in v1, and every MOG keeps a Genie One companion binding. If the orchestrator model is not reachable, Ask goes directly to Genie One on the home workspace and shows a short notice.
 7. Memory is local (binding change B2). Each MOG has its own namespace in one encrypted SQLite file (SQLCipher, WAL, FTS5 and `sqlite-vec`). Embeddings come from a Databricks endpoint and wait in a queue when the device is offline. **Lakebase** is an optional v1 sync and backup target.
 8. A meeting session records and transcribes in the background: the mic "You" track and the system-audio "Others" track. Nothing goes to Genie without a user click (binding change B1).
 9. A MOG can hop between Genie in different workspaces, because it lives on top of the Databricks CLI and its U2M profiles. This port follows Sathish Gangichetty's antigravity-bricks-plugin (MIT).
@@ -101,7 +101,7 @@ The MVP is complete only when **both** milestones pass end to end on a physical 
 - **Bottle** is the desktop app (the product, binding rename B0). The former names of the app are not used in any requirement, UI text, diagram or package.
 - A **MOG** is a floating agent that the user creates with Bottle. "MOG" is a codename and UI noun until trademark clearance (USPTO serial 99762439 conflict, D41).
 - A **binding** is the triple (home profile, backend, Genie One companion). The backend is one of `genie_one_mcp`, `genie_agent` or `custom_agent`. Context goes to Genie only as an inline preamble (D7, D29).
-- A **main agent** drives each MOG (B4). UC1 dictation does not use it.
+- The **orchestrator model** serves each MOG (B6). UC1 dictation uses it for cleanup only, with no tools.
 
 ### 2.2 Glossary (approved terms and Technical Names)
 
@@ -117,14 +117,16 @@ Use one term for one meaning. Do not use synonyms in requirements.
 | Brain window | The hidden TS WebView (`brain`) that holds all domain logic. It never shows and never takes focus. |
 | View window | A thin WebView that only shows state and sends user input: `hub`, `mog-<id>`, `card-<id>`. |
 | Rust core | `mog-core`, the Rust crate that owns capture, STT, global keys, the CLI child process, tokens, HTTP/MCP transport, the loopback proxies, the stores and the keychain. It is the secret boundary. The CLI process itself runs outside the boundary. |
-| Main agent | The agent that decides, for one MOG, when to call Genie One MCP, memory, the Page tool and the UI tools (B4). |
-| Harness | The program that runs the main agent: Claude (Claude Agent SDK or Claude Code headless) or Codex (Codex SDK or CLI). |
-| AgentHost | The Rust component that starts and stops the harness child process and gives it the loopback endpoints. |
-| `bottle-mcp` | The local MCP server on loopback that gives the main agent the Bottle tools (Section 4.5). |
-| Router step | The first step of each main agent turn: the small-model classifier with the strict json_schema of Appendix D. |
-| Fallback classifier | The router step without the main agent. It decides the route when the harness is not available. |
+| Orchestrator model | The one chat model that Bottle uses for dictation cleanup and for the Ask tool loop (B6, ADR 0122). The default is `system.ai.claude-haiku-5-5`. |
+| Ask loop | The tool loop in the Rust core, `agent_run::orchestrator`. It has two tools: `ask_genie(workspace, question)` and `submit_answer`. |
+| Guard | The Rust check on each `ask_genie` call: switched-on workspaces only, a budget, quarantine, and receipts when "Combine across workspaces" is off. |
+| Main agent | Historical term (B4). The orchestrator model and the Ask loop replace it. |
+| Harness, AgentHost | Historical terms (B4, R16). Bottle has no harness child process. |
+| `bottle-mcp` | A planned local MCP server on loopback for memory and UI tools (Section 4.5). It is not in the Ask loop. |
+| Router step | The first step of each model turn: the classifier with the JSON reply of Appendix D. It runs on the orchestrator model, with no tools. The prompt asks for JSON, and Bottle checks the reply. |
+| Fallback classifier | The router step without the model. It decides the route when the model is not reachable. |
 | Bridge | GenieBridge in the brain together with the McpTransport loopback proxy in the Rust core. |
-| Home profile | The Databricks CLI profile that a MOG uses for STT, cleanup, router step, writer, embeddings, the main agent model and Pages. |
+| Home profile | The Databricks CLI profile that a MOG uses for STT, cleanup, router step, writer, embeddings, the orchestrator model and Pages. |
 | Target profile | The Databricks CLI profile that receives a Genie question. It equals the home profile unless the user hops. |
 | Hop | A change of target profile for one question or for one session. |
 | Parked conversation | An open conversation in the old workspace after a hop. It stays open for an explicit follow-up for 30 min (G-26d). |
@@ -199,7 +201,7 @@ The scenarios replace v0.2 Scenarios 1-5 as the collision-analyst audit requires
 
 1. The user puts the cursor in an email draft and holds the talk key. [CAP-12a]
 2. The user says the text of a paragraph and releases the key. [CAP-12b]
-3. Local Parakeet transcribes the audio. The pre-pass and the cleanup model run with a 900 ms deadline. [CAP-47a, CAP-66a, CAP-67a]
+3. Local Parakeet transcribes the audio. The pre-pass runs first. Then the orchestrator model cleans up the text with a 1.5 s deadline. [CAP-47a, CAP-66a, CAP-67a]
 4. The router step returns `dictation`. Bottle does not call the main agent or Genie. [RTR-01b, RTR-01c]
 5. The brain sends `insert_text`. The Rust core pastes the cleaned text into the email with no Enter key, and then puts the previous clipboard content back. [MOG-06a, MOG-06b, MOG-06c]
 6. The MOG shows "Inserted". [UX-42]
@@ -238,7 +240,7 @@ The scenarios replace v0.2 Scenarios 1-5 as the collision-analyst audit requires
 2. ProfileService matches "sales" against the MOG aliases, then the profile names, then the hosts, and finds exactly one `databricks-cli` profile. If two profiles match, the MOG shows a "Which workspace?" chip. [W-11b, W-11c]
 3. The badge changes to "sales-ws · Genie One". The banner reads "Asking in sales-ws. Context from prod-finance is not shared." [W-20, UX-39a]
 4. New questions start a new conversation in sales-ws. Open conversations stay in their old workspace and are parked for 30 min. [W-12a, G-26c, G-26d, G-27a]
-5. STT, cleanup, the router step, the main agent model and memory still use the home profile. The UI discloses this. [W-21a, W-21b, SEC-17]
+5. STT, cleanup, the router step, the orchestrator model and memory still use the home profile. The UI discloses this. [W-21a, W-21b, SEC-17]
 6. The local store keeps the full answer until the user selects Wipe. With v1 Lakebase sync, Lakebase stores only a pointer for answers from sales-ws. [MEM-26, MEM-25c]
 
 ### SC-6 UC2: One question across workspaces (v1)
@@ -278,7 +280,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 
 [[DIAGRAM: system-context]]
 
-*Diagram 1 shows: the user; Bottle with N MOG windows (8 active by default) and the main agent harness for each MOG (outside the secret boundary, no token); the Databricks CLI ≥ 1.17 as a child process outside the secret boundary and its keychain token cache; browser SSO (OAuth U2M); workspace A (home) with Genie One MCP at `/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<id>`, Unity Gateway model services at `/ai-gateway/mlflow/v1` with `system.ai.*` names (ASR, cleanup, router step, writer, embeddings), the main agent model route (for example `/ai-gateway/anthropic`), the UC Pages API `/api/2.0/knowledge/pages`, a "Genie One companion" note (D62), and v1 genie_agent REST and custom-agent App; workspace B (target) with Genie One MCP `?o=<B>`; the local store (SQLCipher, FTS5, `sqlite-vec`) as the MVP memory; the home Lakebase project as an optional v1 sync target; and the OS (mic, system audio as MVP-M, global keys, keychain, notifications, tray). The view-to-brain arrow is `view_emit`; the brain-to-view arrow is the events `mog.view_state` and `card.update`.*
+*Diagram 1 shows: the user; Bottle with N MOG windows (8 active by default) and the Ask loop of the orchestrator model in the Rust core (B6; no harness child process, no token for the model); the Databricks CLI ≥ 1.17 as a child process outside the secret boundary and its keychain token cache; browser SSO (OAuth U2M); workspace A (home) with Genie One MCP at `/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<id>`, Unity Gateway model services at `/ai-gateway/mlflow/v1` with `system.ai.*` names (ASR, cleanup, router step, writer, embeddings), the orchestrator model route `/ai-gateway/mlflow/v1/responses`, the UC Pages API `/api/2.0/knowledge/pages`, a "Genie One companion" note (D62), and v1 genie_agent REST and custom-agent App; workspace B (target) with Genie One MCP `?o=<B>`; the local store (SQLCipher, FTS5, `sqlite-vec`) as the MVP memory; the home Lakebase project as an optional v1 sync target; and the OS (mic, system audio as MVP-M, global keys, keychain, notifications, tray). The view-to-brain arrow is `view_emit`; the brain-to-view arrow is the events `mog.view_state` and `card.update`.*
 
 ### 4.2 Process model
 
@@ -317,7 +319,7 @@ Bottle runs on one device. Only the Rust core holds credentials and talks to the
 | R13 | PolicyStore | MDM and admin keys (Appendix C) and the telemetry gate (D42). |
 | R14 | WipeService | Deletes user content only when the user selects Wipe in Settings (older than 30 d, older than 90 d, or everything); (v1) applies the same selection to Lakebase on the next connection. Also runs the content-free security expiries: the audio deletion deadline, log rotation and consent records (U9). |
 | R15 | mog-core-ffi | C ABI: `mog_init`, `mog_call` (JSON in, JSON out), `mog_set_event_callback`, `mog_abi_version`. |
-| R16 | AgentHost | Starts and stops the harness child process of each active MOG (Claude or Codex), gives it the loopback endpoints and a per-session secret, gives it no token, writes the content-free agent action log. |
+| R16 | AgentHost | Replaced by B6 (ADR 0122). Bottle starts no harness child process. The Rust Ask loop (`agent_run::orchestrator`) calls the orchestrator model through `model_gateway` and sends each `ask_genie` call through the guard (`agent_run/guard`). The model never gets a token. |
 | R17 | BottleMcpServer | The `bottle-mcp` server on loopback: `transcript.search`, `memory.recall`, `memory.write` (through R10), and the UI tools `show_blurb`, `set_mood`, `propose_page`, `ask_user` (relayed to the brain as `agent.tool_call`). No tool starts capture, approves context, publishes or switches the workspace. Model proxy to `/ai-gateway/…` with the token. |
 
 **Hidden TS brain window (all domain logic)**
@@ -605,7 +607,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 | MB-08b | M | MVP-D | When the notice version increases, the hub must show the notice again before the next capture. | A version change blocks capture until the user accepts it. | T · AT-24 | D50, UX-CON-2 | ALL |
 | MB-09 | S | v1 | The hub must show a history of utterances, routes, conversations and blurbs with a filter for each MOG. | History obeys the Wipe selection (U9). | D · AT-01 | v0.2 MB-5 | ALL |
 | MB-10a | M | MVP-D | The app must use the product name "Bottle". | No UI text or package metadata contains "Mother Bricks" or "Motherbricks". | I · AT-37 | B0 (binding rename), D41, D80 | ALL |
-| MB-10b | M | MVP-D | The app must show the label "Databricks Labs / experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
+| MB-10b | M | MVP-D | The app must show the label "experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
 | MB-10c | M | MVP-D | The UI must use "MOG" only as a UI noun. | No package or bundle ID contains "MOG". | I · AT-37 | D41 | ALL |
 | MB-11a | M | MVP-D | WindowHost must restart a view window that stops. | The window shows again in 2 s or less. | T · AT-15 | ARC | ALL |
 | MB-11b | M | MVP-D | When WindowHost restarts a view window, the brain must send the current state to that window again. | The restarted window shows the same mood and cards in 2 s or less. | T · AT-15 | ARC | ALL |
@@ -813,8 +815,8 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 |---|---|---|---|---|---|---|---|
 | CAP-66a | M | MVP-D | CleanupProvider must run the deterministic pre-pass before the regional cleanup model. | The pre-pass output is the model input. | T · AT-05 | D18, D58 | UC1 UC2 |
 | CAP-66b | M | MVP-D | CleanupProvider must skip the cleanup model for fewer than 4 words. | Short utterances make no model call. | T · AT-05 | D18 | UC1 UC2 |
-| CAP-67a | M | MVP-D | CleanupProvider must get one complete PTT cleanup response with a 900 ms deadline. | The cleanup call uses no stream. | T · AT-21 | D69, CAP-LAT-03 | UC1 UC2 |
-| CAP-67b | M | MVP-D | If the cleanup deadline passes, CleanupProvider must use the pre-pass text with the mark "not cleaned". | A delayed model call shows the pre-pass text at 900 ms. | T · AT-21 | D69, CAP-LAT-03 | UC1 UC2 |
+| CAP-67a | M | MVP-D | CleanupProvider must get one complete PTT cleanup response with a 1.5 s deadline. | The cleanup call uses no stream and no retry. | T · AT-21 | D69, CAP-LAT-03 | UC1 UC2 |
+| CAP-67b | M | MVP-D | If the cleanup deadline passes, CleanupProvider must use the pre-pass text with the mark "not cleaned". | A delayed model call shows the pre-pass text at 1.5 s. | T · AT-21 | D69, CAP-LAT-03 | UC1 UC2 |
 | CAP-68 | M | MVP-D | If the cleaned text fails a check of Table CAP-CHECK, CleanupProvider must use the raw text. | The corpus test keeps the meaning in 100 % of number cases. | T · AT-05 | D18, SG-INJ-4, Kimi STT-008 | UC1 UC2 |
 | CAP-69 | M | MVP-D | The cleanup model must not select an intent, a backend or a workspace. | Cleanup output never changes the route. | T · AT-06 | Kimi STT-009 | UC1 UC2 |
 | CAP-70a | M | MVP-D | The app must keep the raw transcript apart from the cleaned transcript. | Both texts exist for each utterance. | T · AT-05 | Kimi STT-005/010 | UC1 UC2 |
@@ -876,8 +878,8 @@ Binding change B4 replaces the fixed rule-based router. Each MOG has a **main ag
 | RTR-08 | M | MVP-M | Others-track speech must never cause an ask, a command, a hop or a memory decision. | Commands from the Others track become `noise` with `injection_suspected=true`. | T · AT-27 | D8, GL-7.4, SG-INJ-3 | MTG |
 | RTR-09a | M | MVP-D | The router step must run in parallel with cleanup on the pre-pass text. | The trace shows both calls start in the same 10 ms. | T · AT-21 | D69, C-DA2 | UC2 |
 | RTR-09b | M | MVP-D | The main agent must send the cleaned text as the Genie question. | The router `genie_question` only resolves follow-ups, and the client checks its numbers and entities against the cleaned text. | T · AT-21 | D69 | UC2 |
-| RTR-10a | M | MVP-D | The router step must use Llama 3.1 8B in regions that serve it, if the strict-schema eval passes. | US regions use Llama 3.1 8B [U: SP-13]. | T · AT-36 | D38, D58 | UC2 |
-| RTR-10b | M | MVP-D | If the region does not serve Llama 3.1 8B, the router step must use `gpt-oss-20b`. | EU AWS regions use `gpt-oss-20b`. | T · AT-36 | D58 | UC2 |
+| RTR-10a | M | MVP-D | The router step must use the orchestrator model (B6). | The router call names the model that the user picked in Settings. The default is `system.ai.claude-haiku-5-5`. | T · AT-36 | D38, D58 | UC2 |
+| RTR-10b | M | MVP-D | If the orchestrator model is not available, the config must name `system.ai.gpt-oss-20b` as the fallback model. | The config holds the fallback name. | T · AT-36 | D58 | UC2 |
 | RTR-11a | M | MVP-D | The router step must return hop hints and hop commands. | "Use the sales workspace from now on" returns `switch_workspace_session`. | T · AT-12 | D11, GL-6 | UC2 |
 | RTR-11b | S | v1 | If a question needs a split, the router step must return `part_questions` and `part_profile_hints` with 3 parts or less. | The client ignores arrays of unequal length or more than 3 parts. | T · AT-12 | D11, GL-6, GL-7.2 | UC2 |
 | RTR-12a | M | MVP-M | The router step must return `directed_mog_id`. | The field is `""` when no MOG is named. | T · AT-27 | D63 | MTG |
@@ -1087,7 +1089,7 @@ In this section, **the bridge** is GenieBridge in the brain together with the Mc
 | W-18c | M | MVP-D | When the user signs out, TokenBroker must overwrite the tokens of the profile with zeros. | A memory scan finds no token after sign-out. | T · AT-02 | SG-AUTH-10 | ALL |
 | W-19 | S | v1 | If SP-14 passes, dedicated `bottle-*` profiles must use the narrow scopes `ai-gateway genie knowledge offline_access`. | Calls succeed with the narrow profile; `postgres` joins only for Lakebase sync. | T · AT-22 | SG-AUTH-7, B3 | ALL |
 | W-20 | M | MVP-D | When a hop applies, the MOG must show the hop banner of Appendix E before the first ask in the target. | The banner reads "Asking in <B>. Context from <A> is not shared." | D · AT-12 | SG-UI-9 | UC2 |
-| W-21a | M | MVP-D | After a hop, the brain must send STT, cleanup, router, writer, embedding and main agent model calls with the home profile. | The trace shows the home host for each model call. | I · AT-12 | D12, SG-EGR-8, B4 | UC2 |
+| W-21a | M | MVP-D | After a hop, the brain must send STT, cleanup, router, writer, embedding and orchestrator model calls with the home profile. | The trace shows the home host for each model call. | I · AT-12 | D12, SG-EGR-8, B4 | UC2 |
 | W-21b | M | MVP-D | The data panel must show that the home workspace runs these model calls after a hop. | "Questions about workspace B are processed in your home workspace." shows in the data panel. | I · AT-12 | SG-EGR-8 | UC2 |
 
 ### 5.7 MEM: Memory (local SQLite store, optional Lakebase sync)
@@ -1416,10 +1418,10 @@ Binding change B3: Bottle detects business definitions in transcripts and propos
 | NFR-19a | S | v1 | Window helpers must accept raw native window pointers (`HWND`, `NSWindow`). | A Dart host passes a window pointer. | T · AT-22 | CAP-FFI-03 | ALL |
 | NFR-19b | S | v1 | CI must run an ABI contract test for the Tauri host and a Dart host. | Both hosts pass. | T · AT-22 | CAP-FFI-06 | ALL |
 | NFR-20 | M | v2 | Global-key, overlay and system-audio methods must report `unsupported` on mobile and web builds. | No crash on unsupported platforms. | T · AT-22 | CAP-FFI-04 | ALL |
-| NFR-21a | M | MVP-D | Model calls must use `POST https://<host>/ai-gateway/mlflow/v1/chat/completions` and `/embeddings` with `system.ai.*` names. | The app works with "Enforce Unity Gateway" on. | T · AT-36 | D57, C63 | ALL |
+| NFR-21a | M | MVP-D | Chat model calls must use `POST https://<host>/ai-gateway/mlflow/v1/responses` with `system.ai.*` names and `"store": false`. Embedding calls must use `/embeddings`. | The app works with "Enforce Unity Gateway" on. | T · AT-36 | D57, C63 | ALL |
 | NFR-21b | M | MVP-D | Model calls must not use `/serving-endpoints`. | No request goes to that path. | T · AT-36 | D57 | ALL |
 | NFR-22a | M | MVP-D | The config must keep each model name as an eval-gated value. | A model change needs an eval record. | T · AT-36 | D38, D58 | ALL |
-| NFR-22b | M | MVP-D | The cleanup step must use Llama 3.1 8B in region, else `gpt-oss-20b`. | EU AWS runs on `gpt-oss-20b`; the client reads list-of-blocks content. | T · AT-36 | D58 | UC1 UC2 |
+| NFR-22b | M | MVP-D | The cleanup step must use the orchestrator model (B6). | The cleanup call names the model that the user picked; the client reads list-of-blocks content. | T · AT-36 | D58 | UC1 UC2 |
 | NFR-22c | M | MVP-D | The config must use `gpt-6-luna` only as an eval candidate. | No default names it. | I · AT-36 | D58 | ALL |
 | NFR-23a | M | MVP-D | Each MUST requirement must link to a test. | Section 14.3 shows no MUST row without a test. | A · AT-22 | D79, Kimi | ALL |
 | NFR-23b | M | MVP-D | Physical-device and live-workspace tests must be release gates. | The release checklist lists them. | A · AT-22 | D79 | ALL |
@@ -1438,7 +1440,7 @@ Binding change B2 removes Lakebase from the MVP admin prerequisites. ADM rows fo
 | ADM-03a | M | MVP-D | The admin must open outbound port 443 to the workspace hosts. | The wizard probes pass on the corporate network. | T · AT-22 | C-SG11 | ALL |
 | ADM-03b | C | v1 | If Lakebase sync is in use, the admin must permit Lakebase projects in the home workspace. | Else memory stays local (MEM-24a). | T · AT-38 | D34, B2 | UC2 |
 | ADM-03c | C | v1 | If Lakebase sync is in use, the admin must open outbound port 5432. | Else memory stays local (MEM-24a). | T · AT-38 | D34, C-SG11, B2 | UC2 |
-| ADM-04a | M | MVP-D | The admin must give access to the ASR, cleanup, router, writer, judge, embedding and main agent model services. | Else `SttPolicy=local_only` applies for ASR and the fallback classifier runs for the agent. | T · AT-36 | D38, D59, SG-ADM 4/6, B4 | ALL |
+| ADM-04a | M | MVP-D | The admin must give access to the ASR, cleanup, router, writer, judge, embedding and orchestrator model services. | Else `SttPolicy=local_only` applies for ASR and the fallback classifier runs for the agent. | T · AT-36 | D38, D59, SG-ADM 4/6, B4 | ALL |
 | ADM-04b | M | MVP-D | When users select Databricks ASR, the admin must set cross-geography routing to on where Gemini ASR needs it. | Else `SttPolicy=local_only` applies. Local STT needs no action. | T · AT-36 | D59 | UC1 UC2 |
 | ADM-05 | C | v1 | The admin must plan a restart of all computes before Lakebase Search starts. | The change cannot be undone; after it the app builds `lakebase_ann` concurrently. | I · AT-38 | D34, VER claim 6 | UC2 |
 | ADM-06 | M | MVP-D | The admin must set the MDM keys of Appendix C that differ from the defaults. | PolicyStore applies each key. | T · AT-22 | D36, D37, D39, D42, R13 | ALL |
@@ -1494,7 +1496,7 @@ Binding change B2 removes Lakebase from the MVP admin prerequisites. ADM rows fo
 
 **Table MEM-WRITE (memory writer triggers, MEM-28a).** Session end · every 10 min or 40 utterances in a session · after each completed exchange · on "remember this".
 
-**Table SEC-DISC (disclosures, SEC-17).** Home-profile processing · Genie history · Genie One memory · STT location · "Where your data goes" · the main agent harness and model location · DRAFT UC Pages are visible to Genie One in the owner's conversations · (v1) the Lakebase PITR window.
+**Table SEC-DISC (disclosures, SEC-17).** Home-profile processing · Genie history · Genie One memory · STT location · "Where your data goes" · the orchestrator model and its location · DRAFT UC Pages are visible to Genie One in the owner's conversations · (v1) the Lakebase PITR window.
 
 **Table UX-LEVEL (level meter, UX-06a).** `level = clamp((dBFS + 60) / 50, 0, 1)` · attack 30 ms · release 150 ms · 30 Hz or less · only while the MOG owns an open mic.
 
@@ -1607,7 +1609,7 @@ Each step is one instruction to the system. Brackets give the requirement IDs. E
 
 [[DIAGRAM: workspace-hopping]]
 
-*Diagram 5 shows the home profile for STT, the SLMs, the main agent model and memory; the per-workspace token and bucket; `ProfileService.resolveTarget` with the match order MOG aliases (`mog.binding.profileAliases`), then names, then hosts; conversations pinned to their workspace and the conversation parked for 30 min after a hop (G-26c, G-26d); the hop banner (W-20); the ContextAssembler block on A items to B; the local store with the full answer 30 d; Lakebase summary plus pointer for A and pointer only for B as v1 optional; and the split of 3 parts or less with merge and attribution, marked v1. Requirement IDs: W-11a..W-13c, W-20, W-21a, W-21b, G-05b, G-26c, G-26d, G-27a, G-27b, MEM-25a..c.*
+*Diagram 5 shows the home profile for STT, the SLMs, the orchestrator model and memory; the per-workspace token and bucket; `ProfileService.resolveTarget` with the match order MOG aliases (`mog.binding.profileAliases`), then names, then hosts; conversations pinned to their workspace and the conversation parked for 30 min after a hop (G-26c, G-26d); the hop banner (W-20); the ContextAssembler block on A items to B; the local store with the full answer 30 d; Lakebase summary plus pointer for A and pointer only for B as v1 optional; and the split of 3 parts or less with merge and attribution, marked v1. Requirement IDs: W-11a..W-13c, W-20, W-21a, W-21b, G-05b, G-26c, G-26d, G-27a, G-27b, MEM-25a..c.*
 
 1. The grammar or the router step returns a hop command or a target hint. [RTR-11a]
 2. T7 matches the hint against the MOG aliases, then the profile names, then the hosts of `databricks-cli` profiles. [W-11c]
@@ -1617,7 +1619,7 @@ Each step is one instruction to the system. Brackets give the requirement IDs. E
 6. R6 gets the token for the target profile and resolves its `workspace_id`. [W-06a]
 7. R8 opens a new MCP session for the target. A 404 shows "Genie One isn't available in <host>." [G-05b]
 8. New questions start new conversations in the target. Old conversations stay pinned and are parked for 30 min. [W-12a, G-26c, G-26d, G-27a]
-9. Memory, STT, SLM and main agent model calls stay on the home profile. [W-21a]
+9. Memory, STT, SLM and orchestrator model calls stay on the home profile. [W-21a]
 10. The local store keeps the answer. With v1 Lakebase sync, Lakebase stores a pointer only for the target's answers. [MEM-25a, MEM-25c]
 
 ### F6 UC2 cross-workspace split (v1)
@@ -1773,7 +1775,7 @@ The full matrix is in Appendix B. Summary rules:
 - The preamble is opt-in, capped, scrubbed and same-workspace, and it needs a preview approval. [G-28..G-37c, G-52, G-53]
 - The MVP memory stays in the local store (B2). Embedding requests send item text to the Databricks embedding endpoint on the home profile. [MEM-08a, MEM-19a]
 - (v1) With Lakebase sync, Lakebase receives distilled items, session metadata, exchange summaries, key numbers and pointers. Cross-workspace answers are pointers only. [MEM-25b, MEM-25c]
-- STT, cleanup, the router step, the writer, embeddings and the main agent model run on the home profile. The UI discloses this. [W-21a, W-21b]
+- STT, cleanup, the router step, the writer, embeddings and the orchestrator model run on the home profile. The UI discloses this. [W-21a, W-21b]
 - Telemetry stays off until an admin sets `OtlpTable`. [SEC-16a]
 - Side effects outside the app: `system.ai_gateway.usage` logs (no content); FMAPI abuse store up to 30 d; Genie history, `system.access.audit` and `system.query.history`; Genie One server-side memory. [SEC-17]
 
@@ -1839,7 +1841,7 @@ Binding change B2 removes Lakebase from the MVP prerequisites. Lakebase items ar
 | 2 | Genie One is on in each target workspace, with partner-powered AI features on. | MVP-D | ADM-01a, ADM-02 |
 | 3 | A metastore admin with `MANAGE` on `system.ai` runs `databricks grants update mcp_service system.ai.genie_one_mcp --json '{"changes":[{"principal":"bottle-users","add":["EXECUTE"]}]}'` and grants `USE CATALOG system`, `USE SCHEMA system.ai`. Check with `databricks grants get-effective`. | MVP-D | ADM-01b, ADM-01c |
 | 4 | Nothing uses the Beta `/api/2.0/mcp/genie` endpoint (end of life 2026-11-30, check again before release). | MVP-D | G-03 |
-| 5 | Model services are reachable through Unity Gateway (`/ai-gateway/mlflow/v1`) with `system.ai.*` names, with service tags `app=bottle,stage=<x>`. This includes the main agent model route (for example `/ai-gateway/anthropic`). | MVP-D | ADM-04a, NFR-21a |
+| 5 | Model services are reachable through Unity Gateway (`/ai-gateway/mlflow/v1`) with `system.ai.*` names, with service tags `app=bottle,stage=<x>`. This includes the orchestrator model route (`/ai-gateway/mlflow/v1/responses`). | MVP-D | ADM-04a, NFR-21a |
 | 6 | Only if users select Databricks ASR: cross-geography routing is on where Gemini needs it, or MDM sets `SttPolicy=local_only`. | MVP-D (opt-in only) | ADM-04b, CAP-57e, CAP-63 |
 | 7 | Inference tables are off on the ASR service. | MVP-D | ADM-09 |
 | 8 | The `genie_one_mcp` MCP QPM is 40 or more for each user, or unlimited (it must fit the 40 calls/min bucket). | MVP-D | ADM-07 |
@@ -1874,8 +1876,8 @@ Binding change B2 removes Lakebase from the MVP prerequisites. Lakebase items ar
 - **A6 [U: SP-17]** One Genie One question uses **2 DBU** (range 0.5-6). Databricks publishes no figure.
 - A7 Warm shared serverless warehouse: $0.02 marginal per question; a cold isolated question can cost up to about $0.47.
 - A8 (v1, optional sync only) Lakebase per-user project at 0.5-1 CU, active 10 / 40 / 120 h; compute $0.092/CU-h list (0.23 DBU at $0.40/DBU) with 50 % promotion until 2027-01-31 [secondary source]; storage $0.345/GB-month.
-- A9 The user does not use Genie Code (it shares the 150-DBU pool).
-- A10 **[U: SP-19]** The main agent model (B4) is not priced here. Its cost depends on the harness, the model and the number of turns. SP-19 measures tokens per turn.
+- A9 Other Databricks agent products that share the 150-DBU pool are not priced here.
+- A10 **[U: SP-19]** The orchestrator model (B6) is not priced here. Its cost depends on the model and the number of turns. SP-19 measures tokens per turn.
 
 | USD per user per month | Light | Typical | Heavy |
 |---|---|---|---|
@@ -1891,7 +1893,7 @@ Binding change B2 removes Lakebase from the MVP prerequisites. Lakebase items ar
 | **MVP total from 2027-02-01 (no Lakebase, no agent model)** | **≈ 2** | **≈ 21** | **≈ 108** |
 | v1 Lakebase sync, add (promo / list) | 0.26 / 0.49 | 1.41 / 2.79 | 5.87 / 11.40 |
 
-Rules: never use a service principal for Genie (billed from day one) [SEC-19]. (v1) Create the Lakebase project at 0.5-2 CU; the 8-16 CU default costs about $400/month if it stays awake [MEM-02]. After 2027-01-31, Genie and cold warehouses dominate the cost, until SP-19 measures the main agent model.
+Rules: never use a service principal for Genie (billed from day one) [SEC-19]. (v1) Create the Lakebase project at 0.5-2 CU; the 8-16 CU default costs about $400/month if it stays awake [MEM-02]. After 2027-01-31, Genie and cold warehouses dominate the cost, until SP-19 measures the orchestrator model.
 
 ---
 
@@ -1909,6 +1911,7 @@ These decisions come from the user through the orchestrator. They override every
 | B3 | 19:37:39Z | **Ontology hydration through UC Pages (Beta):** Bottle detects definitions, proposes a Page, and on approval creates the user's own DRAFT Page with `POST /api/2.0/knowledge/pages` (`domain`, `display_name`, `body`, `synonyms` ≤ 50, `description`, `state:"DRAFT"`, `request_id`). Scope `knowledge`. A domain must exist (use its ID). Pages ground Genie One only. MVP: detect, review, create drafts. v1: publish request, update, conflict checks. | Section 5.8 PG-01..PG-17, F7, SC-8, ADM-15, ADM-20, ADM-21, W-19, SP-20, AT-41. |
 | B4 | 19:39:49Z | **MOG brain:** each MOG has a main agent (Claude or Codex harness; model through the Databricks AI Gateway with the user's identity, or local; cloud execution v1). `bottle-mcp` gives the agent the local tools; Genie One MCP is attached directly. The agent can never start capture, approve outbound context, publish Pages or switch workspace without a user action or approval. Dictation bypasses the agent. Actions are logged per MOG. The router becomes the agent's first step, with a cheap classifier as a fallback. | RTR-01..RTR-30 (main agent rows RTR-21a..RTR-30), R16, R17, T15, ARC-7, SEC-23, UX-41, NFR-03d, SP-19, AT-42. Amends D25 and D33 (loopback proxies keep tokens in Rust). |
 | B5 | 19:40:08Z | **Three core use cases:** UC1 dictation (local STT, cleanup on Databricks, insert into the active app; no agent, no Genie; raw-text fallback at the cleanup deadline); UC2 Q&A (main agent, local memory, Genie One MCP, progress, blurb, deep link, follow-ups); UC3 send context to Genie (preview and approval) and draft UC Pages. Meeting recording feeds UC2 and UC3 and is required for the MVP. | UC column and Section 5.0, scenarios SC-1..SC-8, flows F1-F7, insertion is M / MVP-D (MOG-06a..d, CAP-37), intent `dictation` (RTR-01b). Amends D18 and D70. |
+| B6 | 2026-11-24 | **One orchestrator model (ADR 0122):** one chat model, default `system.ai.claude-haiku-5-5`, replaces the harness-based main agent (B4), the small cleanup model and the small router model. It cleans up dictation with a 1.5 s budget and runs the Ask tool loop in Rust. The loop has two tools, `ask_genie(workspace, question)` and `submit_answer`. Every `ask_genie` call goes through the guard. Direct Genie One is the fallback. B4 stays as history. | The sections on the main agent, the harness, AgentHost, `bottle-mcp`, the router step and the cleanup model. |
 
 ### 12.0b User confirmations (2026-11-15, U1-U16)
 
@@ -1979,11 +1982,11 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D38 | Default models | Cleanup Llama 3.1 8B; router Llama 8B or Flash-Lite; writer gpt-oss-120b; judge Llama 8B; ASR Flash-Lite. **Amended by D57 (paths and names), D58 (regional fallback gpt-oss-20b; gpt-6-luna eval only), D59 (ASR residency).** | **Amended** | |
 | D39 | Auth hardening | CLI ≥ 1.17; absolute path; clean env; plaintext-storage warning; host-only tokens; tags and User-Agent; optional `--client-id` app (S); PAT profiles rejected. | Active | **Confirmed (U6)** |
 | D40 | Overlap with Genie One desktop | Proceed and differentiate. **Amended by D61** with the verified feature set. | **Amended by D61** | **Confirmed (U3)** |
-| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** | Amended by B0 | **Confirmed (U13, U14)** |
+| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** **Label superseded 2026-11-24: "experimental" (MB-10b).** | Amended by B0 | **Confirmed (U13, U14)** |
 | D42 | Telemetry | Off until an admin sets `OtlpTable`; content-free spans; content logging needs both opt-ins. | Active | |
 | D43 | Wake word | MVP and v1: idle MOG never opens the mic. v2 wake word needs a new notice, admin policy, local-only processing, no storage before the wake word. | Active | |
 | D44 | Running MOGs | Any number defined; 8 running by default; one brain window; thin views. | Active (fallback in D73) | |
-| D45 | Cost presentation | Two-period model; 150 DBU per user per month shared with Genie Code after 2027-01-31; no service principal; budget tags. | Active (refined by D84) | |
+| D45 | Cost presentation | Two-period model; 150 DBU per user per month shared with other agent products after 2027-01-31; no service principal; budget tags. | Active (refined by D84) | |
 | D46 | Thumbs feedback | To Genie only for `genie_agent`; local for `genie_one_mcp`. | Active | |
 | D47 | Visualisations | `genie_agent` cards may show the GA download-visualization PNG (S, v1). | Active | |
 | D48 | 409 and 429 over MCP | Classify HTTP, JSON-RPC and isError; never re-ask blindly; timeout after send = ASK_UNCERTAIN. **Amended by D56** (busy text, not 409). | **Amended** | |
@@ -2701,7 +2704,7 @@ CREATE INDEX consent_expiry ON consent_record (expires_at);
 
 ## Appendix B: Data-egress matrix
 
-Destinations: **Local** (encrypted disk, the MVP memory store), **UG** (Unity Gateway ASR/SLM, embeddings and the main agent model on the **home** profile), **Genie** (on the **target** profile), **Lakebase** (home profile, **v1 optional sync only**), **OTLP** (`/api/2.0/otel/v1/traces` on the home workspace). Values: **D** default, **O** opt-in, **N** never.
+Destinations: **Local** (encrypted disk, the MVP memory store), **UG** (Unity Gateway ASR/SLM, embeddings and the orchestrator model on the **home** profile), **Genie** (on the **target** profile), **Lakebase** (home profile, **v1 optional sync only**), **OTLP** (`/api/2.0/otel/v1/traces` on the home workspace). Values: **D** default, **O** opt-in, **N** never.
 
 | Data | Local | UG ASR/SLM | Genie | Lakebase | OTLP |
 |---|---|---|---|---|---|
@@ -2709,7 +2712,7 @@ Destinations: **Local** (encrypted disk, the MVP memory store), **UG** (Unity Ga
 | Raw transcript | D (encrypted, kept until Wipe, U9) | D (input to cleanup on PTT) | N | O (`TranscriptSyncAllowed`, off) | N (content logging needs user + admin opt-in) |
 | Cleaned utterance | D | D (router, writer, embeddings) | Only as a Genie question | O (same switch) | N |
 | Context preamble | D (with the exchange) | N (built by code) | O per MOG: ≤ 800 chars, ≤ 5 items, scrubbed, same workspace; cross-workspace needs the flag (MDM can forbid) | Item IDs only | N (length only) |
-| Genie question | D | D (router step and main agent model see it) | Only after a PTT preview or a chip click; never automatically (B1) | Home: question text + hash; non-home: hash only | N |
+| Genie question | D | D (router step and orchestrator model see it) | Only after a PTT preview or a chip click; never automatically (B1) | Home: question text + hash; non-home: hash only | N |
 | Genie answer | D (full, kept until Wipe, U9) | D (writer distils it) | Comes from Genie | Home: summary ≤ 600 chars + key numbers + pointer; non-home: pointer only; O full with MDM | N |
 | Memory item | D (the MVP store) | D (embedding, recall judge, main agent through `memory.recall`) | Only through the O preamble after a preview approval | O (v1 sync) | N |
 | Dictation text (UC1) | D (history kept until Wipe, U9) | D (cleanup) | N | N | N |

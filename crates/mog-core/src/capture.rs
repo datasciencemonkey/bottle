@@ -275,6 +275,12 @@ pub trait CaptureEvents: Send + Sync {
     fn state(&self, state: &CaptureState);
     /// A lease stopped.
     fn stopped(&self, stopped: &Stopped);
+    /// A PTT overlay was granted on top of a session lease (a directed segment, ADR 0118).
+    /// `capture.state` keeps showing the session lease then, so this internal hook is the one
+    /// way a buffer learns the overlay's own lease. It is no contract field. It has no default
+    /// body: a wrapper that does not forward it would hide the lease from the buffers behind
+    /// it. It runs before the `capture.state` event of the same change.
+    fn overlay_granted(&self, lease: &Lease);
 }
 
 /// A `capture_start` request.
@@ -462,6 +468,7 @@ const DEVICE_LOST: DeviceError = DeviceError {
 enum Ev {
     State(CaptureState),
     Stopped(Stopped),
+    Overlay(Lease),
 }
 
 #[derive(Default)]
@@ -879,6 +886,7 @@ impl CaptureCore {
             match ev {
                 Ev::State(s) => self.events.state(&s),
                 Ev::Stopped(s) => self.events.stopped(&s),
+                Ev::Overlay(l) => self.events.overlay_granted(&l),
             }
         }
     }
@@ -1230,7 +1238,16 @@ impl CaptureService for CaptureCore {
                 }
             }
             match (overlay, inner.primary.is_some()) {
-                (true, true) => inner.overlay = Some(rec),
+                (true, true) => {
+                    if inner
+                        .primary
+                        .as_ref()
+                        .is_some_and(|p| p.mode == CaptureMode::Session)
+                    {
+                        evs.push(Ev::Overlay(lease.clone()));
+                    }
+                    inner.overlay = Some(rec);
+                }
                 (_, false) => inner.primary = Some(rec),
                 // Not reachable: one start at a time, and leases only go away meanwhile.
                 (false, true) => return Err(CaptureError::MicBusy),

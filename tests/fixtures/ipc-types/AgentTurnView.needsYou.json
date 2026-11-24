@@ -1,0 +1,13 @@
+{
+  "turnId": "fedcba9876543210fedcba9876543210",
+  "question": "And last year?",
+  "state": "needs_you",
+  "used": 0,
+  "budget": 10,
+  "agentWorkspace": {
+    "name": "Sales",
+    "colorVariant": "teal"
+  },
+  "calls": [],
+  "parts": []
+}

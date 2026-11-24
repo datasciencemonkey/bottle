@@ -1,7 +1,8 @@
 /**
- * About screen (#228): product name, the Labs label (MB-10a, MB-10b) and the bundled
- * THIRD_PARTY_NOTICES.md (SEC-21b, AT-37). The notices file is the one source: Vite bundles
- * its text at build time, and the view renders it as plain text.
+ * About screen (#228): product name, the experimental label (MB-10a, MB-10b), the independent
+ * open-source project notice (owner decision 2026-11-24) and the bundled THIRD_PARTY_NOTICES.md
+ * (SEC-21b, AT-37). The notices file is the one source: Vite bundles its text at build time, and
+ * the view renders it as plain text.
  */
 import { ChevronDownIcon } from 'lucide-react';
 import notices from '../../../THIRD_PARTY_NOTICES.md?raw';
@@ -16,8 +17,14 @@ export function About() {
   return (
     <section data-view="about" aria-labelledby="about-title" className="hub-section">
       <h2 id="about-title">About Bottle</h2>
-      <p data-label="labs" className="hub-muted">
-        Databricks Labs / experimental
+      <p data-label="experimental" className="hub-muted">
+        experimental
+      </p>
+      <p data-label="independent" className="hub-muted">
+        Bottle is an independent open-source project and is not an official Databricks product.
+      </p>
+      <p data-label="trademarks" className="hub-muted">
+        Databricks, Databricks Genie and Unity Catalog are trademarks of Databricks, Inc.
       </p>
       {/* SEC-21b: the full notices, one click away (ui-1: a Collapsible row, same as
           DataDisclosures). forceMount keeps the <pre> in the DOM while collapsed (AT-37). One

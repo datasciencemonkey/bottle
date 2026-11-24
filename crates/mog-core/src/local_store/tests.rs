@@ -1357,6 +1357,8 @@ fn mem_08a_local_mirror_has_every_appendix_a_column() {
                 "row_hlc",
                 "origin_device_id",
                 "server_seq",
+                // Local only (migration 0004, ADR 0122): the [n] citations of an agent turn row.
+                "citations",
             ],
         ),
         (
@@ -1603,6 +1605,7 @@ fn mem_35a_migration_0002_applies_to_a_store_that_has_0001_and_data() {
              DROP TRIGGER utterance_session_mog_bu;
              DROP TRIGGER session_mog_with_utterances_bu;
              DROP TRIGGER session_mog_with_utterances_bi;
+             ALTER TABLE genie_exchange DROP COLUMN citations;
              DELETE FROM schema_migrations WHERE version >= 2;",
         )
     })
@@ -1873,9 +1876,37 @@ mod migration_0003 {
     }
 
     #[test]
+    fn mem_35a_0004_keeps_every_exchange_and_gives_it_no_citations() {
+        let mut c = store_at_0002();
+        c.execute(
+            "INSERT INTO genie_exchange (exchange_id, request_id, mog_id, backend_kind, \
+             profile_name, workspace_host, is_home_workspace, question_sent_sha256, status, \
+             final_answer_md, asked_at, row_hlc, origin_device_id) VALUES ('e1', 'r1', ?1, \
+             'genie_agent', 'p', 'h', 1, '', 'completed', 'Top [1].', 1, 1, 'd')",
+            [MOG_A],
+        )
+        .unwrap();
+        super::super::migrate::run(&mut c).unwrap();
+        assert_eq!(
+            s(
+                &c,
+                "SELECT final_answer_md || ' ' || citations FROM genie_exchange"
+            ),
+            "Top [1]. []"
+        );
+        // The column takes only JSON.
+        assert!(c
+            .execute("UPDATE genie_exchange SET citations = 'not json'", [])
+            .is_err());
+    }
+
+    #[test]
     fn mem_35a_0003_keeps_every_row_and_its_text() {
         let c = migrated();
-        assert_eq!(q(&c, "SELECT max(version) FROM schema_migrations"), 3);
+        assert_eq!(
+            q(&c, "SELECT max(version) FROM schema_migrations"),
+            super::super::migrate::latest_version()
+        );
         assert_eq!(
             q(&c, "SELECT count(*) FROM memory_item"),
             ITEMS.len() as i64

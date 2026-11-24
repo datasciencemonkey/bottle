@@ -115,6 +115,8 @@ export const COMMANDS = {
   recording_list: BH,
   recording_detail: BH,
   recording_retry: BH,
+  /** Delete a recording that is only on this Mac (failed upload). Local files only. */
+  recording_delete: BH,
   /** Rust builds the Catalog Explorer URL from the profile host and opens it. */
   recording_open: BH,
   /** The "Allow System Audio Recording" fix-it: Rust opens the OS privacy pane. */
@@ -137,6 +139,16 @@ export const COMMANDS = {
   workspace_set_available: B,
   workspace_make_home: B,
   workspace_settings_write: B,
+  // ADR 0122: the orchestrator model and the ask loop. All brain-only: the hub uses
+  // `view_emit` only (ARC-4).
+  orchestrator_models: B,
+  orchestrator_status: B,
+  agent_turn_submit: B,
+  agent_turn_stop: B,
+  agent_turn_call: B,
+  agent_turn_result: B,
+  agent_session_state: B,
+  agent_session_end: B,
 } as const satisfies Record<string, Spec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -200,6 +212,10 @@ export const EVENTS = {
   'recording.state': { name: 'recording:state', direction: 'core_to_brain' },
   /** Not in 4.5 (ADR 0103): one job status changed. Payload: `RecordingSummary`. */
   'recording.job': { name: 'recording:job', direction: 'core_to_brain' },
+  /** The one agent session started or ended. Payload: `AgentSessionEvent`, content-free. */
+  'agent.session': { name: 'agent:session', direction: 'core_to_brain' },
+  /** Slice 2a: one agent turn moved. Payload: `AgentTurnEvent`, content-free. */
+  'agent.turn': { name: 'agent:turn', direction: 'core_to_brain' },
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS]['name'];
@@ -350,7 +366,7 @@ export interface CommandArgs {
     language?: string;
     tags: Tags;
   };
-  insert_text: { mogId: MogId; text: string };
+  insert_text: { mogId: MogId; text: string; leaseId: LeaseId };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
   agent_stop: MogArgs;
   agent_send: { mogId: MogId; turn: JsonObject };
@@ -433,6 +449,7 @@ export interface CommandArgs {
   recording_list: { profile: ProfileName };
   recording_detail: { profile: ProfileName; id: RecordingId };
   recording_retry: { profile: ProfileName; id: RecordingId };
+  recording_delete: { profile: ProfileName; id: RecordingId };
   recording_open: {
     profile: ProfileName;
     id: RecordingId;
@@ -456,8 +473,38 @@ export interface CommandArgs {
   workspace_settings_write: {
     crossWorkspaceData?: boolean;
     genieCallBudget?: GenieCallBudget;
+    /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Anything else is refused. */
     agentEndpoint?: string;
+    /** ADR 0122: "Clean up dictation". A bool only. */
+    cleanDictation?: boolean;
+    /** ADR 0123: "Dictation engine: Databricks". A bool only. */
+    cloudDictation?: boolean;
   };
+  /** ADR 0122: always the home profile. Bottle never picks one. */
+  orchestrator_models: NoArgs;
+  /** ADR 0122: `recheck` clears the cached state. */
+  orchestrator_status: { recheck?: boolean };
+  /**
+   * Needs the talk-key latch or an Ask ticket. Starts a session if none is open. `question` is
+   * 1 to 1,000 Unicode code points (the minimum is checked after trimming white space), `opId`
+   * 1 to 64 and `actionTicket` 1 to 36. Refusals: invalid_args, ask_not_approved,
+   * agent_queue_full, agent_rate_limited, agent_session_unavailable,
+   * agent_profile_unsupported, agent_signed_out, agent_not_eligible.
+   */
+  agent_turn_submit: {
+    mogId: MogId;
+    opId: string;
+    question: string;
+    mode?: 'ask' | 'follow_up';
+    actionTicket?: string;
+  };
+  /** A live turn: interrupt and cancel its calls. A queued turn: remove it. */
+  agent_turn_stop: { turnId: string };
+  agent_turn_call: { turnId: string; callId: string };
+  agent_turn_result: { turnId: string };
+  agent_session_state: NoArgs;
+  /** The New session button. Rust ends the session itself on quit, Wipe and a setting change. */
+  agent_session_end: { reason: 'new_session' };
 }
 
 // ---------- workspaces (ADR 0117) ----------
@@ -474,12 +521,17 @@ export interface WorkspaceRow {
   isHome: boolean;
   signIn: WorkspaceSignIn;
 }
-/** D1, the SEC-28b admin lock, D2 and the D9 agent endpoint. */
+/** D1, the SEC-28b admin lock, D2, the D9 orchestrator model and "Clean up dictation". */
 export interface AgentSettings {
   crossWorkspaceData: boolean;
   crossWorkspaceLocked: boolean;
   genieCallBudget: GenieCallBudget;
+  /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default `system.ai.claude-haiku-5-5`. */
   endpoint: string;
+  /** ADR 0122: "Clean up dictation". Default true. */
+  cleanDictation: boolean;
+  /** ADR 0123: "Dictation engine: Databricks". Default false (on this Mac). */
+  cloudDictation: boolean;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -487,6 +539,213 @@ export interface WorkspaceList {
   lampMogId: MogId | null;
   workspaces: WorkspaceRow[];
   agent: AgentSettings;
+}
+
+// ---------- the orchestrator model (ADR 0122; Rust mirror in `mog_core::types`) ----------
+
+/** One chat model the home AI Gateway serves. `id` is a `system.ai.<name>` id. */
+export interface OrchestratorModelInfo {
+  id: string;
+  label: string;
+  /** There is an eval record for the model (NFR-22a). */
+  tested: boolean;
+  /** The model supports tool calls. */
+  tools: boolean;
+}
+/** The `orchestrator_models` reply. */
+export interface OrchestratorModels {
+  models: OrchestratorModelInfo[];
+  selected: string;
+  defaultModel: string;
+}
+export type OrchestratorState = 'ready' | 'no_home' | 'signed_out' | 'no_model' | 'unreachable';
+/** The `orchestrator_status` reply. Content-free. */
+export interface OrchestratorStatus {
+  state: OrchestratorState;
+  model: string;
+}
+
+// ---------- the ask loop (ADR 0122; Rust mirror in `mog_core::types`) ----------
+
+/** One workspace in the catalog of a session. */
+export interface AgentWorkspace {
+  /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
+  workspaceId: string;
+  profile: ProfileName;
+  name: string;
+  isHome: boolean;
+  isAgentWorkspace: boolean;
+}
+export interface AgentTurnAccepted {
+  turnId: string;
+  sessionId: string;
+  /** 0 is the live turn. */
+  position: number;
+  newSession: boolean;
+  budget: GenieCallBudget;
+  crossWorkspace: boolean;
+  catalog: AgentWorkspace[];
+}
+
+export type AgentCallState =
+  'queued' | 'asking' | 'answered' | 'no_answer' | 'failed' | 'timeout' | 'signed_out' | 'stopped';
+/** One Genie call of a turn: the question and the reply, for the card and the history. */
+export interface AgentTurnCall {
+  callId: string;
+  turnId: string;
+  workspaceId: string;
+  profile: ProfileName;
+  question: string;
+  state: AgentCallState;
+  reply?: CommandReturns['mcp_call'];
+  withheld?: 'injection_suspected';
+}
+export interface AgentTurnResult {
+  answer?: string;
+  answerKind: 'note' | 'combined' | 'hidden';
+  sources: { workspaceId: string; callId: string; turnId: string }[];
+  usage?: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+  };
+}
+
+export type AgentSessionEndReason =
+  | 'new_session'
+  | 'quit'
+  | 'wipe'
+  | 'profile_changed'
+  | 'd1_changed'
+  | 'catalog_changed'
+  | 'tainted'
+  | 'idle';
+export interface AgentSessionState {
+  state: 'none' | 'idle' | 'busy';
+  sessionId?: string;
+  startedAt?: number;
+  /** The home profile, whose AI Gateway runs the orchestrator model. */
+  agentProfile: ProfileName | null;
+  turns: number;
+  queued: number;
+  tokens: number;
+}
+
+/** `agent.session` payload (core to brain only, content-free). */
+export type AgentSessionEvent =
+  | { kind: 'started'; sessionId: string }
+  | { kind: 'ended'; sessionId: string; reason: AgentSessionEndReason };
+
+/** `agent.turn` payload (core to brain only, content-free). */
+export type AgentTurnEvent =
+  | { kind: 'queued'; turnId: string; position: number }
+  | { kind: 'started'; turnId: string }
+  | { kind: 'thinking'; turnId: string }
+  | {
+      kind: 'call';
+      turnId: string;
+      callId: string;
+      /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
+      workspaceId: string;
+      state: AgentCallState;
+      used: number;
+      budget: number;
+    }
+  | {
+      kind: 'refused';
+      turnId: string;
+      code: 'workspace_not_available' | 'budget_reached' | 'cross_workspace_off' | 'invalid_args';
+      used: number;
+    }
+  | { kind: 'slow'; turnId: string }
+  | {
+      kind: 'ended';
+      turnId: string;
+      outcome:
+        | 'answered'
+        | 'stopped'
+        | 'removed'
+        | 'timeout'
+        | 'offline'
+        | 'signed_out'
+        | 'failed'
+        | 'refusals'
+        | 'session_ended';
+      calls: number;
+      tokens?: number;
+    };
+
+// Card and hub views of an agent turn (brain to view).
+export interface AgentWsChip {
+  name: string;
+  colorVariant: string;
+}
+/** ADR 0122: one `[n]` citation in a combined summary. */
+export interface AgentCitation {
+  /**
+   * The number in the summary text, 1-based: one number for each workspace, in the order each is
+   * first cited (the brain writes the markers of the text again with these numbers).
+   */
+  n: number;
+  callId: string;
+  workspace: AgentWsChip;
+  /**
+   * The Open in Databricks link of that part. A renderer must never use `deepLink` without
+   * re-checking it at render time: `openInDatabricksUrl(deepLink, workspaceHost)`.
+   */
+  deepLink?: string;
+  /** The workspace host that `deepLink` must belong to. */
+  workspaceHost?: string;
+}
+export interface AgentCallView {
+  callId: string;
+  workspace: AgentWsChip;
+  question: string;
+  state: 'queued' | 'asking' | 'ready' | 'no_answer' | 'needs_you' | 'failed' | 'stopped';
+  startedAt?: number;
+  endedAt?: number;
+}
+export interface AgentPartView {
+  callId: string;
+  workspace: AgentWsChip;
+  sections: CardSection[];
+  fromEarlier?: boolean;
+  notShownToAgent?: boolean;
+  folded?: boolean;
+}
+export interface AgentTurnView {
+  turnId: string;
+  question: string;
+  /** `needs_you`: the turn ended `signed_out` and the question is kept (UX slice 5). */
+  state:
+    | 'queued'
+    | 'planning'
+    | 'running'
+    | 'slow'
+    | 'done'
+    | 'stopped'
+    | 'timed_out'
+    | 'offline'
+    | 'failed'
+    | 'needs_you';
+  position?: number;
+  used: number;
+  budget: number;
+  agentWorkspace: AgentWsChip;
+  calls: AgentCallView[];
+  parts: AgentPartView[];
+  summary?: {
+    md: string;
+    kind: 'note' | 'combined';
+    workspaces: AgentWsChip[];
+    /** ADR 0122: the `[n]` markers of `md`. Absent when the summary cites nothing. */
+    citations?: AgentCitation[];
+  };
+  notice?: string;
+  tokens?: number;
+  /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
+  seenAt?: number;
 }
 
 /**
@@ -593,6 +852,22 @@ export const IPC_ERROR_CODES = [
   'stt_models_dir_unavailable',
   /** `stt_model_install`: no `local-stt` feature in this build (#534, #414). */
   'stt_setup_unavailable',
+  /**
+   * `agent_turn_*` and `agent_session_*` (ADR 0122). Model-facing only, never an
+   * IPC code: budget_reached, cross_workspace_off, no_active_turn, run_stopped.
+   */
+  'ask_not_approved',
+  'agent_queue_full',
+  'agent_turn_unknown',
+  'agent_session_unavailable',
+  'agent_rate_limited',
+  'agent_profile_unsupported',
+  'agent_signed_out',
+  'agent_not_eligible',
+  'agent_offline',
+  'agent_timeout',
+  'agent_failed',
+  'agent_refusals',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -696,6 +971,11 @@ export type CardSection =
 export interface CardUpdate {
   mogId: MogId;
   blurbs: CardBlurbView[];
+  /**
+   * Slice 2a chip ids of an agent turn: `agent-stop:<turnId>`, `agent-more:<opId>` and
+   * `agent-resend:<turnId>` (the host mints an Ask ticket for the last two) and
+   * `agent-open:<turnId>` (opens the hub Agent area).
+   */
   chips: { id: string; label: string }[];
   /** Chips after the 4th (UX-20a): the view shows them in the expanded card. */
   overflowChips?: { id: string; label: string }[];
@@ -708,6 +988,8 @@ export interface CardUpdate {
   /** The domain of the Page draft in review (PG-19). */
   pageDomain?: DomainPickerView;
   pagesChecklist?: PagesChecklistView;
+  /** Slice 2a: the live agent turn in compact form, with "Open in Agent". */
+  agentTurn?: AgentTurnView;
 }
 
 /** Why a capture lease stopped (ADR 0055). Mirrors `mog_core::types::CaptureStopReason`. */
@@ -823,14 +1105,19 @@ export interface RecordingSettings {
   /** The user acknowledged the first-use consent notice. Default false. */
   consentAck: boolean;
   storage: RecordingStorage | null;
-  /** The model that transcribes the audio. Default `databricks-gemini-3-8-flash`. */
+  /** The model that transcribes the audio. Default `system.ai.gemini-3-8-flash`. */
   transcribeEndpoint: string;
-  /** The model that writes the notes. Default `databricks-claude-sonnet-5-5`. */
+  /** The model that writes the notes. Default `system.ai.claude-sonnet-5-5`. */
   notesEndpoint: string;
   /** The preset prompt. Default: the ADR 0103 prompt. */
   presetInstructions: string;
   /** The recording stops by itself after this many minutes: 5 to 120, default 60. */
   lengthMin: number;
+  /**
+   * ADR 0118: the one-time note "Your call can still hear you." was shown after the first
+   * talk-key hold during a recording. Default false.
+   */
+  heldNoteShown: boolean;
 }
 
 /** A partial `RecordingSettings`. An absent field keeps its value; no field clears to null. */
@@ -944,7 +1231,9 @@ export interface CommandReturns {
   /** Oldest first. */
   consent_records_list: { records: ConsentRecordView[] };
   stt_transcribe: Transcript;
-  insert_text: { result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' };
+  insert_text: {
+    result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' | 'target_changed';
+  };
   agent_start: { agentSessionId: string };
   agent_stop: Empty;
   agent_send: Empty;
@@ -999,6 +1288,7 @@ export interface CommandReturns {
   recording_list: RecordingSummary[];
   recording_detail: RecordingDetail;
   recording_retry: RecordingSummary;
+  recording_delete: Empty;
   recording_open: Empty;
   recording_open_system_audio_settings: Empty;
   stt_model_status: SttModelStatus;
@@ -1012,6 +1302,14 @@ export interface CommandReturns {
   workspace_set_available: WorkspaceList;
   workspace_make_home: WorkspaceList;
   workspace_settings_write: WorkspaceList;
+  orchestrator_models: OrchestratorModels;
+  orchestrator_status: OrchestratorStatus;
+  agent_turn_submit: AgentTurnAccepted;
+  agent_turn_stop: Empty;
+  agent_turn_call: AgentTurnCall;
+  agent_turn_result: AgentTurnResult;
+  agent_session_state: AgentSessionState;
+  agent_session_end: Empty;
 }
 
 /** Call a command. A refused call rejects with an `IpcError` (a code only). */

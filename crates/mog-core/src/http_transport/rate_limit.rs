@@ -125,6 +125,28 @@ pub fn acquire_within(
     budget: Duration,
     on_first_wait: &mut dyn FnMut(Duration),
 ) -> Option<Duration> {
+    acquire_within_or_stop(
+        bucket,
+        pause,
+        profile,
+        class,
+        budget,
+        on_first_wait,
+        &|| false,
+    )
+}
+
+/// [`acquire_within`] that also gives up when `should_stop` is true (checked before each ask of
+/// the bucket): the call leaves the queue and is not counted: `None`.
+pub fn acquire_within_or_stop(
+    bucket: &dyn RateBucket,
+    pause: &dyn Pause,
+    profile: &str,
+    class: CallClass,
+    budget: Duration,
+    on_first_wait: &mut dyn FnMut(Duration),
+    should_stop: &dyn Fn() -> bool,
+) -> Option<Duration> {
     let mut place = Place {
         bucket,
         profile,
@@ -132,6 +154,10 @@ pub fn acquire_within(
     };
     let mut waited = Duration::ZERO;
     loop {
+        if should_stop() {
+            // `place` leaves the queue on drop; the ticket is not spent.
+            return None;
+        }
         let wait = match &place.ticket {
             Some(t) => bucket.take(profile, t),
             None => return Some(waited),

@@ -31,7 +31,9 @@ export function workspaceList(
       crossWorkspaceData: false,
       crossWorkspaceLocked: false,
       genieCallBudget: 10,
-      endpoint: 'databricks-claude-sonnet-5-5',
+      endpoint: 'system.ai.claude-haiku-5-5',
+      cleanDictation: true,
+      cloudDictation: false,
     },
     ...over,
   };

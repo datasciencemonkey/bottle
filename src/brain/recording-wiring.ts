@@ -67,6 +67,8 @@ export interface RecSettings {
   volumePath?: string;
   /** The My Files root once the probe found it and Bottle saved it. */
   myFilesRoot?: string;
+  /** ADR 0118: the one-time note "Your call can still hear you." was shown. Never set back. */
+  heldNoteShown?: boolean;
 }
 
 /** The core recording state (`recording.state`). */
@@ -129,6 +131,8 @@ export interface RecJob {
 export interface RecordingApi {
   readSettings(): Promise<RecSettings>;
   writeSettings(next: RecSettings): Promise<RecSettings>;
+  /** ADR 0118: write only `heldNoteShown: true`. It never sends the other fields. */
+  markHeldNoteShown(): Promise<void>;
   /** The My Files root, or `null` when it does not resolve on this workspace. */
   probeStorage(): Promise<{ myFiles: string | null }>;
   createVolume(catalog: string, schema: string): Promise<{ path: string }>;
@@ -138,6 +142,8 @@ export interface RecordingApi {
   list(): Promise<RecSummary[]>;
   detail(id: string): Promise<RecDetail>;
   retry(id: string): Promise<unknown>;
+  /** Delete a recording that is only on this Mac. */
+  delete(id: string): Promise<unknown>;
   open(id: string, target?: RecordingOpenWhat): Promise<unknown>;
   /** Open the OS privacy pane for System Audio Recording. */
   openSystemAudioSettings(): Promise<unknown>;
@@ -239,6 +245,67 @@ function rowOf(r: RecSummary): RecordingRow {
   if ((r.status === 'recording' || r.status === 'uploading') && r.errorKind === 'network')
     row.waitingNetwork = true;
   return row;
+}
+
+/** The MOG side of the one-time held note (`capture-mood.ts`). */
+export interface HeldNoteMood {
+  heldNote(mogId: string): void;
+}
+
+/**
+ * ADR 0118: the first talk-key hold in a call recording shows the note "Your call can still hear
+ * you." once, and keeps `heldNoteShown` in the recording settings so it never shows again. The
+ * call app hears the user while they talk to Bottle; Bottle cannot mute the call.
+ *
+ * `held` takes a hold start. It does nothing outside a recording, or after the first note. The
+ * flag is set in memory first, so two quick holds show one note; the write that stores it runs
+ * after. A failed read leaves the flag unknown, which shows no note (fail quiet, not twice).
+ */
+export function createHeldNote(deps: {
+  api: Pick<RecordingApi, 'readSettings' | 'markHeldNoteShown' | 'state' | 'onState'>;
+  mood: HeldNoteMood;
+}): { held(mogId: string): void; off(): void } {
+  const { api, mood } = deps;
+  let recording = false;
+  let shown: boolean | undefined;
+  let reading: Promise<void> | undefined;
+  const off = api.onState((s) => {
+    recording = s.phase === 'recording';
+  });
+  void api
+    .state()
+    .then((s) => {
+      recording = recording || s.phase === 'recording';
+    })
+    .catch(() => undefined);
+  const load = (): Promise<void> =>
+    (reading ??= api
+      .readSettings()
+      .then((s) => {
+        shown ??= s.heldNoteShown === true;
+      })
+      .catch(() => {
+        reading = undefined;
+      }));
+  return {
+    held(mogId) {
+      if (!recording || shown === true) return;
+      void load().then(async () => {
+        // The recording may have ended while the settings were read.
+        if (!recording || shown !== false) return;
+        shown = true;
+        mood.heldNote(mogId);
+        try {
+          // Only this flag goes out. A full copy from a stale read could turn the recording
+          // knob back on after the user turned it off.
+          await api.markHeldNoteShown();
+        } catch {
+          // The note shows again after a restart. That is better than a lost first note.
+        }
+      });
+    },
+    off,
+  };
 }
 
 /** Wire the hub recording section, control and list. Returns the unsubscribe. */
@@ -676,6 +743,12 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
           (e: unknown) => showError(e),
         );
         break;
+      case 'recordings.delete':
+        void api.delete(a.id).then(
+          () => refreshList(),
+          (e: unknown) => showError(e),
+        );
+        break;
       case 'recordings.open':
         void (a.target ? api.open(a.id, a.target) : api.open(a.id)).catch((e: unknown) =>
           showError(e),
@@ -741,6 +814,7 @@ export function recSettingsOf(s: RecordingSettings): RecSettings {
   };
   if (s.storage?.kind === 'volume') r.volumePath = s.storage.root;
   else if (s.storage?.kind === 'my_files') r.myFilesRoot = s.storage.root;
+  if (s.heldNoteShown) r.heldNoteShown = true;
   return r;
 }
 
@@ -756,6 +830,8 @@ export function settingsPatchOf(s: RecSettings): RecordingSettingsPatch {
   };
   if (s.volumePath) p.storage = { kind: 'volume', root: s.volumePath };
   else if (s.myFilesRoot) p.storage = { kind: 'my_files', root: s.myFilesRoot };
+  // Only the held note sets it, and only to true: a stale copy must never reset it.
+  if (s.heldNoteShown) p.heldNoteShown = true;
   return p;
 }
 
@@ -774,6 +850,9 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
   };
   return {
     readSettings: async () => recSettingsOf(await call('recording_settings_read', {})),
+    markHeldNoteShown: async () => {
+      await call('recording_settings_write', { patch: { heldNoteShown: true } });
+    },
     writeSettings: async (next) =>
       recSettingsOf(await call('recording_settings_write', { patch: settingsPatchOf(next) })),
     probeStorage: async () => ({
@@ -813,6 +892,7 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
       return r;
     },
     retry: async (id) => call('recording_retry', { profile: await home(), id }),
+    delete: async (id) => call('recording_delete', { profile: await home(), id }),
     open: async (id, target = 'folder') =>
       call('recording_open', { profile: await home(), id, target }),
     openSystemAudioSettings: () => call('recording_open_system_audio_settings', {}),

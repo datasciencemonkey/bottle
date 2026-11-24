@@ -26,6 +26,7 @@ import {
   RECORDING_TEXT,
   recordingFileNames,
   rowActionOf,
+  rowCanDeleteOf,
   stampOf,
   statusLabelOf,
   type HubRecordingDetail,
@@ -273,6 +274,15 @@ function Detail({
   const error = d?.error ?? row.error;
   const open = () => sendRecording({ action: 'recordings.open', id: row.id });
   const retry = () => sendRecording({ action: 'recordings.retry', id: row.id });
+  const canDelete = rowCanDeleteOf({ ...row, status });
+  // The id the question is open for: another selection starts with no question open.
+  const [confirmId, setConfirmId] = useState<string | undefined>();
+  const confirming = confirmId === row.id;
+  const setConfirming = (on: boolean) => setConfirmId(on ? row.id : undefined);
+  const remove = () => {
+    setConfirming(false);
+    sendRecording({ action: 'recordings.delete', id: row.id });
+  };
   const action = rowActionOf(row.onDeviceOnly ? { status, onDeviceOnly: true } : { status });
   // A failed recording whose error already offers Retry shows it in the alert, once.
   const alertHasRetry = error?.action?.target === 'retry';
@@ -304,6 +314,11 @@ function Detail({
               Retry
             </button>
           )}
+          {canDelete && !confirming && (
+            <button type="button" data-recording-delete onClick={() => setConfirming(true)}>
+              Delete
+            </button>
+          )}
           {row.canOpen && status !== 'done' && (
             <button type="button" data-recording-open onClick={open}>
               Open in volume
@@ -311,6 +326,28 @@ function Detail({
           )}
         </div>
       </header>
+      {canDelete && confirming && (
+        <div
+          className="rec-confirm"
+          role="group"
+          aria-label="Delete this recording?"
+          data-recording-confirm
+        >
+          <p>Delete this recording? It is only on this Mac and cannot be recovered.</p>
+          <button
+            type="button"
+            className="rec-confirm-delete"
+            data-recording-delete-yes
+            onClick={remove}
+            autoFocus
+          >
+            Delete
+          </button>
+          <button type="button" data-recording-delete-no onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
       {status === 'done' && !row.onDeviceOnly && <FileLinks row={row} detail />}
       {row.onDeviceOnly && (
         <p className="rec-pending" data-recording-device>

@@ -7,6 +7,7 @@
 - Deviates from: CAP-07b ("never mix"), #116 (local STT for sessions) and AGENTS.md section 1
   ("Meeting recording" was out of scope)
 - Amended by: ADR 0109 (parts during capture, one transcription at the end; decisions 7, 8 and 9)
+- Amended by: ADR 0123 (the model defaults are `system.ai.gemini-3-8-flash` and `system.ai.claude-sonnet-5-5`; a saved old default id reads as the new one)
 - Refers to: ADR 0098 (the ⌥G key), ADR 0101 d7 (ask for a permission at once), ADR 0063
   (app settings), ADR 0091 (hub models outside the contract)
 
@@ -132,6 +133,9 @@ replace these rules for call recording.
   `recording_start {profile, instructions?}`, `recording_stop`, `recording_state`,
   `recording_list {profile}`,
   `recording_detail {profile, id}`, `recording_retry {profile, id}`,
+  `recording_delete {profile, id}` (local files of a never-uploaded recording only; the list
+  also hides a failed 0-part upload row with no audio on this Mac, which includes one from another
+  Mac, and its job.json stays in the volume by design),
   `recording_open {profile, id, target}`,
   `recording_open_system_audio_settings` (Rust opens the OS privacy pane for the fix-it). A MOG view
   has no recording permission: a MOG "Record" click goes through `view_emit` to the brain.

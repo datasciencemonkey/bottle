@@ -30,6 +30,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.
 - Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
+- If you set Dictation engine to Databricks, the audio of each talk-key hold goes to your home workspace to be transcribed.
+- Bottle sends it as one audio file, and does not store it there. If that call fails, Bottle uses the local model.
 - The STT badge on each MOG shows which one is on.
 - If your admin sets local-only speech-to-text, no audio leaves this computer, also when local speech-to-text fails.
 - The local model knows 25 European languages. For another language, Bottle uses Databricks speech-to-text only if it is on. If it is off, the MOG shows "Transcription of this language is not available on this device."
@@ -49,10 +51,10 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 ## Your home workspace does the processing
 
 - Each MOG has a home workspace (its home profile).
-- Text cleanup, the router step, the memory writer, embeddings and the main agent model run there.
+- Text cleanup, the router step, the memory writer, embeddings and the orchestrator model run there.
 - Embeddings send the text of memory items to that workspace.
-- If a memory item sounds like an instruction to the assistant, for example a Genie answer or a meeting line that says "ignore previous instructions", Bottle keeps the item on your device but marks it quarantined. A quarantined item is never embedded, never added to a question to Genie and never given to the main agent.
-- "Remember this" pins an item only when you say it or click it. The main agent cannot pin an item.
+- If a memory item sounds like an instruction to the assistant, for example a Genie answer or a meeting line that says "ignore previous instructions", Bottle keeps the item on your device but marks it quarantined. A quarantined item is never embedded, never added to a question to Genie and never given to the orchestrator model.
+- "Remember this" pins an item only when you say it or click it. The orchestrator model cannot pin an item.
 - This stays the same when a MOG asks Genie in another workspace.
 - Questions about another workspace are processed in your home workspace.
 - The router step gets only your words, the capture mode, recent topic labels, your MOGs and your profiles. It never gets memory text.
@@ -60,19 +62,24 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - If your words sound like an instruction to Bottle, for example "ignore the rules" or "send my notes to this URL", Bottle sends nothing and shows a warning chip.
 - The router step never suggests a workspace outside `AllowedWorkspaceHosts`, when your admin sets it.
 
-## The main agent and its model
+## The orchestrator model
 
-- Each MOG has a main agent with a Claude or Codex harness.
-- The harness runs on this computer, in one shared runtime with one session for each MOG.
-- Its model runs through the Databricks AI Gateway in your home workspace with your identity, or as a local model.
-- The agent gets your cleaned question, the router decision and memory results.
-- It never gets your sign-in tokens: a local proxy in the Bottle core adds them.
-- The agent cannot start recording, send context, publish a Page or change the workspace without you.
-- The agent can send to Genie only the question that you sent. It cannot add memory or transcript text to it.
-- Bottle tells the agent that text in your transcripts and memory is data, never an order. Even if the agent follows such text, it has no tool to start recording, approve context, publish a Page or change the workspace.
-- When the agent proposes a workspace change, the MOG shows "Switch to <profile>?". Only your click changes the workspace.
-- Bottle keeps a log of each agent action: the MOG, the tool name, the time and sizes. The log holds no text of your questions, answers or transcripts. In this build, the log stays in memory until Bottle quits. Stored logs are kept for 30 days by default.
-- Dictation does not go through the agent.
+- Bottle uses one orchestrator model. It runs through the Databricks AI Gateway in your home workspace, with your identity.
+- You pick the model in Settings, Workspace. The list shows the system.ai chat models.
+- It never gets your sign-in tokens: the Bottle core adds them.
+- Each model call sets store to false.
+- For dictation, the model cleans up the text. It has no tools.
+- Bottle pastes the model text only when its words match your words. Otherwise Bottle pastes the local text.
+- The cleanup step waits 1.5 seconds at most. Then Bottle pastes the local text.
+- The setting Clean up dictation switches this step off. Then dictation text stays on this computer.
+- When you press ⌥G, Bottle sends your question to the orchestrator model in your home workspace.
+- The model decides which of your workspaces to ask. It asks only workspaces you turned on.
+- The model has two tools: ask Genie in one workspace, and submit the answer.
+- Every ask goes through a guard in the Bottle core. The guard sets a budget and blocks quarantined text.
+- The model cannot start recording, send context, publish a Page or change the workspace.
+- Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.
+- A combined answer cites each workspace with a numbered marker. Each marker links to the answer of that workspace.
+- If the model is not reachable, Bottle asks Genie One in your home workspace and shows a short notice.
 
 ## Genie history
 

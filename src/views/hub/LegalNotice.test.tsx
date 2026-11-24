@@ -33,6 +33,8 @@ const noticeEmits = () =>
   inputEmits().filter(
     (e) =>
       (e as { payload?: { action?: unknown } }).payload?.action !== 'workspaces.ready' &&
+      (e as { payload?: { action?: unknown } }).payload?.action !== 'agent.ready' &&
+      (e as { payload?: { action?: unknown } }).payload?.action !== 'orchestrator.ready' &&
       !['cli', 'permissions', 'conversations', 'recording', 'store'].includes(
         (e as { mogId?: string }).mogId ?? '',
       ),

@@ -84,7 +84,7 @@ describe('the utterance hook of the capture lifecycle (#59, #73)', () => {
     await s.handle(captured());
     expect(s.calls).toEqual(['route', 'insert_text']);
     expect(s.routed[0]).toMatchObject({ text: SENTENCE, mogId: A });
-    expect(s.inserted).toEqual([{ mogId: A, text: SENTENCE }]);
+    expect(s.inserted).toEqual([{ mogId: A, text: SENTENCE, leaseId: 'lease-1' }]);
     // ADR 0098: the pop-up's Ask Genie fallback of the exact dictated text. T3 releases the owner.
     expect(s.asks).toHaveLength(1);
     expect(s.asks[0]).toMatchObject({
@@ -181,5 +181,40 @@ describe('a dictated question (#557, ADR 0096)', () => {
     expect(s.calls).toEqual([]);
     expect(s.inserted).toEqual([]);
     expect(s.asks).toEqual([]);
+  });
+
+  it('[AC-1.4] signals paste resolved with true after an inserted dictation', async () => {
+    const seen: boolean[] = [];
+    const s = setup(dictation, { onPasteResolved: (p) => void seen.push(p) });
+    await s.handle(captured());
+    expect(seen).toEqual([true]);
+  });
+
+  it('[AC-1.5] signals paste resolved with false for an ⌥G ask and a refused paste', async () => {
+    const seen: boolean[] = [];
+    const ask = setup(dictation, { onPasteResolved: (p) => void seen.push(p) });
+    await ask.handle(captured({ forceAsk: true }));
+    const refused = setup(dictation, {
+      onPasteResolved: (p) => void seen.push(p),
+      route: {
+        route: async () => dictation,
+        insertText: async () => ({ result: 'no_focus' }),
+      },
+    });
+    await refused.handle(captured());
+    expect(seen).toEqual([false, false]);
+  });
+
+  it('[AC-1.5] signals false when the route fails or the MOG is closed', async () => {
+    const seen: boolean[] = [];
+    const failed = setup(dictation, {
+      routerInput: async () => Promise.reject(new Error('boom')),
+      onPasteResolved: (p) => void seen.push(p),
+    });
+    await failed.handle(captured());
+    const closed = setup(dictation, { onPasteResolved: (p) => void seen.push(p) });
+    closed.open.delete(A);
+    await closed.handle(captured());
+    expect(seen).toEqual([false, false]);
   });
 });

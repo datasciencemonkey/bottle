@@ -4,6 +4,7 @@
 - Date: 2026-11-16
 - Issue: #71
 - Owner: shell-lead (implemented by impl-71)
+- Amended 2026-11-24 (owner): label is "experimental"; Bottle is independent, not Databricks Labs.
 
 ## Context
 

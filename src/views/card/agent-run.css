@@ -1,0 +1,576 @@
+/* Slice 2a: one agent turn, in the card and in the hub Agent panel (`AgentTurnCard.tsx`). Plain
+   CSS on `tokens.css` only, so the card window (no Tailwind) and the hub both load it. Every
+   colour, size, radius and curve is a token. */
+
+.agent-card {
+  /* The frame is `.genie.genie-answer` (genie-card.css): a flex column under a 280 px cap. */
+  padding-top: 26px;
+}
+
+/* The one part of the card that gives up height: it scrolls, and a keyboard user can reach it. */
+.agent-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+}
+
+.agent-card-body:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.agent-card-foot {
+  flex: none;
+  padding-top: var(--mog-space-2);
+}
+
+/* The turns that wait sit as compact rows under the live one. */
+.agent-queued {
+  flex: none;
+  margin: var(--mog-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-queued-row {
+  display: flex;
+  align-items: center;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  padding: var(--mog-space-1) 0;
+  font-size: var(--mog-text-xs);
+}
+
+.agent-queued-row .agent-x {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  font-size: var(--mog-text-md);
+}
+
+.agent-queued-copy {
+  margin: var(--mog-space-2) 0 0;
+}
+
+.agent-queued-row .agent-waiting-q {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agent-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  color: var(--mog-text);
+  font-size: var(--mog-text-sm);
+  line-height: var(--mog-leading);
+}
+
+.agent-question {
+  margin: 0;
+  font-weight: var(--mog-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mog-space-2);
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-pill {
+  padding: 1px var(--mog-space-3);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-text);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-slow {
+  color: var(--mog-text);
+  font-weight: var(--mog-weight-medium);
+}
+
+.agent-notice {
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+/* The workspace colour is lifted toward white so it keeps 3:1 on the raised surface. */
+.agent-call,
+.agent-part,
+.agent-chip {
+  --agent-ws-stripe: color-mix(in srgb, var(--agent-ws-color) 65%, white);
+}
+
+/* One row for each Genie call: a stripe in the colour of its workspace, the chip, the question on
+   one line and the state. */
+.agent-calls,
+.agent-parts,
+.agent-keys {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-1);
+}
+
+.agent-call {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--mog-space-2);
+  padding: var(--mog-space-1) var(--mog-space-2);
+  border-left: 3px solid var(--agent-ws-stripe, var(--mog-edge));
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+}
+
+.agent-call-question {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-call-state {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Needs you is the one amber state (UX proposal 2.1): it asks the user for something. The gold
+   spark token is amber. */
+.agent-call[data-state='needs_you'] {
+  border-left-color: var(--mog-spark);
+  background: rgb(246 196 99 / 10%);
+}
+
+.agent-call[data-state='needs_you'] .agent-call-state {
+  color: var(--mog-spark);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-turn[data-state='needs_you'] .agent-headline {
+  color: var(--mog-spark);
+}
+
+.agent-call[data-state='failed'] .agent-call-state,
+.agent-call[data-state='no_answer'] .agent-call-state,
+.agent-call[data-state='stopped'] .agent-call-state {
+  color: var(--mog-text-muted);
+}
+
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-chip-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--agent-ws-stripe, var(--mog-text-muted));
+}
+
+/* The answer of the MOG: the main answer of a turn, in the answer colours, not a muted note. */
+.agent-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  font-size: var(--mog-text-sm);
+}
+
+.agent-summary .agent-part-body {
+  align-self: stretch;
+}
+
+.agent-note-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mog-space-1) var(--mog-space-3);
+  margin: 0;
+}
+
+.agent-part-body p,
+.agent-part-body ul,
+.agent-part-body ol,
+.agent-part-body pre {
+  margin: 0 0 6px;
+}
+
+.agent-part-body > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-part-body ul,
+.agent-part-body ol {
+  padding-left: 18px;
+}
+
+.agent-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-3);
+}
+
+.agent-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-1);
+  min-width: 0;
+  padding-left: var(--mog-space-3);
+  border-left: 3px solid var(--agent-ws-stripe, var(--mog-edge));
+}
+
+.agent-part-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mog-space-2);
+}
+
+.agent-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  padding: 1px var(--mog-space-2);
+  border: 1px solid var(--mog-control-border);
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-part-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* "Answer from <workspace>": the heading of an answer that comes first. */
+.agent-part-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-2);
+  margin: 0;
+  font-size: var(--mog-text-sm);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mog-space-3);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-fold,
+.agent-databricks,
+.agent-x {
+  align-self: flex-start;
+  appearance: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mog-text-muted);
+  font: inherit;
+  font-size: var(--mog-text-sm);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  cursor: pointer;
+}
+
+/* A 24px hit area for each control; the negative margin keeps the height of the layout. */
+.agent-x {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.agent-fold,
+.agent-databricks {
+  min-height: 24px;
+  padding-block: 4px;
+  margin-block: -4px;
+}
+
+/* "Open Genie One in <workspace>": one small link for each workspace the turn asked. */
+.agent-genie-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.agent-fold:hover,
+.agent-databricks:hover,
+.agent-x:hover {
+  color: var(--mog-text);
+  text-decoration-color: currentColor;
+}
+
+.agent-fold:focus-visible,
+.agent-databricks:focus-visible,
+.agent-x:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.agent-parts[hidden] {
+  display: none;
+}
+
+/* The toggle of the answers in Conversations: a chevron, and room above and below. */
+.agent-fold--chevron {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  /* The 4px cancels the -4px margin-block of the 24px hit area (.agent-fold). */
+  margin-bottom: calc(var(--mog-space-2) - 4px);
+}
+
+.agent-fold--chevron svg {
+  transition: transform 120ms var(--mog-ease-out);
+}
+
+.agent-fold-chevron--open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-fold--chevron svg {
+    transition: none;
+  }
+}
+
+.conv-exchange .agent-summary + .agent-fold,
+.conv-exchange .agent-summary + .agent-parts {
+  margin-top: var(--mog-space-3);
+}
+
+.agent-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mog-space-2) var(--mog-space-4);
+  margin-top: var(--mog-space-1);
+}
+
+.agent-foot-text {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-4);
+  margin-left: auto;
+}
+
+/* It breathes while it plans or runs, so it never looks stuck (the same 2 s as the direct pill). */
+@keyframes agent-breathe {
+  from {
+    opacity: 0.45;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.agent-turn:is([data-state='planning'], [data-state='running'], [data-state='slow'])
+  .agent-headline::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mog-eye);
+  animation: agent-breathe 2s ease-in-out infinite alternate;
+}
+
+.agent-call[data-state='asking'] .agent-chip-dot {
+  animation: agent-breathe 2s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The same selectors as the rules above: a weaker one would lose on specificity. */
+  .agent-turn:is([data-state='planning'], [data-state='running'], [data-state='slow'])
+    .agent-headline::before,
+  .agent-call[data-state='asking'] .agent-chip-dot {
+    animation: none;
+  }
+}
+
+/* The agent thread in Conversations (`AgentThread.tsx`). */
+.agent-sub {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mog-space-3);
+  margin-bottom: var(--mog-space-4);
+}
+
+.agent-session-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--mog-space-2);
+}
+
+.agent-session {
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-sm);
+}
+
+.agent-session:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+/* A wide table in an answer scrolls sideways inside its part. */
+.agent-part-body .md-table-block {
+  overflow-x: auto;
+}
+
+/* ADR 0122: the marker [n] of a combined answer, and the chips that reach a workspace answer.
+   The chip is small, but its hit area is 24px square (an invisible pseudo-element). */
+.agent-cite {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
+  height: 1.5em;
+  /* 2 x 4px between two chips: their 24px hit areas (7.5px beyond each chip) do not overlap. */
+  margin: 0 4px;
+  padding: 0 var(--mog-space-1);
+  border: 1px solid var(--agent-ws-stripe, var(--mog-edge));
+  border-radius: var(--mog-radius-pill);
+  background: color-mix(in srgb, var(--agent-ws-color, transparent) 18%, transparent);
+  color: var(--mog-text);
+  font: inherit;
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+  line-height: 1;
+  vertical-align: super;
+  cursor: pointer;
+}
+
+.agent-cite::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+}
+
+.agent-chip--button {
+  min-height: 24px;
+  padding: 0 var(--mog-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--mog-radius-pill);
+  background: none;
+  cursor: pointer;
+}
+
+.agent-cite,
+.agent-chip--button {
+  --agent-ws-stripe: color-mix(in srgb, var(--agent-ws-color) 65%, white);
+}
+
+.agent-cite:hover,
+.agent-chip--button:hover {
+  background: color-mix(in srgb, var(--agent-ws-color, transparent) 30%, transparent);
+}
+
+.agent-cite:focus-visible,
+.agent-chip--button:focus-visible {
+  outline: none;
+  box-shadow: var(--mog-focus-ring);
+}
+
+/* The part that a citation reached: a short highlight that fades out. */
+/* The value of data-flash is the parity of the click count: a repeat click changes the animation
+   name, so the highlight starts again. */
+.agent-part[data-flash='0'] {
+  animation: agent-part-flash-a 1.6s ease-out;
+}
+
+.agent-part[data-flash='1'] {
+  animation: agent-part-flash-b 1.6s ease-out;
+}
+
+.agent-part:focus {
+  outline: none;
+}
+
+@keyframes agent-part-flash-a {
+  from {
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@keyframes agent-part-flash-b {
+  from {
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: the highlight shows still for the same time. */
+  .agent-part[data-flash] {
+    animation: none;
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+}

@@ -10,7 +10,7 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { EllipsisIcon, Loader2Icon } from 'lucide-react';
+import { EllipsisIcon, Loader2Icon, RefreshCwIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import {
@@ -22,6 +22,7 @@ import {
   type HubWorkspaceRow,
   type WorkspaceAction,
 } from '../../shared/hub-workspaces';
+import { SIGN_IN_NOT_BROWSER, SIGN_IN_WAITING, signInCommand } from '../../shared/sign-in-text';
 import { Button } from '../ui/button';
 import {
   DropdownMenu,
@@ -31,9 +32,12 @@ import {
 } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../ui/utils';
 import { DomainPicker } from '../DomainPicker';
 import { askBrain, emitView, type MogViewState } from '../view-ipc';
+import type { HubOrchestratorView } from '../../shared/hub-orchestrator';
+import { AgentSettings } from './AgentSettings';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { SettingsGroup } from './SettingsGroup';
 import { ColorDot, WorkspaceColor } from './WorkspaceColor';
@@ -210,9 +214,54 @@ function RenameForm({ row, onDone }: { row: HubWorkspaceRow; onDone: () => void 
   );
 }
 
+/** The CLI command of an expired row, with a Copy button: the way out when the browser sign-in fails. */
+function SignInCommand({ profile }: { profile: string }) {
+  const [copied, setCopied] = useState<'yes' | 'no' | undefined>(undefined);
+  const command = signInCommand(profile);
+  return (
+    <span
+      data-sign-in-command
+      className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+    >
+      <span>Or run in Terminal:</span>
+      <code className="select-all truncate">{command}</code>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-copy-command
+        aria-label={`Copy the sign-in command for ${profile}`}
+        onClick={() => {
+          navigator.clipboard
+            .writeText(command)
+            .then(() => setCopied('yes'))
+            .catch(() => setCopied('no'));
+        }}
+      >
+        Copy
+      </Button>
+      <span role="status" data-copy-status>
+        {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Could not copy. Select the command.' : ''}
+      </span>
+    </span>
+  );
+}
+
 type Panel = 'rename' | 'colour' | 'confirm' | undefined;
 
-function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
+function WorkspaceRow({
+  row,
+  busy,
+  waiting,
+  noCommand,
+}: {
+  row: HubWorkspaceRow;
+  busy: boolean;
+  /** The brain waits for the browser sign-in of this row. */
+  waiting: boolean;
+  /** The brain said Bottle cannot sign this workspace in again: no CLI command to copy. */
+  noCommand: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>(undefined);
   const reduce = useReducedMotion();
   const li = useRef<HTMLLIElement>(null);
@@ -258,9 +307,19 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
       aria-busy={busy}
       className="px-[var(--mog-space-4)] py-[var(--mog-space-3)]"
     >
-      <div className="flex items-center gap-[var(--mog-space-3)]">
+      {/* One line when it fits. Else the controls wrap, as one right-aligned group, to a line of
+          their own under the name and host (owner review 2026-11-24): shrink-0 controls beside
+          a squeezed text column cut the host to "…", pushed its status to a second line, and
+          ran past the card's edge in a narrow window. The text column never goes under 15rem. */}
+      <div
+        data-workspace-row-line
+        className="flex flex-wrap items-center gap-x-[var(--mog-space-3)] gap-y-[var(--mog-space-2)]"
+      >
         <ColorDot colorVariant={row.colorVariant} profile={row.profile} />
-        <div className="flex min-w-0 flex-1 flex-col gap-[var(--mog-space-1)]">
+        <div
+          data-workspace-text
+          className="flex min-w-0 flex-[1_1_15rem] flex-col gap-[var(--mog-space-1)]"
+        >
           {panel === 'rename' ? (
             <RenameForm row={row} onDone={() => closeTo(menuBtn)} />
           ) : (
@@ -284,29 +343,40 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
               )}
             </span>
           )}
-          <span className="flex min-w-0 flex-wrap items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
+          {/* The host gives way (an ellipsis, the whole host as a tooltip); "· status" never
+              wraps away from it. */}
+          <span className="flex min-w-0 items-center gap-x-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
             {row.host !== '' && (
               <>
-                <span data-workspace-host className="truncate">
+                <span data-workspace-host className="min-w-0 truncate" title={row.host}>
                   {row.host}
                 </span>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="shrink-0">
+                  ·
+                </span>
               </>
             )}
             <span
               data-workspace-status={row.signIn}
-              className={row.signIn === 'expired' ? 'text-foreground' : undefined}
+              className={cn(
+                'shrink-0 whitespace-nowrap',
+                row.signIn === 'expired' && 'text-foreground',
+              )}
             >
               {STATUS_TEXT[row.signIn]}
             </span>
           </span>
+          {row.signIn === 'expired' && !noCommand && <SignInCommand profile={row.profile} />}
           {reason !== undefined && (
             <span data-workspace-reason className="text-[var(--mog-text-xs)] text-muted-foreground">
               {reason}
             </span>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-[var(--mog-space-2)]">
+        <div
+          data-workspace-controls
+          className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-[var(--mog-space-2)]"
+        >
           {busy && (
             <span role="status" aria-label={`Working on ${row.name}`} data-busy-spinner>
               <Loader2Icon
@@ -314,6 +384,18 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
                 aria-hidden="true"
               />
             </span>
+          )}
+          {busy && waiting && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Cancel sign-in to ${row.name}`}
+              data-cancel-sign-in
+              onClick={() => send({ action: 'workspace.sign_in_cancel', profile: row.profile })}
+            >
+              Cancel
+            </Button>
           )}
           {row.signIn === 'expired' && (
             <Button
@@ -345,7 +427,7 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
           )}
           <span
             data-availability
-            className="flex items-center gap-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground"
+            className="flex items-center gap-[var(--mog-space-2)] whitespace-nowrap text-[var(--mog-text-xs)] text-muted-foreground"
           >
             {row.isHome ? (
               <span>Always on</span>
@@ -450,8 +532,14 @@ export function WorkspaceSettings({
   list,
   homeDomains = [],
   onChoose,
+  agentBusy = false,
+  orchestrator,
 }: {
   list: HubWorkspaceList | undefined;
+  /** A turn of the agent runs, so a change of the combine switch applies after it. */
+  agentBusy?: boolean;
+  /** ADR 0122: the orchestrator model controls. Undefined until the brain sends them. */
+  orchestrator?: HubOrchestratorView | undefined;
   /** MOG states that carry the home domain picker (PG-18, PG-20). */
   homeDomains?: readonly MogViewState[];
   /** Reopens the home pick dialog. */
@@ -468,15 +556,41 @@ export function WorkspaceSettings({
     if (noticeKey !== '') setSeq((n) => n + 1);
   }
   const noHome = list !== undefined && list.home === null && list.rows.length > 0;
+  const refreshing = list?.refreshing === true;
+  // A row sign-in or switch change is already writing: a refresh race with it could show a list
+  // that is about to change again, so the button waits for that work to clear too.
+  const rowBusy = list?.busyProfile !== undefined;
   return (
     <section
       data-view="workspace-settings"
       aria-labelledby="workspace-settings-title"
       className="hub-section"
     >
-      <h2 id="workspace-settings-title" tabIndex={-1}>
-        Workspace
-      </h2>
+      <div className="flex items-center justify-between gap-[var(--mog-space-3)]">
+        <h2 id="workspace-settings-title" tabIndex={-1}>
+          Workspace
+        </h2>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label="Refresh workspaces"
+              disabled={list === undefined || refreshing || rowBusy}
+              data-refresh-workspaces
+              onClick={() => send({ action: 'workspace.refresh' })}
+            >
+              <RefreshCwIcon
+                className={cn('size-4', refreshing && 'animate-spin motion-reduce:animate-none')}
+                aria-hidden="true"
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh workspaces</TooltipContent>
+        </Tooltip>
+      </div>
       {/* A polite live region, always in the page, so a new info notice is read when it shows. */}
       <p
         role="status"
@@ -523,7 +637,13 @@ export function WorkspaceSettings({
         <SettingsGroup className="mt-[var(--mog-space-3)]">
           <ul aria-label="Workspaces" className="m-0 list-none divide-y divide-border/60 p-0">
             {list.rows.map((r) => (
-              <WorkspaceRow key={r.profile} row={r} busy={list.busyProfile === r.profile} />
+              <WorkspaceRow
+                key={r.profile}
+                row={r}
+                busy={list.busyProfile === r.profile}
+                waiting={list.busyProfile === r.profile && list.notice?.text === SIGN_IN_WAITING}
+                noCommand={list.notice?.text === SIGN_IN_NOT_BROWSER}
+              />
             ))}
           </ul>
         </SettingsGroup>
@@ -544,6 +664,9 @@ export function WorkspaceSettings({
       <p className="mt-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
         New workspaces start off. Turn one on to let your MOG use it.
       </p>
+      {/* ADR 0122: the orchestrator model, dictation cleanup, and how many Genie calls one
+          question may make. */}
+      <AgentSettings list={list} orchestrator={orchestrator} busy={agentBusy} />
     </section>
   );
 }

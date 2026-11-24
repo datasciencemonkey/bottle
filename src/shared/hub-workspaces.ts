@@ -48,6 +48,8 @@ export interface HubWorkspaceList {
   };
   /** A row with a sign-in or a switch change in progress: the view shows a spinner on it. */
   busyProfile?: string;
+  /** The brain re-reads every CLI profile and sign-in state ("Refresh workspaces"). */
+  refreshing?: boolean;
   notice?: { kind: 'error' | 'info'; text: string };
 }
 
@@ -58,6 +60,10 @@ export type WorkspaceAction =
   | { action: 'workspace.make_home'; profile: string; confirmed: true }
   | { action: 'workspace.pick_home'; profile: string }
   | { action: 'workspace.sign_in'; profile: string }
+  /** Stops a waiting sign-in of that row. */
+  | { action: 'workspace.sign_in_cancel'; profile: string }
+  /** "Refresh workspaces": re-read every CLI profile and sign-in state. */
+  | { action: 'workspace.refresh' }
   | { action: 'workspace.edit'; profile: string; name?: string; colorVariant?: string }
   /** Slice 1 (the agent loop) ships the control. */
   | { action: 'workspace.budget'; genieCallBudget: HubGenieCallBudget }
@@ -80,6 +86,7 @@ export function asWorkspaceAction(p: unknown): WorkspaceAction | undefined {
   const { action, profile } = p;
   switch (action) {
     case 'workspaces.ready':
+    case 'workspace.refresh':
       return { action };
     case 'workspace.set_available':
       return isProfile(profile) && isBool(p['available'])
@@ -91,6 +98,7 @@ export function asWorkspaceAction(p: unknown): WorkspaceAction | undefined {
         : undefined;
     case 'workspace.pick_home':
     case 'workspace.sign_in':
+    case 'workspace.sign_in_cancel':
       return isProfile(profile) ? { action, profile } : undefined;
     case 'workspace.edit': {
       if (!isProfile(profile)) return undefined;
@@ -165,8 +173,10 @@ export function asHubWorkspaceList(p: unknown): HubWorkspaceList | undefined {
     if (!candidates.includes(pick['suggested'])) return undefined;
     out.homePick = { suggested: pick['suggested'], candidates: candidates as string[] };
   }
-  // `busyProfile` and `notice` are hints for the view: a bad value is dropped, not fatal.
+  // `busyProfile`, `refreshing` and `notice` are hints for the view: a bad value is dropped, not
+  // fatal.
   if (isProfile(p['busyProfile'])) out.busyProfile = p['busyProfile'];
+  if (p['refreshing'] === true) out.refreshing = true;
   const n = p['notice'];
   if (isObj(n) && (n['kind'] === 'error' || n['kind'] === 'info') && isStr(n['text'])) {
     out.notice = { kind: n['kind'], text: n['text'] };

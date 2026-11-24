@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PIN_ENABLED } from '../../shared/feature-flags';
+import { asAgentTurnView } from '../../shared/hub-agent';
 import { isGenieBlurbId } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -16,11 +17,27 @@ import {
   type CardSection,
   type CardUpdate,
 } from '../view-ipc';
-import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
+import {
+  applyCardSide,
+  createWindowFit,
+  tauriCardWindow,
+  watchCardSide,
+  widthMayChangeIn,
+} from './fit-window';
+import { AgentTurnCard } from './AgentTurnCard';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 import { useMemorySaved } from './memory-saved';
 import { NO_LINKS, SafeMarkdown } from './safe-markdown';
+
+/**
+ * The chips of the agent card: the turn's own (Stop or Remove, Open Settings, Open in Conversations) and
+ * the waiting turns. A chip of an older direct answer never shows here (M5).
+ */
+const isAgentCardChip = (c: { id: string }) =>
+  ['agent-stop:', 'agent-open:', 'agent-settings:', 'agent-queued:'].some((p) =>
+    c.id.startsWith(p),
+  );
 
 /** The MOG ID of the debug demo card (`DEMO_ID` in `src-tauri/src/lib.rs`). */
 const DEMO_ID = 'demo';
@@ -217,20 +234,47 @@ export function CardView({ mogId }: { mogId: MogId }) {
   // happened, the sections it left behind are orphaned: never treat them as the panel's answer
   // (no clamp, no close, no fade, no refit on that path), so the card never falls back to a raw,
   // unbounded legacy panel for a Genie answer with no Genie blurb backing it any more.
-  const liveGenieBlurbId = card?.blurbs.find((b) => isGenieBlurbId(b.id))?.id;
+  const liveGenieBlurb = card?.blurbs.find((b) => isGenieBlurbId(b.id));
+  const liveGenieBlurbId = liveGenieBlurb?.id;
+  // The sections never count as an answer while the live Genie blurb still works. A pill that
+  // says "Answer ready" in a talk-key hold already has the sections (the link reads the deep
+  // link from them), but no answer shows before the key-up (UX slice 1, the arrival gate).
   const hasAnswer =
-    liveGenieBlurbId !== undefined &&
+    liveGenieBlurb?.completed === true &&
     (card?.sections !== undefined || card?.answerMd !== undefined);
   const panel =
     card !== undefined &&
     (hasAnswer || card.pageDomain !== undefined || card.pagesChecklist !== undefined);
   const newest = card?.blurbs[0];
+  // Slice 2a: a payload that does not pass the shape check shows no agent card.
+  const agentTurn = card?.agentTurn ? asAgentTurnView(card.agentTurn) : undefined;
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
+  // The user closed the working or ready pill (×). It stays out of sight until its request ends
+  // (the answer then shows as a normal card), and a pop-up under it stays.
+  const [closedPill, setClosedPill] = useState<string | undefined>(undefined);
+  const livePending = useMemo(
+    () => card?.blurbs.find((b) => isGenieBlurbId(b.id) && !b.completed),
+    [card],
+  );
+  const pillClosed = livePending !== undefined && livePending.id === closedPill;
+  const pending = pillClosed ? undefined : livePending;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
-  const genie = card !== undefined && isGenieBlurbId(newest?.id);
+  const genie = card !== undefined && isGenieBlurbId(newest?.id) && !pillClosed;
+  // UX slice 1: a pending Genie pill stays when a newer pop-up (a dictation) comes. The pill is
+  // on top and the pop-up under it, in the one card window. A closed stacked pop-up leaves the pill.
+  const [closedPopup, setClosedPopup] = useState<string | undefined>(undefined);
+  const pillCard = useMemo(
+    () =>
+      card && pending && !genie
+        ? { ...card, blurbs: [pending, ...card.blurbs.filter((b) => b !== pending)] }
+        : card,
+    [card, pending, genie],
+  );
   // lamp-alive: the card sits close to its MOG on either side; `data-side` on the page mirrors
   // the tail (card.css) toward the MOG.
   const fit = useMemo(() => createWindowFit(tauriCardWindow, { onSide: applyCardSide }), []);
+  // The host moves the card with its MOG; the side may flip: read it again after each move.
+  useEffect(() => watchCardSide(), []);
   const lastPx = useRef<number | undefined>(undefined);
   const onSize = useCallback(
     (px: number) => {
@@ -246,8 +290,13 @@ export function CardView({ mogId }: { mogId: MogId }) {
   }, [genie, panel, shown, onSize]);
   useEffect(() => {
     // R11 sets a hidden card back to one line when it shows it again: fit once more.
+    // The width fit can wrap the action row of the pop-up (`popup-actions`), which changes its
+    // height: read the section again, so a wrapped row is never cut by the window.
     const onResize = () => {
-      if (lastPx.current !== undefined) void fit(lastPx.current, window.innerHeight);
+      const px = frame.current?.getBoundingClientRect().height ?? lastPx.current;
+      if (px === undefined) return;
+      lastPx.current = px;
+      void fit(px, window.innerHeight);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -283,17 +332,60 @@ export function CardView({ mogId }: { mogId: MogId }) {
     newest.id.startsWith('ask:') &&
     !newest.text.includes('\n') &&
     !card?.chips.some((c) => c.id === `ask_genie:${newest.id.slice(4)}`);
-  if (genie && newest)
+  const stack = !genie && !panel && pending !== undefined && pillCard !== undefined;
+  const popup = stack ? shown?.blurbs[0] : undefined;
+  const popupOn =
+    popup !== undefined &&
+    newest !== undefined &&
+    popup.id !== closedPopup &&
+    !(echo && shown === card);
+  // A stacked pop-up that fades or closes leaves the pill alone: fit the window to the new height.
+  const stackFrame = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!stack || !stackFrame.current) return;
+    void onSize(stackFrame.current.getBoundingClientRect().height);
+  }, [stack, popupOn, onSize]);
+  // Slice 2a: the live agent turn takes the card. The brain clears it when a direct ask starts.
+  if (agentTurn)
     return (
       <section aria-label="MOG card" className="card card-genie">
-        <GenieCard
-          key={newest.id}
+        <AgentTurnCard
+          key={agentTurn.turnId}
           mogId={mogId}
-          card={card}
+          turn={agentTurn}
+          chips={card?.chips.filter(isAgentCardChip) ?? []}
+          queued={card?.chips.filter((c) => c.id.startsWith('agent-queued:')) ?? []}
+          onSize={onSize}
+          identity={identity}
+        />
+      </section>
+    );
+  // The user closed the pill and nothing else is on the card: the window is hidden, show nothing.
+  if (pillClosed && newest?.id === livePending?.id)
+    return <section ref={frame} aria-label="MOG card" className="card card-popup" />;
+  if ((genie && newest) || (stack && pending && pillCard))
+    return (
+      <section ref={stackFrame} aria-label="MOG card" className="card card-genie">
+        <GenieCard
+          key={(genie ? newest : pending)?.id ?? ''}
+          mogId={mogId}
+          card={(genie ? card : pillCard) as CardUpdate}
           onSize={onSize}
           identity={identity}
           saved={saved}
+          stacked={!genie}
+          onClosePill={() => setClosedPill((genie ? newest : pending)?.id)}
         />
+        {!genie && popupOn && shown && popup && (
+          <Popup
+            key={popup.id}
+            mogId={mogId}
+            card={shown}
+            saved={saved}
+            stacked
+            onClose={() => setClosedPopup(popup.id)}
+          />
+        )}
         {probe}
       </section>
     );

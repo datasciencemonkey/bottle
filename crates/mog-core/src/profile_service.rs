@@ -281,7 +281,7 @@ impl ConfigSource for ConfigFile {
 }
 
 /// The token storage verdict of one `databricks-cli` profile (W-10a).
-enum Storage {
+pub(crate) enum Storage {
     /// `token_storage.mode` is `secure` (the OS key store).
     Secure,
     /// Plaintext, or no mode (an older CLI keeps tokens in a plaintext file). It blocks the
@@ -296,7 +296,7 @@ enum Storage {
     Unchecked,
 }
 
-fn storage_of(cli: &dyn CliRunner, profile: &str) -> Storage {
+pub(crate) fn storage_of(cli: &dyn CliRunner, profile: &str) -> Storage {
     match cli.run_json(&describe_args(profile)) {
         Ok(reply) => {
             // Read only `token_storage.mode`; the rest of the reply is dropped.
@@ -315,6 +315,13 @@ fn storage_of(cli: &dyn CliRunner, profile: &str) -> Storage {
         }
         Err(CoreError::NotImplemented { .. }) => Storage::Unchecked,
         Err(_) => Storage::Failed,
+    }
+}
+
+impl Storage {
+    /// The storage lets the profile be used (the `supported` decision of the profile list).
+    pub(crate) fn usable(&self) -> bool {
+        matches!(self, Storage::Secure | Storage::Unchecked)
     }
 }
 

@@ -1,0 +1,113 @@
+{
+  "mogId": "6f1c2a9e-4b3d-4e8a-9c7f-2d5e8a1b3c4d",
+  "blurbs": [],
+  "chips": [
+    {
+      "id": "agent-stop:0123456789abcdef0123456789abcdef",
+      "label": "Stop"
+    },
+    {
+      "id": "agent-more:op-1",
+      "label": "Ask more"
+    },
+    {
+      "id": "agent-resend:0123456789abcdef0123456789abcdef",
+      "label": "Send again"
+    },
+    {
+      "id": "agent-open:0123456789abcdef0123456789abcdef",
+      "label": "Open in Conversations"
+    }
+  ],
+  "agentTurn": {
+    "turnId": "0123456789abcdef0123456789abcdef",
+    "question": "What was revenue in sales and finance?",
+    "state": "done",
+    "used": 2,
+    "budget": 10,
+    "agentWorkspace": {
+      "name": "Sales",
+      "colorVariant": "teal"
+    },
+    "calls": [
+      {
+        "callId": "c-0123abcd",
+        "workspace": {
+          "name": "Sales",
+          "colorVariant": "teal"
+        },
+        "question": "Revenue last quarter?",
+        "state": "ready",
+        "startedAt": 1763251200000,
+        "endedAt": 1763251204000
+      },
+      {
+        "callId": "c-4567ef01",
+        "workspace": {
+          "name": "Finance",
+          "colorVariant": "amber"
+        },
+        "question": "Churn last quarter?",
+        "state": "needs_you"
+      }
+    ],
+    "parts": [
+      {
+        "callId": "c-0123abcd",
+        "workspace": {
+          "name": "Sales",
+          "colorVariant": "teal"
+        },
+        "sections": [
+          {
+            "id": "answer",
+            "md": "**4.2 M**"
+          },
+          {
+            "id": "footer",
+            "workspaceHost": "https://example.cloud.databricks.com"
+          }
+        ],
+        "fromEarlier": true,
+        "notShownToAgent": false,
+        "folded": true
+      }
+    ],
+    "summary": {
+      "md": "Revenue was 4.2 M.",
+      "kind": "combined",
+      "workspaces": [
+        {
+          "name": "Sales",
+          "colorVariant": "teal"
+        },
+        {
+          "name": "Finance",
+          "colorVariant": "amber"
+        }
+      ],
+      "citations": [
+        {
+          "n": 1,
+          "callId": "c-0123abcd",
+          "workspace": {
+            "name": "Sales",
+            "colorVariant": "teal"
+          },
+          "deepLink": "https://example.cloud.databricks.com/genie/rooms/1"
+        },
+        {
+          "n": 2,
+          "callId": "c-4567ef01",
+          "workspace": {
+            "name": "Finance",
+            "colorVariant": "amber"
+          }
+        }
+      ]
+    },
+    "notice": "Still working…",
+    "tokens": 16400,
+    "seenAt": 1763251300000
+  }
+}

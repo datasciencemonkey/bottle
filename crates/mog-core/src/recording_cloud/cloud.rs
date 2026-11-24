@@ -36,7 +36,8 @@ use super::model::{notes_request, parse_transcript, reply_text, sniff, transcrib
 use super::settings_store::{is_endpoint_name, valid_instructions, Storage};
 use super::stitch;
 use super::transcript::{
-    merge_parts, render_markdown, PartInfo, PartInput, PartTranscript, TranscriptDoc,
+    bottle_gaps, merge_parts, render_markdown, render_markdown_for_model, PartInfo, PartInput,
+    PartTranscript, TranscriptDoc,
 };
 
 /// The model route (Unity Gateway chat, NFR-21a).
@@ -111,6 +112,8 @@ pub struct LocalPart {
     pub path: PathBuf,
     /// Its duration in seconds.
     pub duration_s: f64,
+    /// The mic ranges the talk-key gate zeroed in this part (ADR 0118).
+    pub held: Vec<crate::recording_capture::session::HeldRange>,
 }
 
 /// One finished capture to process.
@@ -222,7 +225,9 @@ pub fn merge_local_parts(m: &mut JobManifest, parts: &[LocalPart]) {
                 .and_then(|b| stitch::duration_s(&b))
                 .unwrap_or(0.0)
         };
-        m.parts.push(PartEntry::new(file, dur));
+        let mut entry = PartEntry::new(file, dur);
+        entry.held_ranges = l.held.clone();
+        m.parts.push(entry);
     }
     m.parts.sort_by(|a, b| a.file.cmp(&b.file));
     m.duration_s = m.parts.iter().map(|p| p.duration_s).sum();
@@ -537,7 +542,9 @@ impl RecordingCloudService {
                         .and_then(|b| stitch::duration_s(&b))
                         .unwrap_or(0.0)
                 };
-                PartEntry::new(&file, dur)
+                let mut entry = PartEntry::new(&file, dur);
+                entry.held_ranges = l.held.clone();
+                entry
             })
             .collect();
         let mut m = JobManifest::new(
@@ -920,6 +927,7 @@ impl RecordingCloudService {
             instructions: job.instructions.clone(),
             parts: merged.parts,
             segments: merged.segments,
+            bottle_gaps: bottle_gaps(&m.parts),
         };
         let f = ErrorKind::TranscribeFailed;
         let tj = serde_json::to_vec_pretty(&doc).map_err(|_| at(f))?;
@@ -965,8 +973,12 @@ impl RecordingCloudService {
         let at = |k: ErrorKind| (k, n);
         self.update(p, root, m, Status::WritingNotes, on)
             .map_err(at)?;
-        let body = notes_request(&m.notes_endpoint, &doc.instructions, &render_markdown(doc))
-            .map_err(at)?;
+        let body = notes_request(
+            &m.notes_endpoint,
+            &doc.instructions,
+            &render_markdown_for_model(doc),
+        )
+        .map_err(at)?;
         let notes = self
             .model(
                 p,

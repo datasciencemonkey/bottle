@@ -297,6 +297,12 @@ pub struct HostComponents<'a> {
     /// The `workspace_*` commands (ADR 0117): `workspaces_host::WorkspacesHost`. `None` when it
     /// is not managed: `host_failed`.
     pub workspaces: Option<&'a dyn GatewayComponents>,
+    /// The `orchestrator_*`, `agent_turn_*` and `agent_session_*` commands (ADR 0122):
+    /// `agent_session_host::AgentSessionHost`. `None` when it is not managed: `host_failed`.
+    pub agent_session: Option<&'a dyn GatewayComponents>,
+    /// `model_invoke` (ADR 0122): `mog_core::model_gateway::invoke::ModelInvokeComponent` over
+    /// the AI Gateway chat route. `None` when it is not managed: `host_failed`.
+    pub model: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -366,6 +372,8 @@ impl<'a> HostComponents<'a> {
             stt_model: None,
             links: None,
             workspaces: None,
+            agent_session: None,
+            model: None,
         }
     }
 }
@@ -544,6 +552,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .agent
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // ADR 0122: one chat call on the home AI Gateway. The gateway refused any tool field
+            // (RTR-20a) and let only the brain through; the component checks the tools again.
+            "model_invoke" => self
+                .model
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // #514 (ADR 0082): R4. The gateway let only the brain through (SEC-02a).
             "stt_transcribe" => self.stt_transcribe(command, args),
             // #426 (MEM-34a): R10. The gateway let only the brain through (SEC-02a, ARC-4).
@@ -595,6 +609,19 @@ impl GatewayComponents for HostComponents<'_> {
             | "workspace_make_home"
             | "workspace_settings_write" => self
                 .workspaces
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
+            // ADR 0122: the orchestrator model and the one live agent session. Its codes cross
+            // as themselves (`ERROR_CODES`).
+            "orchestrator_models"
+            | "orchestrator_status"
+            | "agent_turn_submit"
+            | "agent_turn_stop"
+            | "agent_turn_call"
+            | "agent_turn_result"
+            | "agent_session_state"
+            | "agent_session_end" => self
+                .agent_session
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
             // Each feature issue wires its R1-R17 component here.
@@ -663,6 +690,8 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "capture_resume"
                 | "insert_text"
                 | "mcp_call"
+                // ADR 0122: a blocking HTTPS call to the AI Gateway.
+                | "model_invoke"
                 | "agent_start"
                 | "agent_stop"
                 | "agent_send"
@@ -678,6 +707,16 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "workspace_list"
                 | "workspace_set_available"
                 | "workspace_make_home"
+                // ADR 0122: the status can check the sign-in of the home profile, and a stop or
+                // an end waits for the tool loop.
+                | "orchestrator_models"
+                | "orchestrator_status"
+                | "agent_turn_submit"
+                | "agent_turn_stop"
+                | "agent_turn_call"
+                | "agent_turn_result"
+                | "agent_session_state"
+                | "agent_session_end"
                 // #413, #45: the install can run for minutes over the network (487 MB).
                 | "stt_model_install"
                 // #413, PR #600 review: verify SHA-256s ~670 MB with no network IO.
@@ -797,6 +836,11 @@ fn route_from<R: Runtime>(
     let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     // `try_state`: `lib.rs` manages the workspace component (ADR 0117).
     let workspaces = webview.try_state::<crate::workspaces_host::WorkspacesHost>();
+    // `try_state`: `lib.rs` manages the agent session component (ADR 0122).
+    let agent_session = webview.try_state::<crate::agent_session_host::AgentSessionHost>();
+    // `try_state`: `model_host::install` manages the `model_invoke` component (ADR 0122).
+    let model = webview
+        .try_state::<std::sync::Arc<mog_core::model_gateway::invoke::ModelInvokeComponent>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -840,6 +884,12 @@ fn route_from<R: Runtime>(
         workspaces: workspaces
             .as_ref()
             .map(|w| w.inner() as &dyn GatewayComponents),
+        agent_session: agent_session
+            .as_ref()
+            .map(|a| a.inner() as &dyn GatewayComponents),
+        model: model
+            .as_ref()
+            .map(|m| m.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

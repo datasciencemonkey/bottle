@@ -195,6 +195,27 @@ describe('wireHubConversations (#103)', () => {
     expect(w.workspaceOf(req(99))).toBeUndefined();
   });
 
+  it('[#523] workspaceOf also resolves the saved part of an agent thread, so its link opens', async () => {
+    const turnUuid = req(1);
+    const { store } = fakeStore({
+      [MOG_A]: [
+        dbRow(1, T0, { backendKind: 'genie_agent', splitGroupId: req(1) }),
+        dbRow(2, T0 + 1, { splitGroupId: turnUuid, profileName: 'part-profile' }),
+      ],
+    });
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+    });
+    await w.refresh();
+    expect(w.workspaceOf(req(2))).toEqual({
+      profile: 'part-profile',
+      host: 'example.cloud.databricks.com',
+    });
+  });
+
   it('[#103] refresh() sends the list again after a new exchange is saved', async () => {
     const byMog: Record<string, Row[]> = { [MOG_A]: [] };
     const { store } = fakeStore(byMog);

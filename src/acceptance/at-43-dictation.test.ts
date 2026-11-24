@@ -40,6 +40,7 @@ const input = (captureMode: CaptureMode): RouterInput => ({
 const utterance = (forceAsk: boolean): Utterance => ({
   mogId: MOG,
   text: SENTENCE,
+  leaseId: 'lease-1',
   forceAsk,
   insertionOn: true,
   input: input('ptt'),
@@ -91,7 +92,7 @@ describe('AT-43 UC1 dictation into the active app', () => {
     expect(r).toMatchObject({ route: 'chip', dictated: { route: 'inserted' } });
     const log = core.invoke.mock.calls;
     expect(log.map(([cmd]) => cmd)).toEqual(['model_invoke', 'insert_text']);
-    expect(argsOf(log[1]?.[1])).toEqual({ mogId: MOG, text: SENTENCE });
+    expect(argsOf(log[1]?.[1])).toEqual({ mogId: MOG, text: SENTENCE, leaseId: 'lease-1' });
     expect(callsTo(log, ['agent_start', 'agent_send', 'agent_tool_result', 'mcp_call'])).toEqual(
       [],
     );

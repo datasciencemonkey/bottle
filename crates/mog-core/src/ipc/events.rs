@@ -77,6 +77,12 @@ pub const RECORDING_STATE: &str = "recording:state";
 /// ADR 0103: the status of one recording job changed. Payload: `types::RecordingSummary`.
 /// Not in 4.5.
 pub const RECORDING_JOB: &str = "recording:job";
+/// The one agent session started or ended. Payload: `types::AgentSessionEvent`,
+/// content-free. Core to brain only. Not in 4.5.
+pub const AGENT_SESSION: &str = "agent:session";
+/// Slice 2a: one agent turn moved. Payload: `types::AgentTurnEvent`, content-free. Core to
+/// brain only. Not in 4.5.
+pub const AGENT_TURN: &str = "agent:turn";
 
 /// Every event of 4.5, in the order of the requirements, plus `mog.level` (ADR 0040) and
 /// `hotkey.status` (ADR 0039) and `capture.stopped` (ADR 0055), plus the call recording events
@@ -119,6 +125,8 @@ pub const ALL: &[EventSpec] = &[
     core(HOTKEY_RECORD_TOGGLE, "hotkey.record_toggle"),
     core(RECORDING_STATE, "recording.state"),
     core(RECORDING_JOB, "recording.job"),
+    core(AGENT_SESSION, "agent.session"),
+    core(AGENT_TURN, "agent.turn"),
 ];
 
 /// The core-to-brain events whose last payload the host keeps and sends again to a brain

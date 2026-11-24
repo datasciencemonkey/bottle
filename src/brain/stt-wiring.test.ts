@@ -7,7 +7,12 @@ import {
   SttFailure,
   type SttProvider,
 } from './components/stt-provider';
-import { createLifecycleTranscriber, sttFailureCard } from './stt-wiring';
+import {
+  CLOUD_FALLBACK_TEXT,
+  cloudFallbackCard,
+  createLifecycleTranscriber,
+  sttFailureCard,
+} from './stt-wiring';
 
 const MOG = '00000000-0000-4000-8000-000000000052';
 const seg: SegmentRef = {
@@ -52,6 +57,74 @@ describe('the capture lifecycle STT step (#52)', () => {
     expect(await createLifecycleTranscriber(stt, show)(seg)).toBe('hello');
     expect(stt.seen).toEqual([{ app: 'bottle', mog: MOG, op: 'asr' }]);
     expect(show).not.toHaveBeenCalled();
+  });
+
+  describe('[ADR 0123] Databricks dictation', () => {
+    const tr = (provider: Transcript['provider'], text = 'hello'): Transcript => ({
+      segmentId: seg.segmentId,
+      text,
+      raw: text,
+      provider,
+      model: 'm',
+      runtime: 'r',
+      latencyMs: 1,
+    });
+
+    it('a cloud transcript goes on with no notice', async () => {
+      const show = vi.fn();
+      const text = await createLifecycleTranscriber(
+        t4(tr('dbx_gemini', 'cloud words')),
+        show,
+        (t) => t,
+        () => true,
+      )(seg);
+      expect(text).toBe('cloud words');
+      expect(show).not.toHaveBeenCalled();
+    });
+
+    it('with the choice on, a local transcript shows the fallback notice and goes on', async () => {
+      const show = vi.fn(async (_m: string, _u: CardUpdate) => undefined);
+      const text = await createLifecycleTranscriber(
+        t4(tr('local_parakeet', 'local words')),
+        show,
+        (t) => t,
+        () => true,
+      )(seg);
+      expect(text).toBe('local words');
+      expect(show).toHaveBeenCalledWith(MOG, cloudFallbackCard(MOG, seg.segmentId));
+      expect(cloudFallbackCard(MOG, seg.segmentId).blurbs[0]?.text).toBe(CLOUD_FALLBACK_TEXT);
+      // The notice holds no transcript text.
+      expect(JSON.stringify(cloudFallbackCard(MOG, seg.segmentId))).not.toContain('local words');
+    });
+
+    it('with the choice off (the default), a local transcript shows no notice', async () => {
+      const show = vi.fn();
+      expect(await createLifecycleTranscriber(t4(tr('local_parakeet')), show)(seg)).toBe('hello');
+      expect(show).not.toHaveBeenCalled();
+    });
+
+    it('an empty local transcript (no speech) shows no notice', async () => {
+      const show = vi.fn();
+      await createLifecycleTranscriber(
+        t4(tr('local_parakeet', '  ')),
+        show,
+        (t) => t,
+        () => true,
+      )(seg);
+      expect(show).not.toHaveBeenCalled();
+    });
+
+    it('a closed card does not stop the text', async () => {
+      const text = await createLifecycleTranscriber(
+        t4(tr('local_parakeet', 'local words')),
+        async () => {
+          throw new Error('closed');
+        },
+        (t) => t,
+        () => true,
+      )(seg);
+      expect(text).toBe('local words');
+    });
   });
 
   it('dictation words: the corrected text goes on, so a paste and an ask get it', async () => {

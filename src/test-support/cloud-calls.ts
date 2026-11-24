@@ -73,6 +73,7 @@ export const CALL_CLASS = {
   recording_list: 'cloud',
   recording_detail: 'cloud',
   recording_retry: 'cloud',
+  recording_delete: 'cloud', // reads job.json from the volume; never writes
   recording_open: 'local', // opens the browser; Bottle itself sends nothing
   recording_open_system_audio_settings: 'local',
   stt_model_status: 'local',
@@ -87,6 +88,16 @@ export const CALL_CLASS = {
   workspace_set_available: 'local',
   workspace_make_home: 'local',
   workspace_settings_write: 'local',
+  // ADR 0122: both ask the home AI Gateway. A turn reaches the model and the workspaces
+  // through the agent session.
+  orchestrator_models: 'cloud',
+  orchestrator_status: 'cloud',
+  agent_turn_submit: 'cloud',
+  agent_turn_stop: 'local',
+  agent_turn_call: 'local',
+  agent_turn_result: 'local',
+  agent_session_state: 'local',
+  agent_session_end: 'local',
 } as const satisfies Record<keyof typeof COMMANDS, CallClass>;
 
 /** The command arguments of an invoke log entry: `call()` sends them as `{ args }` (ADR 0003). */
