@@ -132,13 +132,15 @@ describe('AgentSettings', () => {
         "Answers from your other workspaces go to Genie Code in Sales, which runs on that workspace's AI model.",
       ),
     ).toBe(true);
-    expect(help?.textContent).toContain('Genie Code can see them and combine them.');
     expect(help?.textContent).toContain(
-      'With the switch on, Genie Code can also put an answer from one workspace into a question to another workspace.',
+      'When on, Genie Code can read them, combine them, and use one in a question to another workspace.',
     );
     expect(help?.textContent).toContain(
-      "When off, each workspace's answer is shown to you, and the agent sees only a receipt.",
+      'When off, you see each answer. The agent sees only a receipt.',
     );
+    // Only the title toggles the switch: the long help is outside the label.
+    expect(el.querySelector('label[for]')?.contains(help ?? null)).toBe(false);
+    expect(el.querySelector('label[for]')?.textContent).toBe('Combine across workspaces');
     expect(el.querySelector('[data-agent-combine-locked]')).toBeNull();
     // The live region is there, and empty.
     expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
@@ -181,11 +183,18 @@ describe('AgentSettings', () => {
     expect(clicks()).toEqual([]);
   });
 
-  it('[AC-2b.4] says "Applies to your next question." while a turn runs, and not when locked', async () => {
-    const { el } = await render(<AgentSettings list={list()} busy />);
-    expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe(COMBINE_APPLIES);
+  it('[AC-2b.4] says "Applies to your next question." only after a change during a turn, and not when locked', async () => {
+    const applies = (el: Element) => el.querySelector('[data-agent-combine-applies]')?.textContent;
+    const { el, root } = await render(<AgentSettings list={list()} busy />);
+    // A turn runs, and the user changed nothing: no note.
+    expect(applies(el)).toBe('');
+    await click(combine(el));
+    expect(applies(el)).toBe(COMBINE_APPLIES);
+    // The turn ended: the note goes.
+    await act(async () => root.render(<AgentSettings list={list()} busy={false} />));
+    expect(applies(el)).toBe('');
     const l = await render(<AgentSettings list={withAgent({ crossWorkspaceLocked: true })} busy />);
-    expect(l.el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
+    expect(applies(l.el)).toBe('');
   });
 
   it('[D2] the budget is a labelled radio group; a click sends the value', async () => {

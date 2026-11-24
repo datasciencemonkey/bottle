@@ -20,6 +20,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { ChevronRight, EyeOff } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
@@ -229,7 +230,12 @@ function Part({
           <WsChip chip={part.workspace} />
         )}
         {part.fromEarlier && <span className="agent-tag">{FROM_EARLIER_COPY}</span>}
-        {part.notShownToAgent && <span className="agent-tag">{NOT_SHOWN_COPY}</span>}
+        {part.notShownToAgent && (
+          <span className="agent-tag">
+            <EyeOff size={12} aria-hidden="true" />
+            {NOT_SHOWN_COPY}
+          </span>
+        )}
       </div>
       {answer && (
         <div className="agent-part-body" data-answer>
@@ -298,17 +304,22 @@ export function TurnParts({
         <>
           <button
             type="button"
-            className="genie-toggle agent-fold"
+            className="genie-toggle agent-fold agent-fold--chevron"
             aria-expanded={open}
             aria-controls={foldId}
             data-action="fold"
             onClick={() => setOpen((o) => !o)}
           >
+            <ChevronRight
+              className={
+                open ? 'agent-fold-chevron agent-fold-chevron--open' : 'agent-fold-chevron'
+              }
+              size={12}
+              aria-hidden="true"
+            />
             {open
-              ? 'Hide'
-              : combined
-                ? plural(folded.length, 'workspace answer', 'workspace answers')
-                : plural(folded.length, 'more answer', 'more answers')}
+              ? 'Hide workspace answers'
+              : plural(folded.length, 'workspace answer', 'workspace answers')}
           </button>
           <ul
             id={foldId}

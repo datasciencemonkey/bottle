@@ -44,11 +44,10 @@ export const APPLIES_AFTER = 'Applies after the current question';
 export const COMBINE_LABEL = 'Combine across workspaces';
 export const COMBINE_LOCKED = 'Set by your admin';
 export const COMBINE_APPLIES = 'Applies to your next question.';
-export const COMBINE_OFF_HELP =
-  "When off, each workspace's answer is shown to you, and the agent sees only a receipt.";
+export const COMBINE_OFF_HELP = 'When off, you see each answer. The agent sees only a receipt.';
 /** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
 export const combineHelp = (agentName: string): string =>
-  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. With the switch on, Genie Code can see them and combine them. With the switch on, Genie Code can also put an answer from one workspace into a question to another workspace.`;
+  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. When on, Genie Code can read them, combine them, and use one in a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 
@@ -241,6 +240,10 @@ export function AgentSettings({
 }) {
   const [confirm, setConfirm] = useState(false);
   const [checkingFor, setCheckingFor] = useState<HubWorkspaceList | undefined>(undefined);
+  // The user changed the switch while a turn ran: only then "Applies to your next question".
+  const [changed, setChanged] = useState(false);
+  // The turn ended: the note goes (a state reset during render, not in an effect).
+  if (!busy && changed) setChanged(false);
   const budgetId = useId();
   const combineId = useId();
   const install = useRef<HTMLButtonElement>(null);
@@ -308,6 +311,8 @@ export function AgentSettings({
           }
         />
         <SettingsRow
+          className="items-start"
+          descriptionOutsideLabel
           label={<span id={`${combineId}-label`}>{COMBINE_LABEL}</span>}
           {...(locked ? {} : { htmlFor: combineId })}
           description={
@@ -329,9 +334,10 @@ export function AgentSettings({
                 disabled={locked}
                 aria-labelledby={`${combineId}-label`}
                 aria-describedby={`${combineId}-help${locked ? ` ${combineId}-locked` : ''}`}
-                onCheckedChange={(on) =>
-                  send({ action: 'workspace.cross', crossWorkspaceData: on })
-                }
+                onCheckedChange={(on) => {
+                  if (busy) setChanged(true);
+                  send({ action: 'workspace.cross', crossWorkspaceData: on });
+                }}
               />
               {locked && (
                 <span
@@ -347,9 +353,9 @@ export function AgentSettings({
               <span
                 role="status"
                 data-agent-combine-applies
-                className="text-[var(--mog-text-xs)] text-muted-foreground"
+                className="min-h-[calc(var(--mog-text-xs)*var(--mog-leading))] text-[var(--mog-text-xs)] text-muted-foreground"
               >
-                {busy && !locked ? COMBINE_APPLIES : ''}
+                {busy && changed && !locked ? COMBINE_APPLIES : ''}
               </span>
             </span>
           }

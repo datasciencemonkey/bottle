@@ -525,12 +525,12 @@ function StoredTurn({
               onClick={() => setOpen((o) => !o)}
             >
               <ChevronRightIcon
-                className={open ? 'size-3.5 rotate-90' : 'size-3.5'}
+                className={open ? 'size-3 rotate-90' : 'size-3'}
                 aria-hidden="true"
               />
               {open
-                ? 'Hide answers'
-                : `Answers from ${plural(names.length, 'workspace', 'workspaces')}`}
+                ? 'Hide workspace answers'
+                : plural(turn.parts.length, 'workspace answer', 'workspace answers')}
             </button>
           )}
           <ul id={listId} className="agent-parts" aria-label="Answers" hidden={!shown}>

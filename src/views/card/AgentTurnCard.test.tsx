@@ -164,6 +164,8 @@ describe('AgentTurnCard', () => {
     expect(fold?.getAttribute('aria-expanded')).toBe('false');
     await click(fold);
     expect(fold?.getAttribute('aria-expanded')).toBe('true');
+    expect(fold?.textContent).toBe('Hide workspace answers');
+    expect(fold?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(parts.hidden).toBe(false);
     expect(el.textContent).toContain(FROM_EARLIER_COPY);
   });

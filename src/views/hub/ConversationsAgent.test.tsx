@@ -314,12 +314,12 @@ describe('the agent thread detail', () => {
     await feed([thread(THREAD_A, [stored('a')])]);
     const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
     const toggle = d.querySelector<HTMLElement>('[data-action="parts"]') as HTMLElement;
-    expect(toggle.textContent).toBe('Hide answers');
+    expect(toggle.textContent).toBe('Hide workspace answers');
     expect(toggle.querySelector('svg')).not.toBeNull();
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     const list = d.querySelector<HTMLElement>(`#${toggle.getAttribute('aria-controls')}`);
     await click(toggle);
-    expect(toggle.textContent).toBe('Answers from 2 workspaces');
+    expect(toggle.textContent).toBe('2 workspace answers');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(list?.hidden).toBe(true);
   });

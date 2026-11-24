@@ -559,7 +559,8 @@ export function GenieCard({
     const was = prev.current;
     // A one-line pill is a capsule (999px token): its real corner is half its height. A pill with
     // a question has a card-like radius, so its computed radius is the real start.
-    const capsule = kind === 'working' && el.querySelector('.genie-pill-question') === null;
+    const capsule =
+      kind === 'working' && el.querySelector('.genie-pill-question, .genie-pill-linkrow') === null;
     prev.current = { kind, w: r.width, h: r.height, radius, capsule };
     if (!was || was.kind === kind || reducedMotion() || typeof el.animate !== 'function') return;
     const from = was.capsule ? `${was.h / 2}px` : was.radius;

@@ -109,12 +109,25 @@
    ready state the quiet "Open in Databricks" link. The window grows to fit (`fit-window.ts`).
    A pill with no question stays one line. Many lines would spill past a capsule, so it takes a
    card-like corner (`GenieCard.tsx` starts the grow motion from the real computed corner). */
-.genie-working:has(.genie-pill-question) {
+.genie-working:has(.genie-pill-question, .genie-pill-linkrow) {
   flex-wrap: wrap;
   row-gap: 4px;
   padding-top: 9px;
   padding-bottom: 9px;
-  border-radius: 16px;
+  /* The close control clears the status row only (below); the question and link rows are full width. */
+  padding-right: 14px;
+  border-radius: var(--mog-radius-lg);
+}
+
+/* The status row keeps room for the close control: the stage text and the timer or ready dot. */
+.genie-working:has(.genie-pill-question, .genie-pill-linkrow) .genie-stage-slot,
+.genie-working:has(.genie-pill-question, .genie-pill-linkrow) :is(.genie-timer, .genie-ready-dot) {
+  margin-right: 22px;
+}
+
+/* A link row with no question below it: the room under the link, so its focus ring is not clipped. */
+.genie-working:has(.genie-pill-linkrow) {
+  padding-bottom: 13px;
 }
 
 /* A long question scrolls in its own area of at most 8 lines, so the pill always fits the card
@@ -130,6 +143,17 @@
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+}
+
+.genie-pill-question::-webkit-scrollbar {
+  width: 6px;
+}
+
+.genie-pill-question::-webkit-scrollbar-thumb {
+  border-radius: var(--mog-radius-pill);
+  background: var(--mog-edge);
 }
 
 /* A subtle bottom fade, only while the question overflows its area. */
@@ -143,7 +167,14 @@
 .genie-pill-linkrow {
   display: flex;
   flex: 1 0 100%;
+  align-items: center;
   min-width: 0;
+  min-height: 24px;
+}
+
+/* The link hugs its text, so the focus ring does not stretch over the row. */
+.genie-pill-linkrow > .genie-pill-link {
+  align-self: center;
 }
 
 .genie-pill-link-ph {
@@ -162,7 +193,7 @@
   transform: translateY(-50%);
 }
 
-.genie-working:has(.genie-pill-question) .genie-dismiss {
+.genie-working:has(.genie-pill-question, .genie-pill-linkrow) .genie-dismiss {
   top: 6px;
   transform: none;
 }

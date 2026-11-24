@@ -712,6 +712,22 @@ describe('Genie card links (#523)', () => {
       expect(clicks().some((c) => c.payload.target === 'open_conversations')).toBe(false);
     });
 
+    it('a ready pill with a link and no question has a link row, so it is not a capsule', async () => {
+      const el = await mount();
+      await tauri.emitTo(`card-${ID}`, 'card:update', {
+        mogId: ID,
+        blurbs: [{ id: G, text: ANSWER_READY, pinned: false, completed: false }],
+        chips: [],
+        sections: [footer],
+      });
+      const working = el.querySelector('[data-genie="working"]');
+      expect(working?.querySelector('.genie-pill-question')).toBeNull();
+      // The same selector the CSS uses (`:has(.genie-pill-question, .genie-pill-linkrow)`) and the
+      // capsule check use: a link row alone makes it a card-like pill.
+      expect(working?.querySelector('.genie-pill-question, .genie-pill-linkrow')).not.toBeNull();
+      expect(working?.querySelector('a[data-action="open-in-databricks"]')).not.toBeNull();
+    });
+
     it('reserves the link row before ready (hidden, not focusable) and the link replaces it', async () => {
       const el = await mount();
       await tauri.emitTo(

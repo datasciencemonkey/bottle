@@ -274,8 +274,11 @@
 }
 
 .agent-tag {
-  padding: 0 var(--mog-space-2);
-  border: 1px solid var(--mog-edge);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  padding: 1px var(--mog-space-2);
+  border: 1px solid var(--mog-control-border);
   border-radius: var(--mog-radius-pill);
   color: var(--mog-text-muted);
   font-size: var(--mog-text-xs);
@@ -288,6 +291,8 @@
 
 /* "Answer from <workspace>": the heading of an answer that comes first. */
 .agent-part-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: inline-flex;
   align-items: center;
   gap: var(--mog-space-2);
@@ -334,6 +339,21 @@
   cursor: pointer;
 }
 
+/* A 24px hit area for each control; the negative margin keeps the height of the layout. */
+.agent-x {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.agent-fold,
+.agent-databricks {
+  min-height: 24px;
+  padding-block: 4px;
+  margin-block: -4px;
+}
+
 .agent-fold:hover,
 .agent-databricks:hover,
 .agent-x:hover {
@@ -363,6 +383,16 @@
 
 .agent-fold--chevron svg {
   transition: transform 120ms var(--mog-ease-out);
+}
+
+.agent-fold-chevron--open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-fold--chevron svg {
+    transition: none;
+  }
 }
 
 .conv-exchange .agent-parts + .agent-note {

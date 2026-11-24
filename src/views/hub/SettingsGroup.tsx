@@ -41,6 +41,7 @@ export function SettingsRow({
   htmlFor,
   className,
   controlClassName,
+  descriptionOutsideLabel,
 }: {
   label: ReactNode;
   description?: ReactNode;
@@ -57,7 +58,16 @@ export function SettingsRow({
    * way instead, and truncates the long text itself (`.rec-path` in hub.css).
    */
   controlClassName?: string;
+  /**
+   * Keep the description outside the `<label>`: only the title toggles the control, and a click
+   * or a selection in a long help text does not. The control points at the help with
+   * `aria-describedby`.
+   */
+  descriptionOutsideLabel?: boolean;
 }) {
+  const descriptionNode = description !== undefined && (
+    <span className="text-[var(--mog-text-xs)] text-muted-foreground">{description}</span>
+  );
   return (
     <div
       className={cn(
@@ -65,18 +75,25 @@ export function SettingsRow({
         className,
       )}
     >
-      <label
-        htmlFor={htmlFor}
-        className={cn(
-          'flex min-w-0 flex-col gap-[var(--mog-space-1)]',
-          htmlFor ? 'cursor-pointer' : undefined,
-        )}
-      >
-        <span className="text-[var(--mog-text-md)]">{label}</span>
-        {description !== undefined && (
-          <span className="text-[var(--mog-text-xs)] text-muted-foreground">{description}</span>
-        )}
-      </label>
+      {descriptionOutsideLabel ? (
+        <div className="flex min-w-0 flex-col gap-[var(--mog-space-1)]">
+          <label htmlFor={htmlFor} className={cn('flex', htmlFor ? 'cursor-pointer' : undefined)}>
+            <span className="text-[var(--mog-text-md)]">{label}</span>
+          </label>
+          {descriptionNode}
+        </div>
+      ) : (
+        <label
+          htmlFor={htmlFor}
+          className={cn(
+            'flex min-w-0 flex-col gap-[var(--mog-space-1)]',
+            htmlFor ? 'cursor-pointer' : undefined,
+          )}
+        >
+          <span className="text-[var(--mog-text-md)]">{label}</span>
+          {descriptionNode}
+        </label>
+      )}
       <div className={cn('shrink-0', controlClassName)}>{control}</div>
     </div>
   );

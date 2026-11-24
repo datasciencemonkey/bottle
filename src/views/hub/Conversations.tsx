@@ -865,7 +865,14 @@ export function Conversations({
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
         >
           <span>{toast.text}</span>
-          <Button type="button" variant="link" size="sm" data-action="undo" onClick={undoDelete}>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="text-[var(--mog-lid)] hover:text-[var(--mog-text)]"
+            data-action="undo"
+            onClick={undoDelete}
+          >
             Undo
           </Button>
         </motion.div>
@@ -937,7 +944,7 @@ export function Conversations({
           )}
           <div
             ref={listRef}
-            className="conv-list"
+            className={toast !== undefined ? 'conv-list conv-list-toast' : 'conv-list'}
             role="listbox"
             aria-label="Conversations"
             tabIndex={0}

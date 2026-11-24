@@ -1204,6 +1204,7 @@ export function MemoryArea({
                 type="button"
                 variant="link"
                 size="sm"
+                className="text-[var(--mog-lid)] hover:text-[var(--mog-text)]"
                 onClick={pending ? undoDelete : toast?.undo}
                 data-action="undo"
               >

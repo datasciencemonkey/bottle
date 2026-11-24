@@ -794,12 +794,17 @@
     justify-content: flex-end;
   }
 
+  /* While the Undo toast shows, the last rows scroll clear of it (16px offset + ~40px toast). */
+  .conv-list.conv-list-toast {
+    padding-bottom: 72px;
+  }
+
   .conv-list-bar {
-    padding: 8px 12px 0 20px;
+    padding: var(--mog-space-2) 12px 0 0;
   }
 
   .conv-detail-bar {
-    padding: 12px 24px 0;
+    padding: var(--mog-space-2) 24px 0;
   }
 
   /* An agent thread that runs: a dot that breathes (the keyframes are in agent-run.css). */
