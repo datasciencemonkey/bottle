@@ -480,3 +480,34 @@ fn rec_parts_resume_at_launch_needs_the_knob_consent_and_storage() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn rec_delete_removes_the_audio_chunks_and_sidecar_of_one_recording_only() {
+    use mog_core::recording_cloud::contract::LocalAudio;
+    use mog_core::recording_cloud::sidecar::{self, Sidecar};
+    let root = temp("delete");
+    let d = root.join("rec-1");
+    std::fs::create_dir_all(&d).unwrap();
+    sidecar::write(
+        &d,
+        &Sidecar::new("rec-1", "2026-11-20_0900", 1_000, "fake-home", None),
+    )
+    .unwrap();
+    std::fs::write(d.join("2026-11-20_0900.part01.opus"), b"OggS").unwrap();
+    std::fs::write(d.join("2026-11-20_0900.part02.opus"), b"OggS").unwrap();
+    std::fs::write(d.join("2026-11-20_0900.opus.tmp"), b"x").unwrap();
+    // A second recording whose name starts the same way keeps its files (and its own dir).
+    let other = root.join("rec-2");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("2026-11-20_0900_2.opus"), b"OggS").unwrap();
+    let seam = TempAudio::new(vec![root.clone()], Arc::new(Default::default));
+    seam.delete("2026-11-20_0900");
+    assert!(
+        !d.exists(),
+        "the files, the sidecar and the empty dir are gone"
+    );
+    assert!(other.join("2026-11-20_0900_2.opus").exists());
+    let names: Vec<String> = seam.names().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["2026-11-20_0900_2"]);
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -288,6 +288,32 @@ impl LocalAudio for TempAudio {
             .find(|(_, s, _)| s.name == name)
             .map(|(_, s, _)| s)
     }
+    fn delete(&self, name: &str) {
+        for root in &self.roots {
+            for dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
+                let dir = dir.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                for file in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    // `<name>.` only: a name that is a prefix of another (`..._1`) stays safe.
+                    let prefix = format!("{name}.");
+                    let mine = file
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|f| is_audio_file_of(name, f) || f.starts_with(&prefix));
+                    if mine {
+                        let _ = std::fs::remove_file(file.path());
+                    }
+                }
+                if sidecar::read(&dir).is_some_and(|s| s.name == name) {
+                    sidecar::remove(&dir);
+                }
+                // Only an empty dir goes; another recording's files stay.
+                let _ = std::fs::remove_dir(&dir);
+            }
+        }
+    }
     fn tidy(&self, name: &str) {
         for root in &self.roots {
             for dir in std::fs::read_dir(root).into_iter().flatten().flatten() {

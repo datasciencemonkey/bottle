@@ -537,3 +537,197 @@ fn rec_component_open_transcript_and_notes_open_the_folder_link_only_for_a_good_
         .is_err());
     assert_eq!(opened.lock().unwrap().len(), 3);
 }
+
+/// Local audio that records `delete` calls and drops the name, like the temp store does.
+struct DelLocal {
+    names: Mutex<Vec<(String, u64)>>,
+    active: HashSet<String>,
+    deleted: Mutex<Vec<String>>,
+}
+
+impl DelLocal {
+    fn new(names: &[&str], active: &[&str]) -> Arc<Self> {
+        Arc::new(Self {
+            names: Mutex::new(
+                names
+                    .iter()
+                    .map(|n| ((*n).to_owned(), 1_795_097_100_000))
+                    .collect(),
+            ),
+            active: active.iter().map(|s| (*s).to_owned()).collect(),
+            deleted: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl LocalAudio for DelLocal {
+    fn parts(&self, _name: &str) -> Vec<LocalPart> {
+        Vec::new()
+    }
+    fn names(&self) -> Vec<(String, u64)> {
+        self.names.lock().unwrap().clone()
+    }
+    fn active(&self) -> HashSet<String> {
+        self.active.clone()
+    }
+    fn delete(&self, name: &str) {
+        self.names.lock().unwrap().retain(|(n, _)| n != name);
+        self.deleted.lock().unwrap().push(name.to_owned());
+    }
+}
+
+fn failed_upload_manifest(uploaded: bool) -> Value {
+    json!({"version":1,"id":"r1","name":NAME,"started_at":"2026-11-19T14:05:00Z","duration_s":61.6,
+        "parts":[{"file":"2026-11-19_0905.opus","duration_s":61.6,"uploaded":uploaded}],
+        "status":"failed","error_kind":"upload_failed","error_stage":"uploading",
+        "transcribe_endpoint":"fake-t","notes_endpoint":"fake-n",
+        "updated_at":"2026-11-19T14:07:00Z"})
+}
+
+#[test]
+fn rec_component_delete_removes_a_device_only_recording() {
+    let http = Arc::new(ScriptedHttp::new());
+    http.json("files.download", 404, json!({"error_code":"NOT_FOUND"}));
+    let local = DelLocal::new(&[NAME], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    let v = c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap();
+    assert_eq!(v, json!({}));
+    assert_eq!(*local.deleted.lock().unwrap(), vec![NAME.to_owned()]);
+    assert_eq!(
+        http.seen().len(),
+        1,
+        "the volume is read once and never written"
+    );
+}
+
+#[test]
+fn rec_component_delete_works_with_no_storage_and_leaves_the_list_empty() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = DelLocal::new(&[NAME], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        None,
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    c.call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap();
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert!(v.as_array().unwrap().is_empty(), "{v}");
+    assert!(http.seen().is_empty(), "nothing remote is touched");
+}
+
+#[test]
+fn rec_component_delete_hides_a_failed_upload_row_once_its_audio_is_gone() {
+    let http = Arc::new(ScriptedHttp::new());
+    // The delete reads the job; the list then reads the directory and the job again.
+    http.bytes(
+        "files.download",
+        &serde_json::to_vec(&failed_upload_manifest(false)).unwrap(),
+    );
+    http.json(
+        "files.list_directory",
+        200,
+        json!({"contents":[{"path":"x","is_directory":true,"name":NAME}]}),
+    );
+    http.bytes(
+        "files.download",
+        &serde_json::to_vec(&failed_upload_manifest(false)).unwrap(),
+    );
+    let local = DelLocal::new(&[NAME], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    c.call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap();
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert!(v.as_array().unwrap().is_empty(), "{v}");
+}
+
+#[test]
+fn rec_component_delete_refuses_an_uploaded_recording() {
+    for m in [manifest("done"), failed_upload_manifest(true)] {
+        let http = Arc::new(ScriptedHttp::new());
+        http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
+        let local = DelLocal::new(&[NAME], &[]);
+        let (c, _, _) = component_with(
+            &http,
+            vol(),
+            local.clone(),
+            Arc::new(|| 1_795_100_700_000i64),
+        );
+        let e = c
+            .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+            .unwrap_err();
+        assert_eq!(e.code(), "recording_busy");
+        assert!(local.deleted.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn rec_component_delete_refuses_a_running_or_uploading_recording() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = DelLocal::new(&[NAME], &[NAME]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    let e = c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap_err();
+    assert_eq!(e.code(), "recording_busy");
+    // A job.json that says uploading and changed a minute ago belongs to a live run.
+    let http = Arc::new(ScriptedHttp::new());
+    let mut m = failed_upload_manifest(false);
+    m["status"] = json!("uploading");
+    m["updated_at"] = json!("2026-11-19T14:07:00Z");
+    http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
+    let local = DelLocal::new(&[NAME], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_763_561_300_000i64),
+    );
+    let e = c
+        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
+        .unwrap_err();
+    assert_eq!(e.code(), "recording_busy");
+    assert!(local.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn rec_component_delete_refuses_an_id_that_is_not_in_the_store() {
+    let http = Arc::new(ScriptedHttp::new());
+    let local = DelLocal::new(&[], &[]);
+    let (c, _, _) = component_with(
+        &http,
+        vol(),
+        local.clone(),
+        Arc::new(|| 1_795_100_700_000i64),
+    );
+    let e = c
+        .call(
+            "recording_delete",
+            json!({"profile":"fake-home","id":"2026-01-01_0101"}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code(), "invalid_args");
+    assert!(http.seen().is_empty());
+}

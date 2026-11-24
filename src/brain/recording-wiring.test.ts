@@ -102,6 +102,7 @@ function fakeApi(start: Partial<RecSettings> = {}) {
       ],
     })),
     retry: vi.fn(async (_id: string) => undefined),
+    delete: vi.fn(async (_id: string) => undefined),
     open: vi.fn(async (_id: string) => undefined),
     openSystemAudioSettings: vi.fn(async () => undefined),
     onState: (cb: (s: RecState) => void) => {
@@ -473,6 +474,26 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(JSON.stringify(t.sent)).not.toMatch(/https?:/);
   });
 
+  it('[REC-H11] Delete goes to the core with the id, then the list is read again', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const before = t.fake.api.list.mock.calls.length;
+    t.click({ action: 'recordings.delete', id: 'r2' });
+    await flush();
+    expect(t.fake.api.delete).toHaveBeenCalledWith('r2');
+    expect(t.fake.api.list.mock.calls.length).toBeGreaterThan(before);
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)).toBeDefined();
+  });
+
+  it('[REC-H11] a refused Delete shows its plain text and sends nothing else', async () => {
+    const t = setup();
+    t.fake.api.delete.mockRejectedValue({ error: 'recording_busy' });
+    t.click({ action: 'recordings.delete', id: 'r2' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeDefined();
+  });
+
   it('[REC-H12] a job that finishes notifies once and shows the MOG answer-ready moment', async () => {
     const t = setup();
     t.click({ action: 'recordings.ready' });
@@ -675,6 +696,10 @@ describe('ipcRecordingApi: the typed recording_* contract (ADR 0103)', () => {
     });
     await api.retry('a');
     expect(core.invoke).toHaveBeenLastCalledWith('recording_retry', {
+      args: { profile: 'work', id: 'a' },
+    });
+    await api.delete('a');
+    expect(core.invoke).toHaveBeenLastCalledWith('recording_delete', {
       args: { profile: 'work', id: 'a' },
     });
     await api.createVolume('main', 'team');

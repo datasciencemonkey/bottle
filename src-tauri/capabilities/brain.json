@@ -73,6 +73,7 @@
     "allow-recording-list",
     "allow-recording-detail",
     "allow-recording-retry",
+    "allow-recording-delete",
     "allow-recording-open",
     "allow-recording-open-system-audio-settings",
     "allow-link-open",

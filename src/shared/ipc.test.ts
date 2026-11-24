@@ -331,6 +331,7 @@ describe('call recording (ADR 0103)', () => {
     'recording_list',
     'recording_detail',
     'recording_retry',
+    'recording_delete',
     'recording_open',
     'recording_open_system_audio_settings',
   ] as const satisfies CommandName[];

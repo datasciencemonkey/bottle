@@ -47,6 +47,9 @@ pub trait LocalAudio: Send + Sync {
     /// Delete what is left of `name` on the device after its pipeline ended with `done` (the
     /// sidecar and the empty temp dir). The default does nothing.
     fn tidy(&self, _name: &str) {}
+    /// Delete every file of `name` on the device: audio parts, temp files and the sidecar.
+    /// The default deletes nothing.
+    fn delete(&self, _name: &str) {}
 }
 
 /// No local audio (tests, and builds with no app data dir).
@@ -936,6 +939,14 @@ impl RecordingCloud for CloudAdapter {
                 out.push(s);
             }
         }
+        // A failed upload with no part in the volume and no audio left here was deleted on this
+        // device (`recording_delete` never touches the volume): nothing to retry, so no row.
+        out.retain(|r| {
+            let dead = r.status == RecordingStatus::Failed
+                && r.error_stage == Some(RecordingStatus::Uploading)
+                && r.parts_uploaded.unwrap_or(0) == 0;
+            !dead || local.contains_key(&r.name) || live.contains_key(&r.name)
+        });
         out.sort_by(|a, b| {
             b.started_at_ms
                 .cmp(&a.started_at_ms)
@@ -1073,6 +1084,41 @@ impl RecordingCloud for CloudAdapter {
             .file_link(profile.as_str(), Self::root(storage), id.as_str(), file)
             .map(|l| l.url)
             .map_err(err)
+    }
+
+    fn delete(
+        &self,
+        profile: &ProfileName,
+        storage: Option<&RecordingStorage>,
+        id: &RecordingId,
+    ) -> RecordingResult<bool> {
+        let name = id.as_str();
+        // The id must name audio that Bottle's own temp store holds. No path crosses IPC.
+        if !self.local.names().iter().any(|(n, _)| n == name) {
+            return Ok(false);
+        }
+        if self.local.active().contains(name) || self.is_live(name) {
+            return Err(RecordingErrorKind::RecordingBusy);
+        }
+        // The in-flight slot also keeps a Retry out while the files go.
+        let Some(_guard) = self.begin(name) else {
+            return Err(RecordingErrorKind::RecordingBusy);
+        };
+        if let Some(storage) = storage {
+            // Read only. A recording with a part in the volume, or past the upload, is not
+            // "not uploaded": the volume copy is the one that counts.
+            let job = self
+                .service
+                .job(profile.as_str(), Self::root(storage), name)
+                .map_err(wire_kind)?;
+            if let Some(m) = job {
+                if !self.retry_allowed(&m) || m.parts.iter().any(|p| p.uploaded) {
+                    return Err(RecordingErrorKind::RecordingBusy);
+                }
+            }
+        }
+        self.local.delete(name);
+        Ok(true)
     }
 
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>> {
