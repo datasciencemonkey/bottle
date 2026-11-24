@@ -9,6 +9,8 @@
 import type { LocalMemoryStore } from './components/memory-store';
 import { readConversationsIndexed } from './hub-conversations-wiring';
 import { buildAgentEntries, isFailedThread } from '../views/hub/AgentThread';
+import type { HubAgentView } from '../shared/hub-agent';
+import type { AgentTurnView } from '../shared/ipc';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../views/test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../views/test-tauri')).eventModule);
@@ -90,5 +92,86 @@ describe('Clear failed: the view and the brain agree on "failed"', () => {
     const brain = read.keys.get(`a:${entry.threadId}`)?.failed;
     expect(isFailedThread(entry)).toBe(failed);
     expect(brain).toBe(failed);
+  });
+});
+
+/** The turns that the client holds in memory: the view swaps or adds them, the brain reads rows. */
+describe('Clear failed: in-memory turns', () => {
+  const turnId = (n: number) => id(n).replaceAll('-', '');
+  const ws = { name: 'Sales', colorVariant: 'coral' };
+  const memTurn = (n: number, state: AgentTurnView['state'], callState: string): AgentTurnView =>
+    ({
+      turnId: turnId(n),
+      question: `Q${n}?`,
+      state,
+      used: 1,
+      budget: 10,
+      agentWorkspace: ws,
+      calls: [{ callId: `c-${n}`, workspace: ws, question: 'Q', state: callState }],
+      parts: [],
+    }) as AgentTurnView;
+  const agentView = (turns: AgentTurnView[], thread: string): HubAgentView => ({
+    session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
+    waiting: [],
+    earlier: turns,
+    genieCode: {
+      binary: 'not_installed',
+      pinned: '',
+      agentProfile: null,
+      agentProfileState: 'no_home',
+    },
+    threads: turns.map((t) => ({ turnId: t.turnId, threadId: thread })),
+  });
+
+  async function both(rows: Row[], turns: AgentTurnView[], thread: string) {
+    const store: LocalMemoryStore = { exec: async () => ({ rows }) };
+    const read = await readConversationsIndexed({
+      store,
+      mogs: async () => [{ mogId: MOG, name: 'Sales' }],
+      memoryTurns: () =>
+        turns.map((t) => ({
+          turnUuid: id(Number(`0x${t.turnId.slice(-12)}`)),
+          threadId: thread,
+          inProgress: false,
+        })),
+    });
+    const entry = buildAgentEntries(read.list.agentThreads, agentView(turns, thread), MOG, 0).find(
+      (e) => e.threadId === thread,
+    );
+    if (!entry) throw new Error('no entry');
+    return { view: isFailedThread(entry), brain: read.keys.get(`a:${thread}`)?.failed };
+  }
+
+  it('a needs_you turn is never counted by the view, whatever its stored row says', async () => {
+    const r = await both([turn(1, 'failed')], [memTurn(1, 'needs_you', 'needs_you')], id(1));
+    expect(r.view).toBe(false);
+    // The stored row says failed (a signed-out turn saves a failed row, ADR 0121): the brain
+    // would delete it, but the view never asks while the turn is in memory.
+    expect(r.brain).toBe(true);
+  });
+
+  it('a stopped turn with one ready call is answered in both', async () => {
+    const r = await both(
+      [turn(1, 'cancelled'), part(10, 1, 'completed')],
+      [memTurn(1, 'stopped', 'ready')],
+      id(1),
+    );
+    expect(r).toEqual({ view: false, brain: false });
+  });
+
+  it('a stopped turn with no ready call is failed in both', async () => {
+    const r = await both(
+      [turn(1, 'cancelled'), part(10, 1, 'failed')],
+      [memTurn(1, 'stopped', 'failed')],
+      id(1),
+    );
+    expect(r).toEqual({ view: true, brain: true });
+  });
+
+  it('a memory-only thread with extra parts (no turn row) agrees with the view', async () => {
+    const answered = await both([part(10, 1, 'completed')], [memTurn(1, 'failed', 'ready')], id(1));
+    expect(answered).toEqual({ view: false, brain: false });
+    const failed = await both([part(10, 1, 'failed')], [memTurn(1, 'failed', 'failed')], id(1));
+    expect(failed).toEqual({ view: true, brain: true });
   });
 });

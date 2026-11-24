@@ -380,7 +380,7 @@ const EXCHANGE_RECENT: Stmt = Stmt {
 const EXCHANGE_DELETE: Stmt = Stmt {
     id: "mem.exchange.delete",
     sql: "UPDATE genie_exchange SET deleted_at = :now, question_user = NULL, \
-          answer_summary = NULL, final_answer_md = NULL, key_numbers = '[]', \
+          question_sent_sha256 = '', answer_summary = NULL, final_answer_md = NULL, key_numbers = '[]', \
           updated_at = :now \
           WHERE mog_id = :mogId AND deleted_at IS NULL AND EXISTS \
           (SELECT 1 FROM json_each(:requestIds) j \
@@ -475,7 +475,10 @@ const ITEM_UPSERT: Stmt = Stmt {
           THEN 'quarantined' ELSE 'active' END, \
           coalesce(:pinned, 0), coalesce(:sensitivity, 'normal'), \
           coalesce(:sourceSessionIds, '[]'), coalesce(:sourceUtteranceIds, '[]'), \
-          :workspaceHost, :workspaceId, :spaceId, :sourceExchangeId, :seenAt, :seenAt, :rowHlc, \
+          :workspaceHost, :workspaceId, :spaceId, \
+          CASE WHEN EXISTS (SELECT 1 FROM genie_exchange t WHERE t.mog_id = :mogId \
+          AND t.exchange_id = :sourceExchangeId AND t.deleted_at IS NOT NULL) THEN NULL \
+          ELSE :sourceExchangeId END, :seenAt, :seenAt, :rowHlc, \
           :deviceId, coalesce(nullif(trim(:title), ''), substr(coalesce(:text, :body), 1, 80)), \
           coalesce(:body, ''), coalesce(:tags, '[]'), \
           coalesce(:origin, CASE WHEN :source = 'agent' THEN 'agent' ELSE 'legacy' END), \
@@ -516,7 +519,9 @@ const ITEM_UPSERT: Stmt = Stmt {
           FROM json_each(memory_item.source_utterance_ids) UNION \
           SELECT value FROM json_each(excluded.source_utterance_ids))), \
           source_exchange_id = coalesce(memory_item.source_exchange_id, \
-          excluded.source_exchange_id), \
+          CASE WHEN EXISTS (SELECT 1 FROM genie_exchange t WHERE t.mog_id = memory_item.mog_id \
+          AND t.exchange_id = excluded.source_exchange_id AND t.deleted_at IS NOT NULL) \
+          THEN NULL ELSE excluded.source_exchange_id END), \
           last_seen_at = max(memory_item.last_seen_at, excluded.last_seen_at), \
           mention_count = memory_item.mention_count + 1, row_hlc = excluded.row_hlc, \
           updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) \

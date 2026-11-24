@@ -661,3 +661,39 @@ fn adr_0121_a_citing_memory_item_survives_a_deleted_exchange() {
     // The exchange row stays as a tombstone, so the pointer stays too.
     assert_eq!(src.as_deref(), Some(CALL_EXCH));
 }
+
+#[test]
+fn adr_0121_delete_clears_the_question_hash_and_an_item_never_links_to_a_tombstone() {
+    let t = TempDir::new("0121-link");
+    let s = open(&t);
+    seed_turn(&s);
+    assert_eq!(delete(&s, MOG_A, json!([CALL_REQ])), 1);
+    let sha: String = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT question_sent_sha256 FROM genie_exchange WHERE request_id = ?1",
+                [CALL_REQ],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(sha, "");
+    // A later write that cites the tombstone saves the item with no link.
+    exec(
+        &s,
+        "mem.item.write",
+        json!({"mogId": MOG_A, "itemId": ITEM_1, "itemType": "fact", "text": "Q3 is up",
+               "source": "you", "confidence": 0.9, "sourceExchangeId": CALL_EXCH,
+               "seenAt": T0, "rowHlc": 1, "deviceId": "test-device", "now": T0}),
+    );
+    let src: Option<String> = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT source_exchange_id FROM memory_item WHERE item_id = ?1",
+                [ITEM_1],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(src, None);
+}

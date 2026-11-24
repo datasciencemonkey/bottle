@@ -80,6 +80,12 @@ second meaning, so it does not change.
   the conversation id.
 - Wipe and Forget delete the tombstone rows like any other row.
 - A citing `memory_item` keeps its row and its `source_exchange_id`: the tombstone row stays.
+  A pinned `genie_answer` item also keeps its text. The user pinned it, so a local delete of the
+  thread does not erase it. The user deletes the item itself in Memory.
+- The tombstone sets `question_sent_sha256` to the empty string (the column is NOT NULL), so the
+  hash of the erased question does not stay on disk. No reader uses the column.
+- `mem.item.upsert` never links an item to a tombstone. A new item that cites a tombstone is saved
+  with no `source_exchange_id`, and a conflict never sets one.
 - The brain sends the delete after the 8 s Undo window, like Memory (`memory.delete`).
 
 ### Answers first
@@ -105,6 +111,15 @@ second meaning, so it does not change.
   `agent_turn_submit`, so a wrong MOG, a second use, a late use or another purpose is refused.
 - Only a view window can send `view_emit`, so the brain cannot mint this ticket.
 
+### Limit: a signed-out turn after a restart
+
+- A turn that ended `signed_out` shows as "needs you" while the client holds it in memory, and
+  Clear failed skips it. The turn row on disk says `failed`, and the stored thread (`AgentThreadTurn`
+  status is `answered`, `failed` or `stopped`) cannot say more without a contract change. After a
+  restart the thread counts as failed, so Clear failed can delete it. The question stays in the
+  thread until then. A fix needs a new status in `src/shared/hub-conversations.ts`. This ADR does
+  not make that change.
+
 ## Consequences
 
 - The Conversations list can show one thread for each agent thread, and the Agent panel goes.
@@ -112,6 +127,14 @@ second meaning, so it does not change.
   thread or uses Wipe.
 - A delete is local and leaves a tombstone. The Genie conversations stay on the server until
   Wipe or Forget with "Also delete Genie conversations" removes them.
-- A Wipe leaves no turn row. The brain sets a write fence at each Wipe. A row write that began
+- A Wipe leaves no turn row. The brain sets a write fence when the user confirms a Wipe, before the
+  core wipe and the remote deletes run, and lifts it when the Wipe fails. It sets the fence again
+  at each Wipe. A row write that began
   before it saves nothing, and a turn that the session end cut off writes its row only when the
   `agent:session` event arrives with a reason other than `wipe`.
+- A turn row that waits behind the fence is written again at the lift. A Wipe whose local part
+  worked ends the fence for good, before the remote deletes. The flow runs one Wipe at a time, and
+  a fence that holds for 2 min is lifted with a logged fault. Known limit: a turn that the panel
+  forgot at a session end while the fence was up is still replayed when the local wipe failed.
+- The 120 s fence timeout has a trade-off. If the local `mem_wipe` hangs longer, the fence lifts and
+  a late row can survive the Wipe. This keeps the history from being blocked for good.

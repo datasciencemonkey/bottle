@@ -14,19 +14,61 @@ import { asAgentAction, HUB_AGENT_EVENT, HUB_SCOPE, type HubAgentView } from '..
 import type { GenieCodeStatus } from '../shared/ipc';
 import type { AgentClient } from './agent-run';
 import { onViewInput, type BrainBus } from './bus';
+import type { WipeScope } from '../shared/wipe-view';
 import type { WipeDialogDeps } from './wipe-wiring';
+
+/**
+ * A Wipe that runs longer than this lifts the fence. The local wipe has no timer of its own: a
+ * hang must not block the history for good. Known trade-off (ADR 0121): a late row can survive.
+ */
+export const WIPE_FENCE_TIMEOUT_MS = 120_000;
 
 /** A Wipe of any scope ends the agent session (`wipe.rs`): the panel content goes with it. */
 export function clearingAgentPanel(
   flow: WipeDialogDeps['flow'],
   clear: () => void,
+  /** Fences the writes before the Wipe runs. Returns the lift for a Wipe that failed. */
+  fence?: () => () => void,
+  /** Logs a fault (the fence timed out). */
+  fault?: () => void,
+  timeoutMs = WIPE_FENCE_TIMEOUT_MS,
 ): WipeDialogDeps['flow'] {
+  // One Wipe at a time: a second confirm waits for the first. `clear()` ends every fence, which
+  // is only right while there is one fence at a time.
+  let tail: Promise<unknown> = Promise.resolve();
+  const run = async (scope: WipeScope, alsoGenie: boolean) => {
+    // The wipe is slow (core and remote deletes): no turn row may land in the meantime.
+    const lift = fence?.();
+    const timer = setTimeout(() => {
+      lift?.();
+      fault?.();
+    }, timeoutMs);
+    let localDone = false;
+    try {
+      // The fence ends for good when the local wipe worked (`clear()`), before the remote
+      // deletes: a later throw must not replay rows into a wiped store, and the timer is over.
+      const done = await flow.confirm(scope, alsoGenie, () => {
+        localDone = true;
+        clearTimeout(timer);
+        clear();
+      });
+      // A flow that never reported the local result: clear now. Not twice: a turn that started
+      // during the remote deletes keeps its row.
+      if (!localDone) clear();
+      return done;
+    } catch (e) {
+      lift?.();
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return {
     dialog: (scope, alsoGenie) => flow.dialog(scope, alsoGenie),
-    async confirm(scope, alsoGenie) {
-      const done = await flow.confirm(scope, alsoGenie);
-      clear();
-      return done;
+    confirm(scope, alsoGenie) {
+      const p = tail.then(() => run(scope, alsoGenie));
+      tail = p.catch(() => undefined);
+      return p;
     },
   };
 }
