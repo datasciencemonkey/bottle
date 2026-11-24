@@ -662,6 +662,9 @@ impl Engine {
             let _ = genie_home::delete_home(&this.cfg.home);
             code
         };
+        if !shim.command.is_absolute() {
+            return Err(fail(self, "agent_failed"));
+        }
         let home_spec = HomeSpec {
             host,
             cli_path: cli.clone(),

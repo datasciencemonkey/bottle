@@ -16,7 +16,7 @@ wire_api = "responses"
 
 [model_providers.databricks.auth]
 command = "/opt/bottle/bin/databricks"
-args = ["auth", "token", "--profile", "sales", "--timeout", "15s", "--output", "text"]
+args = ["auth", "token", "--profile=sales", "--timeout", "15s", "--output", "text"]
 timeout_ms = 60000
 refresh_interval_ms = 900000
 

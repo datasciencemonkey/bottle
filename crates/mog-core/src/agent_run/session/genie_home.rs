@@ -93,7 +93,9 @@ fn bare_host(host: &str) -> Option<String> {
         l.bytes().all(|b| b.is_ascii_digit())
             || (l.starts_with("0x") && l[2..].bytes().all(|b| b.is_ascii_hexdigit()))
     });
+    // The same egress rule as R7 and R8: a Databricks workspace domain, DNS labels, no account host.
     let ok = !bare.is_empty()
+        && crate::http_transport::host_policy::is_workspace_host(&bare)
         && bare.len() <= 253
         && !last_numeric
         && bare.split('.').all(|l| {
@@ -140,7 +142,8 @@ fn path_text(p: &Path) -> Result<String, HomeError> {
 /// The text of `config.toml`.
 pub fn config_toml(spec: &HomeSpec) -> Result<String, HomeError> {
     let host = bare_host(&spec.host).ok_or(HomeError::BadHost)?;
-    if spec.profile.is_empty() || spec.profile.chars().any(char::is_control) {
+    // The profile rule of R6: it is one argument, and it cannot look like a flag.
+    if !crate::token_broker::valid_profile(&spec.profile) {
         return Err(HomeError::BadValue);
     }
     let cli = path_text(&spec.cli_path)?;
@@ -148,11 +151,15 @@ pub fn config_toml(spec: &HomeSpec) -> Result<String, HomeError> {
         return Err(HomeError::BadValue);
     }
     let shim = path_text(&spec.shim_command)?;
+    // The server runs in another folder: a relative shim command would start another file.
+    if !spec.shim_command.is_absolute() {
+        return Err(HomeError::BadValue);
+    }
+    let profile_arg = format!("--profile={}", spec.profile);
     let auth_args: Vec<String> = [
         "auth",
         "token",
-        "--profile",
-        spec.profile.as_str(),
+        profile_arg.as_str(),
         "--timeout",
         "15s",
         "--output",
@@ -357,9 +364,14 @@ mod tests {
         let mut s = spec();
         s.profile = "a\"]\n[mcp_servers.evil]\ncommand=\"x".into();
         assert_eq!(config_toml(&s), Err(HomeError::BadValue));
-        s.profile = "a\"] b\\c".into();
+        // The rule of R6: one safe argument, never a flag.
+        for bad in ["a\"] b\\c", "--x", "-p", "a b", "", &"p".repeat(65)] {
+            s.profile = bad.into();
+            assert_eq!(config_toml(&s), Err(HomeError::BadValue), "{bad}");
+        }
+        s.profile = "sales_1.eu-west".into();
         let t = config_toml(&s).unwrap();
-        assert!(t.contains("\"a\\\"] b\\\\c\""));
+        assert!(t.contains("\"--profile=sales_1.eu-west\""));
         assert_eq!(t.matches("[mcp_servers.").count(), 2);
         for bad in [
             "evil.com/x",
@@ -368,6 +380,9 @@ mod tests {
             "127.0.0.1",
             "",
             "u@evil.com",
+            "evil.example.com",
+            "accounts.cloud.databricks.com",
+            "cloud.databricks.com",
         ] {
             let mut s = spec();
             s.host = bad.into();
@@ -375,6 +390,9 @@ mod tests {
         }
         let mut s = spec();
         s.cli_path = PathBuf::from("relative/databricks");
+        assert_eq!(config_toml(&s), Err(HomeError::BadValue));
+        let mut s = spec();
+        s.shim_command = PathBuf::from("bottle");
         assert_eq!(config_toml(&s), Err(HomeError::BadValue));
     }
 
