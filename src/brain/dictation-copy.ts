@@ -5,7 +5,8 @@
  * - MOG-05b: a `copy` route (insertion off) puts the text and a Copy chip on the owner MOG's
  *   card, and shows the card.
  * - MOG-06d: an `insert_failed` route puts the text, the Appendix E line
- *   "Could not insert: <reason>" and a Copy chip on the card, and shows the card.
+ *   "Could not insert: <reason>" and a Copy chip on the card, and shows the card. ADR 0118
+ *   (AC-2.9): for `target_changed` the line is "Not pasted: the app changed".
  * - RTR-01c: the flow ends here. This module never calls the main agent or Genie.
  *
  * The order (PR #504 review, ADR 0091): the sink shows the card first, then puts the text on
@@ -34,11 +35,21 @@ const REASONS: Record<InsertFailure, string> = {
   no_focus: 'no text field has focus',
   secure_field: 'the field is a password field',
   host_failed: 'Bottle could not reach the app',
-  target_changed: 'the app changed after you started',
+  target_changed: 'the app changed',
 };
 
 /** The `<reason>` of the Appendix E line "Could not insert: <reason>" (MOG-06d). */
 export const copyReasonText = (reason: InsertFailure): string => REASONS[reason];
+
+/**
+ * The reason line of an `insert_failed` card. A paste that Bottle refused because the app changed
+ * (ADR 0118, AC-2.9) reads "Not pasted: the app changed", with Copy; the text was never pasted.
+ * Every other reason keeps the Appendix E line "Could not insert: <reason>" (MOG-06d).
+ */
+export const copyLineText = (reason: InsertFailure): string =>
+  reason === 'target_changed'
+    ? `Not pasted: ${REASONS[reason]}`
+    : `Could not insert: ${REASONS[reason]}`;
 
 export interface DictationSinkDeps {
   /** The card stack of a MOG. */
@@ -85,8 +96,7 @@ export function createDictationSink(deps: DictationSinkDeps): DictationSink {
     async onDone(r, owned) {
       if (r.route !== 'copy' && r.route !== 'insert_failed') return;
       const shown = await show(owned.mogId);
-      const text =
-        r.route === 'copy' ? r.text : `${r.text}\nCould not insert: ${copyReasonText(r.reason)}`;
+      const text = r.route === 'copy' ? r.text : `${r.text}\n${copyLineText(r.reason)}`;
       // The stack keeps the text whether or not the show worked; a later show or `ready`
       // sends it again.
       const stack = deps.stackFor(owned.mogId);
