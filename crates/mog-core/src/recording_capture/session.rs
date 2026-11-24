@@ -216,6 +216,8 @@ pub struct FinishedRecording {
     pub profile: Option<String>,
     /// The per-recording instructions of `recording_start` (`None`: use the preset).
     pub instructions: Option<String>,
+    /// What reached the writer, as counts only (the host keeps the last one for a check).
+    pub capture: super::tap::CaptureCounts,
 }
 
 /// The job context of one recording, from `recording_start` (see [`RecordingSession::set_job`]).
@@ -670,6 +672,7 @@ impl RecordingSession {
             duration_ms,
             cause,
             system_audio,
+            capture: self.tap.counts(),
         };
         self.notify(&Snapshot::Idle);
         self.handoff.finished(rec.clone());

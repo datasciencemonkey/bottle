@@ -502,13 +502,19 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     publish();
   };
 
+  /** Each list read takes a number; only the newest read's reply is kept (no stale overwrite). */
+  let listSeq = 0;
   async function refreshList(): Promise<void> {
+    const mine = ++listSeq;
     if (!settings) settings = await api.readSettings().catch(() => undefined);
     if (myFiles === undefined && !batch?.running) await probe();
     try {
-      rows = await api.list();
+      const read = await api.list();
+      if (mine !== listSeq) return;
+      rows = read;
       listed = true;
     } catch (e) {
+      if (mine !== listSeq) return;
       const code = codeOf(e);
       if (!gone)
         toHub(

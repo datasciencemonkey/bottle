@@ -806,6 +806,29 @@ impl RecordingCloudService {
         self.run_from_stage(p, &root, job, m, Stage::Uploading, on)
     }
 
+    /// The call stopped and no audio ever came in: nothing to upload or transcribe. The job
+    /// ends failed (`AudioMissing`) at once, with no model call and no new volume folder. Its
+    /// job.json is written (best effort) only when the call's start wrote one (`m` is `Some`).
+    pub fn live_no_audio(
+        &self,
+        p: &str,
+        job: &RecordingJob,
+        m: Option<JobManifest>,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> JobManifest {
+        let root = m.as_ref().and_then(|_| VolumeRoot::parse(&job.root).ok());
+        let mut m = m.unwrap_or_else(|| self.fresh_manifest(job));
+        self.finish_fail(
+            p,
+            root.as_ref(),
+            &mut m,
+            ErrorKind::AudioMissing,
+            Stage::Transcribing,
+            on,
+        );
+        m
+    }
+
     fn fresh_manifest(&self, job: &RecordingJob) -> JobManifest {
         JobManifest::new(
             &job.id,

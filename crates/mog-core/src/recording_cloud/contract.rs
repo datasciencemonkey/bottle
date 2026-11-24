@@ -77,6 +77,16 @@ impl LocalAudio for NoLocalAudio {
 /// A job.json that is not `done` or `failed` and has not changed for this long belongs to a
 /// run that died (a crash or a quit): Retry may start again.
 pub const STALE_AFTER_MS: i64 = 30 * 60 * 1000;
+/// The key of a failed end: (profile, volume root, name).
+type EndKey = (String, String, String);
+
+/// The most failed ends the adapter keeps.
+const MAX_ENDS: usize = 64;
+
+fn end_key(p: &str, root: &str, name: &str) -> EndKey {
+    (p.to_owned(), root.to_owned(), name.to_owned())
+}
+
 /// Gets each manifest change (the host sends `recording.job`).
 pub type JobSink = Arc<dyn Fn(&RecordingSummary) + Send + Sync>;
 
@@ -165,11 +175,11 @@ pub struct CloudAdapter {
     inflight: Mutex<HashSet<String>>,
     /// The recordings that upload during the call or resume after a crash, by name.
     live: Mutex<HashMap<String, LiveStatus>>,
-    /// The last end (done or failed) of a run in this process, by name. The job.json write of
-    /// a failure is best effort: when it does not land, the volume still says `writing_notes`
-    /// (or another step), and the list and Retry read this end instead of a step that no run
-    /// owns any more.
-    ends: Mutex<HashMap<String, JobManifest>>,
+    /// The last failed end of a run in this process, by (profile, volume root, name). The
+    /// job.json write of a failure is best effort: when it does not land, the volume still says
+    /// `writing_notes` (or another step), and the list and Retry read this end instead of a step
+    /// that no run owns any more. Keyed by root, so a storage change never mixes them up.
+    ends: Mutex<HashMap<EndKey, JobManifest>>,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -317,20 +327,30 @@ impl CloudAdapter {
         }
     }
 
-    /// `m` from the volume, or the end this process saw for it when `m` is still at a step
-    /// (not done, not failed) that no run, worker or capture here owns now.
-    fn settled(&self, m: JobManifest, active: &HashSet<String>) -> JobManifest {
-        if matches!(m.status, Status::Done | Status::Failed)
-            || self.in_flight(&m.name)
-            || self.is_live(&m.name)
-            || active.contains(&m.name)
-        {
+    /// `m` from the volume, or the failed end this process saw for it when `m` is still at a
+    /// step (not done, not failed) that no run, worker or capture here owns now.
+    fn settled(
+        &self,
+        p: &str,
+        root: &str,
+        m: JobManifest,
+        active: &HashSet<String>,
+    ) -> JobManifest {
+        if self.in_flight(&m.name) || active.contains(&m.name) {
+            return m;
+        }
+        self.end_of(p, root, m)
+    }
+
+    /// As [`Self::settled`] for a caller that holds the run slot of `m` itself (Retry, Delete).
+    fn end_of(&self, p: &str, root: &str, m: JobManifest) -> JobManifest {
+        if matches!(m.status, Status::Done | Status::Failed) || self.is_live(&m.name) {
             return m;
         }
         self.ends
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&m.name)
+            .get(&end_key(p, root, &m.name))
             .cloned()
             .unwrap_or(m)
     }
@@ -396,20 +416,9 @@ impl CloudAdapter {
             // capture, and the in-flight guard comes before this call.
             Status::Failed | Status::Recording => true,
             Status::Done => false,
-            // A run here failed at this step, but its job.json write did not land.
-            _ if self.ended_failed(&m.name) => true,
             _ => parse_iso_utc_ms(&m.updated_at)
                 .is_none_or(|t| (self.now_ms)() - t >= STALE_AFTER_MS),
         }
-    }
-
-    /// Did the last run of `name` in this process end failed?
-    fn ended_failed(&self, name: &str) -> bool {
-        self.ends
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
-            .is_some_and(|m| m.status == Status::Failed)
     }
 
     /// The service (for the pipeline hand-off).
@@ -417,14 +426,26 @@ impl CloudAdapter {
         &self.service
     }
 
-    fn emit(&self, m: &JobManifest) {
+    /// Tell the sink about `m`, a manifest of a run on `p` and volume `root`.
+    fn emit(&self, p: &str, root: &str, m: &JobManifest) {
         {
+            let key = end_key(p, root, &m.name);
             let mut ends = self.ends.lock().unwrap_or_else(PoisonError::into_inner);
-            if matches!(m.status, Status::Done | Status::Failed) {
-                ends.insert(m.name.clone(), m.clone());
+            if m.status == Status::Failed {
+                if !ends.contains_key(&key) && ends.len() >= MAX_ENDS {
+                    // Keep the map small: the oldest end goes.
+                    let oldest = ends
+                        .iter()
+                        .min_by_key(|(_, e)| parse_iso_utc_ms(&e.updated_at).unwrap_or(0))
+                        .map(|(k, _)| k.clone());
+                    if let Some(k) = oldest {
+                        ends.remove(&k);
+                    }
+                }
+                ends.insert(key, m.clone());
             } else {
-                // A new run works on it: its own end counts from now.
-                ends.remove(&m.name);
+                // A new run works on it, or it is done: no failed end counts any more.
+                ends.remove(&key);
             }
         }
         if let Some(s) = summary_of(m) {
@@ -613,6 +634,17 @@ impl CloudAdapter {
                     self.live_announce(&name, &part);
                     queue.push(part);
                 }
+                Recv::Msg(LiveMsg::Finished(parts))
+                    if ctx.recording && parts.is_empty() && queue.is_empty() =>
+                {
+                    // The call stopped and no audio ever came in: nothing to upload or
+                    // transcribe, so no wait for the network. The job ends failed at once.
+                    self.live_edit(&name, |l| l.recording = false);
+                    let m = self.service.live_no_audio(p, &ctx.job, manifest, &mut |m| {
+                        self.emit(p, &ctx.job.root, m)
+                    });
+                    return summary_of(&m).map(|s| self.overlay(s));
+                }
                 Recv::Msg(LiveMsg::Finished(parts)) => {
                     for part in &parts {
                         self.live_announce(&name, part);
@@ -644,7 +676,7 @@ impl CloudAdapter {
         // the device), so the upload stage of the finish tries them once more.
         let m = self
             .service
-            .live_finish(p, &job, manifest, &mut |m| self.emit(m));
+            .live_finish(p, &job, manifest, &mut |m| self.emit(p, &ctx.job.root, m));
         summary_of(&m).map(|s| self.overlay(s))
     }
 
@@ -665,7 +697,7 @@ impl CloudAdapter {
         manifest: &mut Option<JobManifest>,
         queue: &mut Vec<LocalPart>,
     ) -> Result<(), ErrorKind> {
-        let mut on = |m: &JobManifest| self.emit(m);
+        let mut on = |m: &JobManifest| self.emit(p, &ctx.job.root, m);
         if manifest.is_none() {
             *manifest = Some(self.service.live_begin(p, &ctx.job, &mut on)?);
         }
@@ -714,9 +746,9 @@ impl CloudAdapter {
         let Some(_guard) = self.begin(&req.name) else {
             return Err(RecordingErrorKind::RecordingBusy);
         };
-        let m = self
-            .service
-            .run(req.profile.as_str(), &job, &mut |m| self.emit(m));
+        let m = self.service.run(req.profile.as_str(), &job, &mut |m| {
+            self.emit(req.profile.as_str(), req.storage.root.as_str(), m)
+        });
         summary_of(&m).ok_or(RecordingErrorKind::Internal)
     }
 
@@ -925,7 +957,7 @@ impl RecordingCloud for CloudAdapter {
         // at its step, so Retry shows.
         let rows: Vec<JobManifest> = rows
             .into_iter()
-            .map(|m| self.settled(m, &active))
+            .map(|m| self.settled(profile.as_str(), Self::root(storage), m, &active))
             .map(|mut m| {
                 let stuck = !self.in_flight(&m.name)
                     && !active.contains(&m.name)
@@ -973,6 +1005,21 @@ impl RecordingCloud for CloudAdapter {
                 out.extend(self.live_row(name, l));
             }
         }
+        // A run here that failed with no job.json in the volume (a call with no audio whose
+        // start never reached the volume): its failed end is the row.
+        let ends: Vec<JobManifest> = self
+            .ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|((p, r, _), _)| p == profile.as_str() && r == Self::root(storage))
+            .map(|(_, m)| m.clone())
+            .collect();
+        for m in &ends {
+            if !out.iter().any(|r| r.name == m.name) && !local.contains_key(&m.name) {
+                out.extend(summary_of(m));
+            }
+        }
         // ADR 0103 decision 7: audio left on the device with no job.json in the volume. Never
         // the recording capture owns right now, or one that finished but has not yet reached
         // the pipeline (review of #592, BLOCKING B3). A recording that capture owns, with no
@@ -1016,7 +1063,12 @@ impl RecordingCloud for CloudAdapter {
             .service
             .detail(profile.as_str(), Self::root(storage), id.as_str())
             .map_err(err)?;
-        let job = self.settled(d.job, &self.local.active());
+        let job = self.settled(
+            profile.as_str(),
+            Self::root(storage),
+            d.job,
+            &self.local.active(),
+        );
         let summary = summary_of(&job).ok_or(RecordingErrorKind::Internal)?;
         let instructions = d
             .transcript
@@ -1070,9 +1122,15 @@ impl RecordingCloud for CloudAdapter {
         // this call takes the slot, and this call would restart it.
         let Some(_guard) = self.begin(name) else {
             let current = self.service.job(p, root, name).map_err(wire_kind)?;
-            return now(&current);
+            let active = self.local.active();
+            return now(&current.map(|m| self.settled(p, root, m, &active)));
         };
-        let current = self.service.job(p, root, name).map_err(wire_kind)?;
+        // This call holds the run slot now: a failed end of this process counts.
+        let current = self
+            .service
+            .job(p, root, name)
+            .map_err(wire_kind)?
+            .map(|m| self.end_of(p, root, m));
         if current.as_ref().is_some_and(|m| !self.retry_allowed(m)) {
             return now(&current);
         }
@@ -1100,7 +1158,7 @@ impl RecordingCloud for CloudAdapter {
             mog: RECORDING_MOG_TAG.to_owned(),
             parts: self.local.parts(name),
         };
-        let m = self.service.retry(p, &job, &mut |m| self.emit(m));
+        let m = self.service.retry(p, &job, &mut |m| self.emit(p, root, m));
         if m.status == Status::Done {
             self.local.tidy(name);
         }
@@ -1167,7 +1225,7 @@ impl RecordingCloud for CloudAdapter {
                 .service
                 .job(profile.as_str(), Self::root(storage), name)
                 .map_err(wire_kind)?;
-            if let Some(m) = job {
+            if let Some(m) = job.map(|m| self.end_of(profile.as_str(), Self::root(storage), m)) {
                 if !self.retry_allowed(&m) || m.parts.iter().any(|p| p.uploaded) {
                     return Err(RecordingErrorKind::RecordingBusy);
                 }

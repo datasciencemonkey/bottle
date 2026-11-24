@@ -691,7 +691,6 @@ impl PartsHandoff for LiveHandoff {
                     // stays in the list with its reason. Before, the worker just stopped: the
                     // job.json stayed at `recording`, and the list hid it as a deleted upload.
                     remove_dir_if_empty(&rec.dir);
-                    sidecar::remove(&rec.dir);
                     let _ = tx.send(LiveMsg::Finished(Vec::new()));
                     return;
                 }

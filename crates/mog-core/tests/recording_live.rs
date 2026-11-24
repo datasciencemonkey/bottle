@@ -891,6 +891,12 @@ fn rec_parts_a_stop_with_no_audio_ends_failed_and_the_row_stays_in_the_list() {
         r.vol.vol.lock().unwrap().model_calls.is_empty(),
         "no model call"
     );
+    let log = r.vol.vol.lock().unwrap().log.clone();
+    assert_eq!(
+        log,
+        vec!["job:Recording:0".to_owned(), "job:Failed:0".to_owned()],
+        "no uploading or transcribing step"
+    );
     let rows = r
         .adapter
         .list(&ProfileName::try_from(P.to_owned()).unwrap(), &storage())
@@ -957,23 +963,30 @@ fn rec_parts_a_notes_failure_whose_job_write_is_lost_reads_failed_and_retry_fini
 }
 
 #[test]
-fn rec_parts_a_writing_notes_job_of_a_run_elsewhere_still_reads_writing_notes() {
-    // No run in this process ended it: a fresh `writing_notes` job.json is another run's (another
-    // Mac), so it keeps its step until it goes stale.
-    let r = rig("elsewhere", 0, vec![]);
-    put_job(
-        &r,
-        NAME,
-        Status::WritingNotes,
-        &[("x.part01.opus", true)],
-        "2026-11-20T09:00:00Z",
+fn rec_parts_a_stop_with_no_audio_while_offline_ends_at_once_and_still_lists_the_row() {
+    // Offline for the whole call, and no audio: no wait for the network, no volume folder, and
+    // the failed row still shows (from this run's end) once the list can be read.
+    let r = rig("noaudio-off", 0, vec![]);
+    r.vol.offline.store(true, Ordering::SeqCst);
+    let out = run(&r, &r.ctx(true), |i, _| match i {
+        0 => Recv::Msg(LiveMsg::Finished(Vec::new())),
+        _ => panic!("no network wait for a call with no audio"),
+    })
+    .expect("a result");
+    assert_eq!(out.status, RecordingStatus::Failed);
+    assert_eq!(out.error_kind, Some(RecordingErrorKind::AudioUnreadable));
+    r.vol.offline.store(false, Ordering::SeqCst);
+    assert!(
+        r.vol.vol.lock().unwrap().files.is_empty(),
+        "nothing in the volume"
     );
     let rows = r
         .adapter
         .list(&ProfileName::try_from(P.to_owned()).unwrap(), &storage())
         .unwrap();
-    let row = rows.iter().find(|x| x.name == NAME).unwrap();
-    assert_eq!(row.status, RecordingStatus::WritingNotes);
+    let row = rows.iter().find(|x| x.name == NAME).expect("the row stays");
+    assert_eq!(row.status, RecordingStatus::Failed);
+    assert_eq!(row.error_kind, Some(RecordingErrorKind::AudioUnreadable));
 }
 
 #[test]

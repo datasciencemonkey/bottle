@@ -839,6 +839,27 @@ fn cap_10a_denied_system_audio_still_records_the_mic_and_never_stops_the_call() 
 }
 
 #[test]
+fn rec_capture_counts_say_whether_mic_frames_reached_the_writer() {
+    // A stop with no mic frame at all: no part, and the counts show it (no samples kept).
+    let r = rig();
+    r.session.start(opts("n", 60)).unwrap();
+    let none = r.session.stop(StopCause::User).unwrap();
+    assert!(none.parts.is_empty());
+    assert_eq!(none.capture.mic_blocks, 0);
+    assert_eq!(none.capture.first_mic_ms, None);
+    // A normal call: every block counts, from the arm on.
+    r.session.start(opts("m", 60)).unwrap();
+    r.clock.advance(Duration::from_millis(30));
+    play(&r, 500, 0.1, 0.1);
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.capture.mic_blocks, 50);
+    assert_eq!(done.capture.gated_mic_blocks, 0);
+    assert!(done.capture.system_blocks > 0);
+    assert_eq!(done.capture.dropped, 0);
+    assert_eq!(done.capture.first_mic_ms, Some(30));
+}
+
+#[test]
 fn adr_0103_no_system_audio_backend_records_mic_only() {
     let r = rig_with(true, None);
     let info = r.session.start(opts("n", 60)).unwrap();

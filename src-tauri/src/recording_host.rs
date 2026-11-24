@@ -134,6 +134,32 @@ impl HandoffSlot {
     }
 }
 
+/// The file, in the temp recordings folder, that holds the capture check of the last stop.
+pub const CAPTURE_CHECK_FILE: &str = "last-capture.json";
+
+/// Write the content-free check of `rec` to `<root>/last-capture.json` (user-only): the
+/// counts of what reached the writer, the part count, the length, the stop cause and the
+/// system audio state. No samples, levels, names, paths, profile or text.
+pub fn write_capture_check(root: &std::path::Path, rec: &FinishedRecording) -> std::io::Result<()> {
+    let v = serde_json::json!({
+        "capture": rec.capture,
+        "parts": rec.parts.len(),
+        "durationMs": rec.duration_ms,
+        "cause": rec.cause.code(),
+        "systemAudio": rec.system_audio.code(),
+    });
+    let path = root.join(CAPTURE_CHECK_FILE);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    use std::io::Write as _;
+    o.open(path)?.write_all(v.to_string().as_bytes())
+}
+
 impl PartsHandoff for HandoffSlot {
     fn started(&self, rec: &mog_core::recording_capture::session::StartedRecording) {
         let to = self
@@ -160,6 +186,9 @@ impl PartsHandoff for HandoffSlot {
     }
 
     fn finished(&self, rec: FinishedRecording) {
+        if let Some(root) = rec.dir.parent() {
+            let _ = write_capture_check(root, &rec);
+        }
         let to = {
             let mut st = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             match &st.to {

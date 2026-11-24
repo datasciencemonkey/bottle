@@ -350,6 +350,30 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.mood.callRecording).toHaveBeenLastCalledWith(false);
   });
 
+  it('[REC-H9] a slow, older list reply never overwrites a newer one', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    let release: (v: RecSummary[]) => void = () => undefined;
+    const old = { id: 'old', name: '2026-11-24_1600', startedAt: 1, durationS: 0 };
+    t.fake.api.list
+      .mockImplementationOnce(
+        () =>
+          new Promise<RecSummary[]>((r) => {
+            release = r;
+          }),
+      )
+      .mockImplementationOnce(async () => [
+        { id: 'new', name: '2026-11-24_1741', startedAt: 2, durationS: 0, status: 'uploading' },
+      ]);
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    release([{ ...old, status: 'recording' }]);
+    await flush();
+    const rows = t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows ?? [];
+    expect(rows.map((r) => r.id)).toEqual(['new']);
+  });
+
   it('[REC-H9] the end of a call reads the list at once, so the new row shows with no job event', async () => {
     const t = setup({ enabled: true, consentAck: true });
     // The record key starts it (no hub click): only recording.state reaches the brain.

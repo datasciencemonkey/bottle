@@ -51,6 +51,7 @@ fn rec(dir: &std::path::Path, id: &str, profile: Option<&str>, parts: usize) -> 
         system_audio: SystemAudioState::Ok,
         profile: profile.map(str::to_owned),
         instructions: Some("Only action items.".into()),
+        capture: Default::default(),
     }
 }
 
@@ -672,4 +673,37 @@ fn rec_parts_a_stop_with_no_audio_still_ends_the_job_so_the_row_never_vanishes()
         last.error_kind,
         Some(mog_core::types::RecordingErrorKind::AudioUnreadable)
     );
+}
+
+#[test]
+fn rec_capture_check_file_holds_counts_only() {
+    let root = temp("capture-check");
+    let d = root.join("rec-1234");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut done = rec(&d, "rec-1234", Some("fake-home"), 0);
+    done.capture.mic_blocks = 7;
+    bottle_lib::recording_host::write_capture_check(&root, &done).unwrap();
+    let text = std::fs::read_to_string(root.join("last-capture.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["capture"]["micBlocks"], 7);
+    assert_eq!(v["parts"], 0);
+    assert_eq!(v["cause"], "user");
+    for secret in [
+        "fake-home",
+        "2026-11-19_0905",
+        "Only action items",
+        "rec-1234",
+    ] {
+        assert!(!text.contains(secret), "no {secret} in {text}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(root.join("last-capture.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let _ = std::fs::remove_dir_all(root);
 }
