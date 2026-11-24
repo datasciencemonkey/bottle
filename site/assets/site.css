@@ -22,7 +22,7 @@
   --spark: #f6c463;
   --text: #f4f1f6;
   --muted: #b6bfd0;
-  --faint: #929db3;
+  --faint: #9ca7bc;
   --edge: rgb(244 167 172 / 16%);
   --hair: rgb(255 255 255 / 9%);
   --ok: #7fd1a8;
@@ -773,8 +773,7 @@ a {
 }
 
 .kc.is-down,
-.key-row:hover .kc:not(.tap),
-.key-row:focus-visible .kc:not(.tap) {
+.key-row:hover .kc:not(.tap) {
   transform: translateY(3px);
   background: linear-gradient(180deg, #3a3423, #2b2618);
   color: var(--spark);
@@ -786,8 +785,7 @@ a {
 }
 
 .kc.is-down em,
-.key-row:hover .kc em,
-.key-row:focus-visible .kc em {
+.key-row:hover .kc em {
   color: rgb(246 196 99 / 80%);
 }
 
@@ -1372,8 +1370,7 @@ a {
   transition: background 220ms ease;
 }
 
-.key-row:hover,
-.key-row:focus-visible {
+.key-row:hover {
   background: linear-gradient(90deg, rgb(246 196 99 / 5%), transparent 70%);
 }
 
@@ -1416,13 +1413,11 @@ a {
   font-size: 13px;
 }
 
-.key-row:hover .kc-lg:not(.tap),
-.key-row:focus-visible .kc-lg:not(.tap) {
+.key-row:hover .kc-lg:not(.tap) {
   transform: translateY(5px);
 }
 
-.key-row:hover .tap,
-.key-row:focus-visible .tap {
+.key-row:hover .tap {
   animation: tap 900ms ease 160ms both;
 }
 

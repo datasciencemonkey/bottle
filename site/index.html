@@ -78,8 +78,8 @@
               </a>
             </div>
             <p class="fine">
-              For macOS 14.4 or later. Needs a Databricks workspace with Genie and the Databricks
-              CLI. Windows and Linux: work in progress.
+              For macOS 14.4 or later on Apple Silicon. Needs a Databricks workspace with Genie and
+              the Databricks CLI. Windows and Linux: work in progress.
             </p>
           </div>
 
@@ -305,7 +305,7 @@
           </div>
 
           <ol class="key-rows">
-            <li class="key-row" tabindex="0">
+            <li class="key-row">
               <div class="combo" aria-hidden="true">
                 <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
               </div>
@@ -324,7 +324,7 @@
               </ul>
             </li>
 
-            <li class="key-row key-row-hero" tabindex="0">
+            <li class="key-row key-row-hero">
               <div class="combo" aria-hidden="true">
                 <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
                 <span class="combo-plus">+</span>
@@ -348,7 +348,7 @@
               </ul>
             </li>
 
-            <li class="key-row" tabindex="0">
+            <li class="key-row">
               <div class="combo" aria-hidden="true">
                 <span class="kc kc-lg kc-opt"><small>&#8997;</small><em>right option</em></span>
                 <span class="combo-plus">+</span>
@@ -365,7 +365,7 @@
               <ul class="key-facts">
                 <li>Off until you turn it on in Settings</li>
                 <li>Your volume, under your governance</li>
-                <li>Transcript and notes through your AI Gateway</li>
+                <li>Transcript and notes through your Databricks AI Gateway</li>
               </ul>
             </li>
           </ol>
@@ -385,11 +385,13 @@
             <div class="lane lane-db" aria-hidden="true"></div>
             <p class="lane-label lane-label-mac">
               <b>On your Mac</b>
-              The mic, speech-to-text, your tokens and your history stay in the Rust core.
+              The mic, on-device speech-to-text by default, your tokens and your history stay in the
+              Rust core.
             </p>
             <p class="lane-label lane-label-db">
               <b>In your Databricks</b>
-              Models run on your AI Gateway. Genie answers under Unity Catalog permissions.
+              The orchestrator, cleanup and call-recording models run on your Databricks AI Gateway.
+              Genie answers under Unity Catalog permissions.
             </p>
             <svg
               class="lane-path"
@@ -421,15 +423,15 @@
                 <span class="where">On your Mac</span>
                 <span class="n">2</span>
                 <h3>Speech becomes text</h3>
-                <p>Parakeet runs on the device. Your audio stays put.</p>
+                <p>Parakeet runs on the device by default. Databricks transcription is optional.</p>
               </li>
               <li class="step on-db" style="--col: 3">
                 <span class="where">In your Databricks</span>
                 <span class="n">3</span>
                 <h3>The orchestrator plans</h3>
                 <p>
-                  A <code>system.ai</code> model on your AI Gateway, with <code>store: false</code>.
-                  Its only tool: ask Genie.
+                  A <code>system.ai</code> model on your Databricks AI Gateway, with
+                  <code>store: false</code>. Its only tool: ask Genie.
                 </p>
               </li>
               <li class="step on-db" style="--col: 4">
@@ -463,7 +465,11 @@
               The safeguards are in the architecture, not in a policy page. Bottle can only do what
               your Databricks sign-in already allows.
             </p>
-            <div class="receipt" aria-label="Example receipt of one ask, with illustrative values">
+            <div
+              class="receipt"
+              role="group"
+              aria-label="Example receipt of one ask, with illustrative values"
+            >
               <div class="receipt-hd">
                 <img src="assets/mood-success.webp" alt="" width="40" height="40" />
                 <div>
@@ -541,7 +547,7 @@
                 <div>
                   <dt>Governed models only</dt>
                   <dd>
-                    Every model call goes through your Unity AI Gateway to
+                    Every model call goes through your Databricks AI Gateway to
                     <code>system.ai</code> models, with nothing stored.
                   </dd>
                 </div>
@@ -592,16 +598,20 @@
           <ol class="stack" aria-label="What Bottle is built on, from your Mac down to your data">
             <li class="slab slab-bottle">
               <b>Bottle</b>
-              <span>On your Mac: the keys, on-device speech, the lamp, encrypted history.</span>
+              <span
+                >On your Mac: the keys, on-device dictation speech by default, the lamp, encrypted
+                history.</span
+              >
             </li>
             <li class="slab">
               <b>Databricks Genie</b>
               <span>Genie One through MCP answers in each workspace, from governed data.</span>
             </li>
             <li class="slab">
-              <b>Unity AI Gateway</b>
+              <b>Databricks AI Gateway</b>
               <span
-                >The orchestrator and speech models: <code>system.ai</code>, nothing stored.</span
+                >The orchestrator, cleanup and call-recording models, and optional Databricks
+                transcription: <code>system.ai</code>, nothing stored.</span
               >
             </li>
             <li class="slab">
@@ -624,7 +634,7 @@
             </p>
           </div>
 
-          <div class="wheel" aria-label="The know-how flywheel, planned">
+          <div class="wheel" role="group" aria-label="The know-how flywheel, planned">
             <svg class="wheel-ring" viewBox="0 0 200 200" aria-hidden="true">
               <circle cx="100" cy="100" r="78" />
               <circle class="wheel-run" cx="100" cy="100" r="78" />
