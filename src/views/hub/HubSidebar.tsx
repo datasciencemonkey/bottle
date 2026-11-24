@@ -108,7 +108,13 @@ export function HubSidebar({
                 not an extra py on top of the panel's own padding (review polish note): lines
                 the pin button's vertical centre up with the content column's area-header row
                 (hub-area-header in Hub.tsx), which has no top padding of its own either. */}
-            <div className="flex h-10 items-center justify-end px-[var(--mog-space-1)]">
+            <div
+              data-sidebar-pin-row
+              className={
+                'flex h-10 items-center px-[var(--mog-space-1)] ' +
+                (collapsed ? 'justify-center' : 'justify-end')
+              }
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -144,7 +150,10 @@ export function HubSidebar({
                     data-sidebar-item={item.id}
                     onClick={() => onView(item.id)}
                     className={
-                      'relative flex h-auto min-h-0 w-full items-center gap-[var(--mog-space-3)] rounded-[var(--radius-sm)] border-0 bg-transparent px-[var(--mog-space-2)] py-[var(--mog-space-2)] text-[var(--mog-text-sm)] transition-colors motion-reduce:transition-none hover:text-foreground ' +
+                      'relative flex h-auto min-h-0 w-full items-center rounded-[var(--radius-sm)] border-0 bg-transparent py-[var(--mog-space-2)] text-[var(--mog-text-sm)] transition-colors motion-reduce:transition-none hover:text-foreground ' +
+                      (collapsed
+                        ? 'justify-center px-0 '
+                        : 'gap-[var(--mog-space-3)] px-[var(--mog-space-2)] ') +
                       (active ? 'text-foreground' : 'text-muted-foreground')
                     }
                   >
@@ -173,7 +182,16 @@ export function HubSidebar({
                 );
               })}
             </ul>
-            <div className="mt-auto flex justify-center">
+            {/* Same px-1 inset and size-6 box as the pin row: its 14px icon centre lands on the nav
+                icons' centre (panel p-2 + px-2 + half of 16px), and on the rail's centre axis
+                when collapsed, where the nav icons are centred too. */}
+            <div
+              data-sidebar-collapse-row
+              className={
+                'mt-auto flex h-10 items-center px-[var(--mog-space-1)] ' +
+                (collapsed ? 'justify-center' : 'justify-start')
+              }
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button

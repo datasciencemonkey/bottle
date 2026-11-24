@@ -234,6 +234,27 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(items(el)[0]?.getAttribute('aria-current')).toBe('page');
   });
 
+  it('[#sidebar-align] the collapse button shares the pin button box and the icon column', async () => {
+    const { el } = await render(<Hub />);
+    await act(async () => toggle(el)?.click());
+    const q = (sel: string) => el.querySelector<HTMLElement>(sel);
+    const collapseRow = () => q('[data-sidebar-collapse-row]');
+    const pinRow = () => q('[data-sidebar-pin-row]');
+    // Same hit target as the pin button.
+    expect(q('[data-sidebar-collapse]')?.className).toContain('size-6');
+    expect(q('[data-sidebar-pin]')?.className).toContain('size-6');
+    // Expanded: the collapse button starts on the icon column, not centred.
+    expect(collapseRow()?.className).toContain('justify-start');
+    expect(collapseRow()?.className).toContain('px-[var(--mog-space-1)]');
+    expect(collapseRow()?.className).not.toContain('justify-center');
+    expect(pinRow()?.className).toContain('justify-end');
+    // Collapsed: pin, nav icons and collapse button all sit on the one centre axis.
+    await act(async () => q('[data-sidebar-collapse]')?.click());
+    expect(collapseRow()?.className).toContain('justify-center');
+    expect(pinRow()?.className).toContain('justify-center');
+    for (const b of items(el)) expect(b.className).toContain('justify-center');
+  });
+
   it('[home] Cmd+B and Cmd+\\ toggle the sidebar on Home', async () => {
     const { el } = await render(<Hub />);
     const key = (k: string) =>
