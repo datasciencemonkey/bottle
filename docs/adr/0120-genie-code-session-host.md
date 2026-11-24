@@ -2,6 +2,10 @@
 
 Status: accepted (drafted to STE100 rules; the official dictionary check was not done).
 
+Superseded in part by ADR 0121: the turn text (the question and the combined answer) now also
+lives on disk, in the local store, until the user deletes the thread or uses Wipe. The session
+host itself is unchanged: GENIE_HOME stays disposable and holds no turn content.
+
 ## Context
 
 The MOG agent (ADR 0117 follow-up, plan Amendment 2) runs on one live `genie app-server` per

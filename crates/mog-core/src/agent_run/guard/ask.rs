@@ -28,8 +28,7 @@ use super::genie_poll::{self, is_terminal, PollEnd, PollEnv};
 use super::ledger::{new_call_id, send_cancel, tags_of, CallRec, SessionRec, State};
 use super::receipt::{self, Outcome, ToolOut};
 use super::{
-    AgentGuard, D1_SUPPORTED, MAX_QUESTION_CHARS, MAX_REFUSALS, MAX_WORKSPACE_CHARS,
-    NO_ACTIVE_TURN, RUN_STOPPED,
+    AgentGuard, MAX_QUESTION_CHARS, MAX_REFUSALS, MAX_WORKSPACE_CHARS, NO_ACTIVE_TURN, RUN_STOPPED,
 };
 use crate::agent_guard::AUDIT_UNAVAILABLE;
 use crate::agent_run::seam::{AgentEvent, StopWhy};
@@ -179,7 +178,7 @@ impl AgentGuard {
             let Some(sess) = st.sessions.get_mut(sid) else {
                 return Err(ToolOut::refusal(RUN_STOPPED));
             };
-            let d1 = D1_SUPPORTED && sess.spec.cross_workspace;
+            let d1 = sess.spec.cross_workspace;
             let entry = sess.spec.catalog.iter().find(|c| c.alias == alias).cloned();
             match entry {
                 None => Verdict::Refuse(AgentRefusal::WorkspaceNotAvailable),
@@ -480,7 +479,7 @@ impl AgentGuard {
         let event = {
             let mut st = self.lock();
             if let Some(sess) = st.sessions.get_mut(sid) {
-                let d1 = D1_SUPPORTED && sess.spec.cross_workspace;
+                let d1 = sess.spec.cross_workspace;
                 let is_agent_ws = sess
                     .spec
                     .catalog

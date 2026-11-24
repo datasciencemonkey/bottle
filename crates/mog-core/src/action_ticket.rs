@@ -12,6 +12,7 @@
 //! | `HubRate` | a hub `memory.rate` click | `Rate` | `[itemId]` |
 //! | `HubEdit` | a hub `memory.edit` click | `Edit` | `["edit", itemId, kind, title, body]` |
 //! | `AgentChip` | a card `agent-more:` or `agent-resend:` chip click | `Ask` | the MOG only |
+//! | `HubThread` | a hub Conversations `agent.thread_send` click (ADR 0121) | `Ask` | the MOG only |
 //!
 //! The binding is the SHA-256 of the compact JSON array. At redeem time the ticket builds the
 //! array again from the write params (`itemType` is the kind), so the write must hold exactly
@@ -47,6 +48,9 @@ pub enum Trigger {
     /// A click on a card `agent-more:` or `agent-resend:` chip (slice 2a): the user asks the
     /// agent again.
     AgentChip,
+    /// A typed follow-up in a hub Conversations agent thread (`agent.thread_send`, ADR 0121):
+    /// the user asks the agent again.
+    HubThread,
 }
 
 /// What a ticket allows.
@@ -68,7 +72,7 @@ impl Trigger {
             Trigger::Ui | Trigger::Voice | Trigger::HubAdd => Purpose::Pin,
             Trigger::HubRate => Purpose::Rate,
             Trigger::HubEdit => Purpose::Edit,
-            Trigger::AgentChip => Purpose::Ask,
+            Trigger::AgentChip | Trigger::HubThread => Purpose::Ask,
         }
     }
 }
@@ -191,7 +195,7 @@ fn binding_of(trigger: Trigger, p: &Value) -> Option<Option<Value>> {
     match trigger {
         Trigger::Ui => origin_ok(None).then_some(None),
         // An Ask ticket binds the MOG only: the host does not know the question text.
-        Trigger::AgentChip => Some(None),
+        Trigger::AgentChip | Trigger::HubThread => Some(None),
         Trigger::Voice => {
             if !absent(p, "title") || !absent(p, "body") || !origin_ok(None) {
                 return None;
@@ -301,6 +305,12 @@ impl ActionTickets {
     /// A card `agent-more:` or `agent-resend:` chip click of `mog_id` (slice 2a).
     pub fn mint_ask(&self, id: String, mog_id: &str, now_ms: u64) -> String {
         self.mint(id, Some(mog_id), Trigger::AgentChip, None, now_ms)
+    }
+
+    /// A hub Conversations `agent.thread_send` click of `mog_id` (ADR 0121). It binds the MOG
+    /// only: the host does not bind the question text.
+    pub fn mint_hub_thread(&self, id: String, mog_id: &str, now_ms: u64) -> String {
+        self.mint(id, Some(mog_id), Trigger::HubThread, None, now_ms)
     }
 
     /// A hub thumbs up on `item_id`.

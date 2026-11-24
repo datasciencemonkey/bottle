@@ -25,7 +25,6 @@
  *   `event=memory.write ok=0` (SEC-16c): no question, answer or error text.
  */
 import type {
-  GenieExchange,
   MemoryService,
   MogId,
   OperationState,
@@ -34,7 +33,7 @@ import type {
 } from '../shared/interfaces';
 import type { TerminalAskEvent } from './components/ask-events';
 import { ipcMogConfigClient } from './components/mog-manager';
-import type { MogRow } from './components/memory-service';
+import type { ExchangeWrite, MogRow } from './components/memory-service';
 import { ipcListProfiles } from './home-profile';
 import { createBrainLog, type BrainLog } from './log';
 
@@ -54,6 +53,18 @@ export interface GenieEnd {
    * UUID (`genie_exchange.split_group_id`, the `turnId`).
    */
   splitGroupId?: string;
+  /**
+   * Agent threads in Conversations: `genie_agent` marks the one row of an agent turn (it holds
+   * the user's question and the combined answer; `opId` is the turn UUID). Absent: a Genie call.
+   */
+  backend?: 'genie_agent';
+  /** With `backend: 'genie_agent'`: the root UUID of the thread, saved as `split_group_id`. */
+  threadId?: string;
+  /**
+   * The brain-side Wipe fence (security L3): true once a Wipe ran since the write started. The
+   * writer checks it before each store write and saves nothing after a Wipe.
+   */
+  isStale?: () => boolean;
   /** Slice 2a: false for a call to a workspace that is not home (the table keeps no question text). */
   homeWorkspace?: boolean;
 }
@@ -61,7 +72,7 @@ export interface GenieEnd {
 /** The part of T10 that the history uses. */
 export interface ExchangeMemory {
   registerMog(m: MogRow): Promise<void>;
-  recordExchange(x: GenieExchange): Promise<void>;
+  recordExchange(x: ExchangeWrite): Promise<void>;
 }
 
 export function isExchangeMemory(m: object): m is ExchangeMemory {
@@ -105,13 +116,14 @@ const STATUS: Record<TerminalAskEvent['t'], OperationState> = {
   cancel_requested: 'CANCEL_REQUESTED',
 };
 
-function exchangeOf(x: GenieEnd, host: string, mogId: MogId): GenieExchange {
+function exchangeOf(x: GenieEnd, host: string, mogId: MogId): ExchangeWrite {
   const e = x.end;
+  const agent = x.backend === 'genie_agent';
   return {
     requestId: x.opId,
     mogId,
     ref: {
-      backend: 'genie_one_mcp',
+      backend: agent ? 'genie_agent' : 'genie_one_mcp',
       profile: x.profile,
       host,
       conversationId: x.conversationId ?? '',
@@ -128,7 +140,10 @@ function exchangeOf(x: GenieEnd, host: string, mogId: MogId): GenieExchange {
     keyNumbers: e.t === 'answer' ? e.keyNumbers : [],
     deepLink: e.t === 'answer' ? e.deepLink : '',
     homeWorkspace: x.homeWorkspace ?? true,
-    ...(x.splitGroupId !== undefined ? { splitGroupId: x.splitGroupId } : {}),
+    ...(agent ? { noSummary: true as const } : {}),
+    ...((agent ? x.threadId : x.splitGroupId) !== undefined
+      ? { splitGroupId: agent ? x.threadId : x.splitGroupId }
+      : {}),
   };
 }
 
@@ -146,11 +161,14 @@ export function createGenieHistory(deps: GenieHistoryDeps): (x: GenieEnd) => Pro
         deps.mogName(dataMogId).catch(() => ''),
         deps.hostOf(x.profile).catch(() => undefined),
       ]);
+      if (x.isStale?.()) return;
       await deps.memory.registerMog({
         mogId: dataMogId,
         displayName: name.trim() === '' ? MOG_NAME_FALLBACK : name,
         backendKind: MOG_BACKEND_KIND,
       });
+      // A Wipe may have run while the lookups above waited: it deleted every row, so none returns.
+      if (x.isStale?.()) return;
       await deps.memory.recordExchange(exchangeOf(x, host ?? '', dataMogId));
     } catch {
       deps.log.event('memory.write', { ok: 0 });

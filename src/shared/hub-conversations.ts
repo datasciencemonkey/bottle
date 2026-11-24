@@ -13,12 +13,16 @@
  * A row saved before #584 has no `conversationId` and is its own one-exchange thread.
  */
 
+import type { AgentWsChip } from './ipc';
+
 /** The brain-to-hub event that carries the list. */
 export const HUB_CONVERSATIONS_EVENT = 'hub:conversations';
 
 /**
  * The brain-to-hub event that opens Conversations on one exchange (a double-click on the MOG or
- * on the card). The payload is `{ requestId }`, the `opId` of the request.
+ * on the card). The payload is `{ requestId }`, the `opId` of the request, or `{ threadId }`,
+ * the root UUID of an agent thread (the card chip "Open in Conversations"). It may be a thread
+ * that is not in the store yet.
  */
 export const HUB_CONVERSATIONS_OPEN_EVENT = 'hub:conversations.open';
 
@@ -69,18 +73,64 @@ export interface ConversationRow {
   conversationId: string;
 }
 
+/** One answer of one workspace inside an agent turn. */
+export interface AgentThreadPart {
+  requestId: string;
+  workspace: AgentWsChip;
+  /** The CLI profile name (never a token). */
+  profile: string;
+  workspaceHost: string;
+  status: 'answered' | 'failed';
+  answerMd: string;
+  deepLink?: string;
+  keyNumbers: ConversationKeyNumber[];
+}
+
+/** One turn of an agent thread: the user's question, the combined summary and the parts. */
+export interface AgentThreadTurn {
+  turnUuid: string;
+  question: string;
+  /** Epoch ms. */
+  askedAt: number;
+  status: 'answered' | 'failed' | 'stopped';
+  summaryMd: string;
+  parts: AgentThreadPart[];
+}
+
+/** One agent thread (the MOG agent, slice 2a): its turns, oldest first. */
+export interface AgentThread {
+  /** The root UUID of the thread. */
+  threadId: string;
+  mogId: string;
+  mogName: string;
+  mogColorVariant?: string;
+  turns: AgentThreadTurn[];
+}
+
 /** What the hub shows. `unavailable` is true when the brain could not read the store. */
 export interface HubConversations {
   rows: ConversationRow[];
+  /** The agent threads. Absent from a brain that sends none. */
+  agentThreads?: AgentThread[];
   unavailable?: true;
 }
+
+/** The most keys one `conversations.delete` carries. */
+export const CONVERSATIONS_DELETE_MAX = 200;
 
 /**
  * The hub Conversations actions: `conversations.ready` asks for the list (when the area opens or
  * shows again); `conversations.opened` says the hub got an open, so the brain stops holding it.
+ * `conversations.delete` deletes 1 to 200 threads. A key is `c:<conversationId>`,
+ * `r:<requestId>` or `a:<threadUuid>`. The brain resolves the rows from its own last read and
+ * refuses a thread that is in progress.
  */
 export type ConversationsAction =
-  { action: 'conversations.ready' } | { action: 'conversations.opened' };
+  | { action: 'conversations.ready' }
+  | { action: 'conversations.opened' }
+  /** `onlyFailed`: Clear failed. The brain re-checks each key and skips a thread that has an
+   *  answered or in-progress exchange by the time the delete runs. */
+  | { action: 'conversations.delete'; threads: string[]; onlyFailed?: true };
 
 /** One thread: every exchange that shares one Genie `conversationId`, oldest first. */
 export interface ConversationThread {
@@ -122,12 +172,24 @@ export interface ThreadSendAction {
 }
 
 /**
+ * The thread composer's Send on an agent thread: `question` goes to the MOG `mogId` as a
+ * follow-up in thread `threadId`. The question has 1 to 1000 code points.
+ */
+export interface AgentThreadSendAction {
+  action: 'agent.thread_send';
+  threadId: string;
+  mogId: string;
+  question: string;
+}
+
+/**
  * `thread.active`: the hub window is focused on this thread, so a ⌥G press is a follow-up in it
  * (genie-followup, item 4) instead of a new question on the home workspace. `thread.inactive`
  * clears it: the hub lost focus, or the thread is no longer shown.
  */
 export type ThreadFocusAction =
   | { action: 'thread.active'; conversationId: string; profile: string }
+  | { action: 'thread.active_agent'; threadId: string }
   | { action: 'thread.inactive' };
 
 /** The brain-to-hub event with the live status of a sent follow-up (ASKING_GENIE, a stage, or
@@ -167,12 +229,37 @@ export interface ThreadStatus {
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const isStr = (v: unknown): v is string => typeof v === 'string';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v: unknown): v is string => isStr(v) && UUID.test(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isKey = (v: unknown): v is string => {
+  if (!isStr(v)) return false;
+  const id = v.slice(2);
+  if (v.startsWith('a:')) return isUuid(id);
+  if (v.startsWith('r:')) return id.length > 0 && id.length <= 64;
+  return v.startsWith('c:') && id.length > 0 && id.length <= 256;
+};
 
 /** Shape check of a hub action for Conversations. Unknown fields are dropped. */
 export function asConversationsAction(p: unknown): ConversationsAction | undefined {
   if (!isObj(p)) return undefined;
   const a = p['action'];
-  return a === 'conversations.ready' || a === 'conversations.opened' ? { action: a } : undefined;
+  if (a === 'conversations.ready' || a === 'conversations.opened') return { action: a };
+  if (a !== 'conversations.delete') return undefined;
+  const t = p['threads'];
+  if (!Array.isArray(t) || t.length < 1 || t.length > CONVERSATIONS_DELETE_MAX) return undefined;
+  if (!t.every(isKey)) return undefined;
+  const out: ConversationsAction = { action: 'conversations.delete', threads: [...t] };
+  return p['onlyFailed'] === true ? { ...out, onlyFailed: true } : out;
+}
+
+/** Shape check of the thread composer's `agent.thread_send`. */
+export function asAgentThreadSendAction(p: unknown): AgentThreadSendAction | undefined {
+  if (!isObj(p) || p['action'] !== 'agent.thread_send') return undefined;
+  const { threadId, mogId, question } = p;
+  if (!isUuid(threadId) || !isUuid(mogId)) return undefined;
+  if (!isStr(question) || question.trim() === '' || [...question].length > 1000) return undefined;
+  return { action: 'agent.thread_send', threadId, mogId, question };
 }
 
 /** Shape check of the composer's `thread.send`. A blank id, profile or question is refused. */
@@ -185,10 +272,15 @@ export function asThreadSendAction(p: unknown): ThreadSendAction | undefined {
   return { action: 'thread.send', conversationId, profile, question };
 }
 
-/** Shape check of `thread.active` / `thread.inactive`. */
+/** Shape check of `thread.active` / `thread.active_agent` / `thread.inactive`. */
 export function asThreadFocusAction(p: unknown): ThreadFocusAction | undefined {
   if (!isObj(p)) return undefined;
   if (p['action'] === 'thread.inactive') return { action: 'thread.inactive' };
+  if (p['action'] === 'thread.active_agent') {
+    return isUuid(p['threadId'])
+      ? { action: 'thread.active_agent', threadId: p['threadId'] }
+      : undefined;
+  }
   if (p['action'] !== 'thread.active') return undefined;
   const { conversationId, profile } = p;
   if (!isStr(conversationId) || conversationId === '') return undefined;
@@ -251,17 +343,71 @@ function isRow(v: unknown): v is ConversationRow {
   );
 }
 
+function isChip(v: unknown): v is AgentWsChip {
+  return isObj(v) && isStr(v['name']) && isStr(v['colorVariant']);
+}
+
+function isAgentPart(v: unknown): v is AgentThreadPart {
+  return (
+    isObj(v) &&
+    isStr(v['requestId']) &&
+    isChip(v['workspace']) &&
+    isStr(v['profile']) &&
+    isStr(v['workspaceHost']) &&
+    (v['status'] === 'answered' || v['status'] === 'failed') &&
+    isStr(v['answerMd']) &&
+    (v['deepLink'] === undefined || isStr(v['deepLink'])) &&
+    Array.isArray(v['keyNumbers']) &&
+    v['keyNumbers'].every(isKeyNumber)
+  );
+}
+
+function isAgentTurn(v: unknown): v is AgentThreadTurn {
+  return (
+    isObj(v) &&
+    isStr(v['turnUuid']) &&
+    v['turnUuid'] !== '' &&
+    isStr(v['question']) &&
+    isNum(v['askedAt']) &&
+    (v['status'] === 'answered' || v['status'] === 'failed' || v['status'] === 'stopped') &&
+    isStr(v['summaryMd']) &&
+    Array.isArray(v['parts']) &&
+    v['parts'].every(isAgentPart)
+  );
+}
+
+function isAgentThread(v: unknown): v is AgentThread {
+  return (
+    isObj(v) &&
+    isUuid(v['threadId']) &&
+    isStr(v['mogId']) &&
+    isStr(v['mogName']) &&
+    (v['mogColorVariant'] === undefined || isStr(v['mogColorVariant'])) &&
+    Array.isArray(v['turns']) &&
+    v['turns'].every(isAgentTurn)
+  );
+}
+
 /** Shape check of a `hub:conversations` payload. */
 export function asHubConversations(p: unknown): HubConversations | undefined {
   if (!isObj(p) || !Array.isArray(p['rows']) || !p['rows'].every(isRow)) return undefined;
+  const at = p['agentThreads'];
+  if (at !== undefined && !(Array.isArray(at) && at.every(isAgentThread))) return undefined;
   if (p['unavailable'] !== undefined && p['unavailable'] !== true) return undefined;
   return p as unknown as HubConversations;
 }
 
-/** Shape check of a `hub:conversations.open` payload. */
-export function asConversationsOpen(p: unknown): { requestId?: string } | undefined {
+/** Shape check of a `hub:conversations.open` payload: a `requestId` or a `threadId` (UUID). */
+export function asConversationsOpen(
+  p: unknown,
+): { requestId?: string; threadId?: string } | undefined {
   if (!isObj(p)) return undefined;
   const r = p['requestId'];
-  if (r === undefined) return {};
-  return isStr(r) && r.length > 0 && r.length <= 64 ? { requestId: r } : undefined;
+  const t = p['threadId'];
+  if (r !== undefined && !(isStr(r) && r.length > 0 && r.length <= 64)) return undefined;
+  if (t !== undefined && !isUuid(t)) return undefined;
+  return {
+    ...(r !== undefined ? { requestId: r } : {}),
+    ...(t !== undefined ? { threadId: t } : {}),
+  };
 }

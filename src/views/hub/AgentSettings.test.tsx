@@ -8,7 +8,13 @@ import {
 } from '../../shared/hub-workspaces';
 import type { GenieCodeStatus } from '../../shared/ipc';
 import { inputEmits, render, tauri } from '../test-tauri';
-import { AgentSettings, APPLIES_AFTER, BUDGET_HELP } from './AgentSettings';
+import {
+  AgentSettings,
+  APPLIES_AFTER,
+  BUDGET_HELP,
+  COMBINE_APPLIES,
+  COMBINE_LOCKED,
+} from './AgentSettings';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('../test-tauri')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eventModule);
@@ -103,6 +109,83 @@ describe('AgentSettings', () => {
   it('says "Applies after the current question" while a turn runs', async () => {
     const { el } = await render(<AgentSettings list={list()} busy />);
     expect(el.querySelector('[data-agent-applies]')?.textContent).toBe(APPLIES_AFTER);
+  });
+
+  const withAgent = (a: Partial<HubWorkspaceList['agent']>): HubWorkspaceList => {
+    const l = list();
+    return { ...l, agent: { ...l.agent, ...a } };
+  };
+  const combine = (el: Element) => el.querySelector<HTMLElement>('[data-agent-combine]');
+
+  it('[D1] "Combine across workspaces" is a labelled switch, off by default, with its help text', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    const sw = combine(el);
+    expect(sw?.getAttribute('role')).toBe('switch');
+    expect(sw?.getAttribute('aria-checked')).toBe('false');
+    expect(sw?.hasAttribute('disabled')).toBe(false);
+    const label = document.getElementById(sw?.getAttribute('aria-labelledby') ?? '');
+    expect(label?.textContent).toBe('Combine across workspaces');
+    const help = document.getElementById(sw?.getAttribute('aria-describedby') ?? '');
+    // The help starts with the plan sentence.
+    expect(
+      help?.textContent?.startsWith(
+        "Answers from your other workspaces go to Genie Code in Sales, which runs on that workspace's AI model.",
+      ),
+    ).toBe(true);
+    expect(help?.textContent).toContain('Genie Code can see them and combine them.');
+    expect(help?.textContent).toContain(
+      'With the switch on, Genie Code can also put an answer from one workspace into a question to another workspace.',
+    );
+    expect(help?.textContent).toContain(
+      "When off, each workspace's answer is shown to you, and the agent sees only a receipt.",
+    );
+    expect(el.querySelector('[data-agent-combine-locked]')).toBeNull();
+    // The live region is there, and empty.
+    expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
+    // The label toggles the switch only when it is not locked.
+    expect(el.querySelector('label[for]')).not.toBeNull();
+  });
+
+  it('[D1] the disclosure line says that other answers stay out unless the switch is on', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    expect(el.querySelector('[data-agent-disclosure]')?.textContent).toContain(
+      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+    );
+  });
+
+  it('[D1] the switch writes the setting through workspace.cross, on and off', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    await click(combine(el));
+    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: true }]);
+    tauri.reset();
+    const on = await render(<AgentSettings list={withAgent({ crossWorkspaceData: true })} />);
+    expect(combine(on.el)?.getAttribute('aria-checked')).toBe('true');
+    await click(combine(on.el));
+    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: false }]);
+  });
+
+  it('[AC-2b.5] a locked switch is off, disabled and says "Set by your admin"', async () => {
+    const { el } = await render(
+      <AgentSettings list={withAgent({ crossWorkspaceData: true, crossWorkspaceLocked: true })} />,
+    );
+    const sw = combine(el);
+    expect(sw?.getAttribute('aria-checked')).toBe('false');
+    expect(sw?.hasAttribute('disabled')).toBe(true);
+    const locked = el.querySelector('[data-agent-combine-locked]');
+    expect(locked?.textContent).toBe(COMBINE_LOCKED);
+    expect(locked?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    // A locked row has no label link, so no pointer cursor and no click-through.
+    expect(el.querySelector('label[for]')).toBeNull();
+    expect(sw?.getAttribute('aria-describedby')).toContain(locked?.id ?? 'none');
+    await click(sw);
+    expect(clicks()).toEqual([]);
+  });
+
+  it('[AC-2b.4] says "Applies to your next question." while a turn runs, and not when locked', async () => {
+    const { el } = await render(<AgentSettings list={list()} busy />);
+    expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe(COMBINE_APPLIES);
+    const l = await render(<AgentSettings list={withAgent({ crossWorkspaceLocked: true })} busy />);
+    expect(l.el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
   });
 
   it('[D2] the budget is a labelled radio group; a click sends the value', async () => {

@@ -714,7 +714,7 @@ impl Engine {
             pending: HashMap::new(),
             fp: Fingerprint::of(snap),
             catalog: snap.catalog.clone(),
-            cross_workspace: snap.cross_workspace && crate::agent_run::session::D1_SUPPORTED,
+            cross_workspace: snap.cross_workspace,
             started_wall_ms: now_wall,
             turns: 0,
             tokens: 0,
@@ -1160,7 +1160,8 @@ impl Engine {
         let calls_all = self.d.guard.calls(&sid);
         let calls = calls_all.iter().filter(|c| c.turn_id == turn_id).count();
         if outcome == AgentTurnOutcome::Answered {
-            let r = build_result(&live, &calls_all);
+            let d1 = self.session.as_ref().is_some_and(|s| s.cross_workspace);
+            let r = build_result(&live, &calls_all, d1, self.d.guard.as_ref());
             self.store_result(turn_id.clone(), r);
         }
         if live.began {
@@ -1557,7 +1558,12 @@ fn live_outcome(live: &Live, reason: AgentSessionEndReason) -> AgentTurnOutcome 
 
 /// The result of an answered turn: the final message, checked against the guard's call log
 /// (AC-2a.12 and AC-2a.28: any call of the session counts, not only this turn).
-fn build_result(live: &Live, calls: &[crate::agent_run::seam::CallRecord]) -> AgentTurnResult {
+fn build_result(
+    live: &Live,
+    calls: &[crate::agent_run::seam::CallRecord],
+    d1: bool,
+    guard: &dyn crate::agent_run::seam::SessionGuard,
+) -> AgentTurnResult {
     let usage = Some(AgentUsage {
         input_tokens: live.usage.input,
         cached_input_tokens: live.usage.cached,
@@ -1592,6 +1598,13 @@ fn build_result(live: &Live, calls: &[crate::agent_run::seam::CallRecord]) -> Ag
             c.call_id == cid && c.alias == ws && c.state == crate::types::AgentCallState::Answered
         });
         let Some(c) = ok else { return hidden };
+        // A withheld call keeps the state Answered, so ask the guard. No detail: not a source.
+        if guard
+            .call_detail(&c.turn_id, &c.call_id)
+            .is_none_or(|d| d.withheld.is_some())
+        {
+            return hidden;
+        }
         out.push(AgentSource {
             workspace_id: ws.to_owned(),
             call_id: cid.to_owned(),
@@ -1600,10 +1613,21 @@ fn build_result(live: &Live, calls: &[crate::agent_run::seam::CallRecord]) -> Ag
     }
     AgentTurnResult {
         answer: Some(answer.chars().take(ANSWER_MAX_CHARS).collect()),
-        answer_kind: AgentAnswerKind::Note,
+        answer_kind: if d1 && cites_many_workspaces(&out) {
+            AgentAnswerKind::Combined
+        } else {
+            AgentAnswerKind::Note
+        },
         sources: out,
         usage,
     }
+}
+
+/// AC-2b.6: more than one workspace among the sources.
+fn cites_many_workspaces(sources: &[AgentSource]) -> bool {
+    sources
+        .iter()
+        .any(|s| s.workspace_id != sources[0].workspace_id)
 }
 
 /// The two reader threads of one server: stdout lines and stderr hints.

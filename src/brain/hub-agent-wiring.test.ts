@@ -2,12 +2,7 @@
 import { HUB_SCOPE, asHubAgentView, type HubAgentView } from '../shared/hub-agent';
 import type { GenieCodeStatus } from '../shared/ipc';
 import { BrainBus } from './bus';
-import {
-  OPEN_NOTICE,
-  clearingAgentPanel,
-  wireHubAgent,
-  type HubAgentWiringDeps,
-} from './hub-agent-wiring';
+import { clearingAgentPanel, wireHubAgent, type HubAgentWiringDeps } from './hub-agent-wiring';
 
 const T1 = 'a'.repeat(32);
 const READY: GenieCodeStatus = {
@@ -16,6 +11,7 @@ const READY: GenieCodeStatus = {
   agentProfile: null,
   agentProfileState: 'ready',
 };
+const THREAD = '41111111-2222-4333-8444-000000000001';
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 function rig(genie: GenieCodeStatus | null = READY) {
@@ -28,6 +24,7 @@ function rig(genie: GenieCodeStatus | null = READY) {
         session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
         waiting: [],
         earlier: [],
+        threads: [{ turnId: T1, threadId: THREAD }],
       }),
       stop: async (id) => void log.push(`stop:${id}`),
       newSession: async () => void log.push('new'),
@@ -78,16 +75,11 @@ describe('hub Agent panel wiring', () => {
     expect(r.sent).toEqual([]);
   });
 
-  it('"Open in Agent" sends the notice at once, and a late hub gets it with agent.ready once', async () => {
+  it('sends the thread of each turn, and no notice (the Agent area is gone)', async () => {
     const r = rig();
-    await r.wiring.open();
-    expect(r.sent.at(-1)?.notice).toEqual({ kind: 'info', text: OPEN_NOTICE });
-    r.click({ action: 'agent.ready' });
-    await flush();
-    expect(r.sent.at(-1)?.notice?.text).toBe(OPEN_NOTICE);
-    r.click({ action: 'agent.ready' });
-    await flush();
-    expect(r.sent.at(-1)?.notice).toBeUndefined();
+    await r.wiring.push();
+    expect(r.sent[0]?.threads).toEqual([{ turnId: T1, threadId: THREAD }]);
+    expect(r.sent[0]?.notice).toBeUndefined();
   });
 
   it('[L5] with no Genie Code status the panel still draws, with a placeholder', async () => {
@@ -95,43 +87,6 @@ describe('hub Agent panel wiring', () => {
     await r.wiring.push();
     expect(r.sent).toHaveLength(1);
     expect(asHubAgentView(r.sent[0])?.genieCode.binary).toBe('not_installed');
-  });
-
-  it('[L1] the open notice waits 10 s for a hub that is not listening, then expires', async () => {
-    let t = 1_000;
-    const bus = new BrainBus();
-    const sent: HubAgentView[] = [];
-    const base = rig();
-    const w = wireHubAgent(bus, {
-      client: {
-        panel: () => ({
-          session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
-          waiting: [],
-          earlier: [],
-        }),
-        stop: async () => undefined,
-        newSession: async () => undefined,
-        refreshSession: async () => undefined,
-      },
-      genieCode: () => READY,
-      send: async (v) => void sent.push(v),
-      openSettings: () => undefined,
-      now: () => t,
-    });
-    await w.open();
-    // One push with no notice first, so a listening hub sees the notice as new each time.
-    expect(sent.map((v) => v.notice?.text)).toEqual([undefined, OPEN_NOTICE]);
-    t += 10_001;
-    bus.dispatch({
-      event: 'view:input',
-      payload: {
-        from: 'hub',
-        input: { mogId: HUB_SCOPE, kind: 'click', payload: { action: 'agent.ready' } },
-      },
-    });
-    await flush();
-    expect(sent.at(-1)?.notice).toBeUndefined();
-    expect(base.sent).toEqual([]);
   });
 
   it('[M1] a Wipe clears the panel content, and a failed Wipe does not', async () => {
@@ -157,6 +112,7 @@ describe('hub Agent panel wiring', () => {
           session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
           waiting: [],
           earlier: [],
+          threads: [],
         }),
         stop: async () => undefined,
         newSession: async () => undefined,

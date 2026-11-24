@@ -59,11 +59,44 @@ the result, and the content-free `AgentActionLog` entry.
 
 ### Taint and receipts
 
-- `D1_SUPPORTED = false`. With D1 off a workspace that is not the agent workspace gets a receipt (counts,
-  state, no answer text). The agent workspace gets a text block in `<genie_answer>` tags, after the
-  quarantine check. A hit is withheld from the model and from the user view.
+Slice 2a rules, with D1 off:
+
+- A workspace that is not the agent workspace gets a receipt. A receipt has counts and a state. It has no
+  answer text.
+- The agent workspace gets a text block. The quarantine check runs first. A hit is withheld from the model
+  and from the user view.
 - The first text that the model reads from the agent workspace taints the session. The taint lasts the
   session, not the turn. A withheld text does not taint.
+
+Slice 2b rules, with D1 on:
+
+- The session snapshot sets D1. The guard must not read D1 again during a session.
+- Every answered call gets a text block. The block is `<genie_answer workspace="..." call="...">`. The
+  attributes name the workspace alias and the call id.
+- The guard must cut the answer text at 4,000 chars before it builds the block.
+- The guard must escape `&` as `&amp;` first. Then it must escape `<` as `&lt;`. The attribute values also
+  escape `"`. No tag and no pre-escaped entity can close the block.
+- The quarantine check must treat a tag-like `genie_answer` as an injection signal. Full-width and small
+  forms of `<` fold to `<` by NFKC. The guard withholds such a text.
+- The check also folds the look-alikes that NFKC keeps apart (U+2039, U+3008, U+276C, U+276E, U+2770,
+  U+27E8, U+29FC, U+300A, U+02C2 and U+1438, but not the guillemet U+00AB, which is plain quotation). It decodes
+  numeric entities once, and it matches the named entities `&lt;`, `&lsaquo;` and `&lang;` with an optional `;`.
+  A longer name that only starts with `genie_answer` (for example `genie_answer_2`, or a name that has a
+  zero-width character inside it) is deliberately not flagged: it is not the guard's tag, and the guard escapes
+  every `<` in the text, so such a name can never close the block.
+- A text block with D1 on must not taint the session. The agent can read text from many workspaces.
+- A change of D1 after the session starts must not cut the live turn. The session ends after that turn with
+  the reason `D1Changed`. The next session reads the new value.
+- `answerKind` is `combined` only when D1 is on and the valid sources name more than one workspace.
+  Otherwise it is `note`.
+- A withheld call is never a valid source. Its state stays `answered`, so the session host asks the guard
+  for the call detail. A cited call with no detail, or with a withheld reason, hides the whole summary.
+
+The admin lock (SEC-28b):
+
+- The lock forces D1 off. The settings list shows the effective value, so a locked switch never shows on.
+- `d1_locked()` must fail closed. The lock read returns `Option<bool>`. A read error (`None`) counts as
+  locked. No admin source exists before slice 3, so the read returns `Some(false)` now.
 
 ### The poll loop
 

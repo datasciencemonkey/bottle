@@ -218,6 +218,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             });
             for (const x of rows) {
               if (!isObj(x) || typeof x['askedAt'] !== 'number' || x['askedAt'] < since) continue;
+              // An agent turn row is not a question to one workspace (ADR 0121): it counts for none.
+              if (x['backendKind'] === 'genie_agent') continue;
               const p = typeof x['profileName'] === 'string' ? x['profileName'] : r.profile;
               if (counts.has(p)) counts.set(p, (counts.get(p) ?? 0) + 1);
             }

@@ -29,7 +29,3 @@ pub use component::{
     AgentEnv, BinaryCheck, Installer, PreflightFail, SessionConfig, SessionDeps, SessionHost,
     ShimLaunch, ShimProvider, Snapshot, WorkspaceView,
 };
-
-/// Slice 2a has no D1 "Combine across workspaces": a session always runs with D1 off, whatever
-/// the setting says. Slice 2b turns it on.
-pub const D1_SUPPORTED: bool = false;

@@ -313,6 +313,62 @@ describe('a finished call and a finished turn', () => {
     expect(live?.calls.every((c) => c.state === 'ready' && c.endedAt === 13_000)).toBe(true);
   });
 
+  it('[AC-2b.6] a combined answer only counts with D1 on; with D1 off the kind is "note"', async () => {
+    for (const on of [false, true]) {
+      const r = rig();
+      r.script.submit.push(accepted(T1, { crossWorkspace: on }));
+      await r.client.submit(turn(), 'ask');
+      r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
+      r.script.result = {
+        answer: 'Both fall.',
+        answerKind: 'combined',
+        sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
+      };
+      r.ev(callEv(T1, C1, SALES, 'answered'));
+      r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+      await r.settle();
+      expect(r.client.panel().earlier[0]?.summary?.kind).toBe(on ? 'combined' : 'note');
+    }
+  });
+
+  it('[AC-2b.5] an earlier source takes the D1 value of its own turn; a forgotten turn fails closed', async () => {
+    const r = rig();
+    // T1 ran with D1 off and ended; it stays known.
+    await answered(r);
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    // T2 runs with D1 on and cites the Finance call of T1 (D1 off), and one of a forgotten turn.
+    r.script.submit.push(accepted(T2, { crossWorkspace: true }));
+    await r.client.submit(turn(), 'ask');
+    const GONE = 'e'.repeat(32);
+    r.script.details.set(
+      `${GONE}:c-0000000e`,
+      detail(GONE, 'c-0000000e', FIN, 'answered', 'Old finance.'),
+    );
+    r.script.details.set(`${T2}:c-00000003`, detail(T2, 'c-00000003', FIN, 'answered', 'New.'));
+    r.script.result = {
+      answer: 'Finance is higher.',
+      answerKind: 'combined',
+      sources: [
+        { workspaceId: 'ws-b', callId: C2, turnId: T1 },
+        { workspaceId: 'ws-b', callId: 'c-0000000e', turnId: GONE },
+        { workspaceId: 'ws-b', callId: 'c-00000003', turnId: T2 },
+      ],
+    };
+    r.ev(callEv(T2, 'c-00000003', FIN, 'answered', 1));
+    r.ev({ kind: 'ended', turnId: T2, outcome: 'answered', calls: 1 });
+    await r.settle();
+    const done = r.client.panel().earlier.find((t) => t.turnId === T2);
+    expect(done?.summary?.kind).toBe('combined');
+    const byCall = Object.fromEntries((done?.parts ?? []).map((p) => [p.callId, p]));
+    // (a) the earlier turn is present and had D1 off: the agent never saw it.
+    expect(byCall[C2]?.notShownToAgent).toBe(true);
+    // (b) the earlier turn is forgotten: fail closed.
+    expect(byCall['c-0000000e']?.notShownToAgent).toBe(true);
+    // The current turn has D1 on: the agent saw it.
+    expect(byCall['c-00000003']?.notShownToAgent).toBeUndefined();
+  });
+
   it('[AC-2a.12] [AC-2a.28] the note and the sources decide which part folds and which is from earlier', async () => {
     const r = rig();
     await answered(r);
@@ -670,7 +726,7 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
   };
 
   it.each(['new_session', 'wipe', 'quit'] as const)(
-    '[H1] a %s ends live and waiting turns with session_ended: no direct call, no history row',
+    '[H1] a %s ends live and waiting turns with session_ended: no direct call, no call row',
     async (reason) => {
       const r = rig();
       await submitTwo(r);
@@ -679,7 +735,13 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
       r.ev({ kind: 'ended', turnId: T2, outcome: 'session_ended', calls: 0 });
       await r.settle();
       expect(r.directs).toEqual([]);
-      expect(r.history).toEqual([]);
+      // Best effort: the turn that ran saves a failed turn row, once. The waiting turn ran
+      // nothing. A Wipe leaves no row at all.
+      expect(r.history.filter((h) => h.backend === undefined)).toEqual([]);
+      const turns = r.history.filter((h) => h.backend === 'genie_agent');
+      expect(turns.map((h) => [h.question, h.end.t])).toEqual(
+        reason === 'wipe' ? [] : [['First?', 'failed']],
+      );
     },
   );
 
@@ -784,7 +846,7 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     r.script.result = { answerKind: 'hidden', sources: [] };
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
     await r.settle();
-    expect(r.history).toHaveLength(1);
+    expect(r.history.filter((h) => h.backend === undefined)).toHaveLength(1);
     expect(r.client.panel().earlier[0]?.parts).toHaveLength(1);
   });
 
@@ -829,5 +891,268 @@ describe('review fixes (H1 to H3, M1, M2, L2, L6)', () => {
     });
     await r.settle();
     expect(r.client.panel().earlier[0]).toMatchObject({ used: 2, budget: 10 });
+  });
+});
+
+describe('agent threads in Conversations (ADR 0121)', () => {
+  const NOTE = { answerKind: 'summary', answer: 'Both fall.', sources: [] } as never;
+  const turnRows = (r: ReturnType<typeof rig>) =>
+    r.history.filter((h) => h.backend === 'genie_agent');
+
+  async function ask(
+    r: ReturnType<typeof rig>,
+    turnId: string,
+    q: string,
+    mode: 'ask' | 'follow_up' = 'ask',
+    threadId?: string,
+    outcome: AgentTurnEvent & { kind: 'ended' } = {
+      kind: 'ended',
+      turnId,
+      outcome: 'answered',
+      calls: 0,
+    },
+  ) {
+    r.script.submit.push(accepted(turnId));
+    await r.client.submit(turn(q), mode, undefined, threadId);
+    r.script.result = NOTE;
+    r.ev(outcome);
+    await r.settle();
+  }
+
+  it('[AC-C1] [AC-C2] one genie_agent turn row at the end, with the question and the combined answer', async () => {
+    const r = rig();
+    await ask(r, T1, 'How is churn?');
+    const rows = turnRows(r);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    if (!row) throw new Error('no turn row');
+    expect(row.opId).toBe(uuidOfTurn(T1));
+    expect(row.question).toBe('How is churn?');
+    expect(row.end).toMatchObject({ t: 'answer', md: 'Both fall.', keyNumbers: [] });
+    expect(row.homeWorkspace).toBe(true);
+    expect(row.mogId).toBe(MOG);
+    expect(row.profile).toBe('fake-sales');
+    // A new ask starts a thread: its root is its own turn UUID.
+    expect(row.threadId).toBe(uuidOfTurn(T1));
+    expect(row.splitGroupId).toBeUndefined();
+  });
+
+  it('[AC-C2] a hidden summary saves an empty answer; stop, timeout and the rest map to their end', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Q1'), 'ask');
+    r.script.result = { answerKind: 'hidden', sources: [] };
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(turnRows(r)[0]?.end).toMatchObject({ t: 'answer', md: '' });
+    for (const [id, outcome, t] of [
+      [T2, 'stopped', 'cancel_requested'],
+      [T3, 'timeout', 'abandoned'],
+    ] as const) {
+      r.script.submit.push(accepted(id, { newSession: false }));
+      await r.client.submit(turn(`Q-${outcome}`), 'ask');
+      r.ev({ kind: 'ended', turnId: id, outcome, calls: 1 });
+      await r.settle();
+      expect(turnRows(r).at(-1)?.end.t).toBe(t);
+    }
+  });
+
+  it('writes the turn row once: a second ended event and a later session end add nothing', async () => {
+    const r = rig();
+    await ask(r, T1, 'Once?');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'quit' });
+    await r.settle();
+    expect(turnRows(r)).toHaveLength(1);
+  });
+
+  it('[AC-C4] a reply with a thread id joins that thread', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    await ask(r, T2, 'And then?', 'follow_up', uuidOfTurn(T1));
+    expect(turnRows(r).map((h) => h.threadId)).toEqual([uuidOfTurn(T1), uuidOfTurn(T1)]);
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(true);
+    expect(r.client.inSession(uuidOfTurn(T3))).toBe(false);
+  });
+
+  it('[AC-C5] a follow-up with no thread id goes to the thread of the last answered turn', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    await ask(r, T2, 'Second?', 'follow_up');
+    expect(turnRows(r)[1]?.threadId).toBe(uuidOfTurn(T1));
+    // A new ask starts a new thread; with no answer yet, a follow-up does too.
+    await ask(r, T3, 'New topic?', 'ask');
+    expect(turnRows(r)[2]?.threadId).toBe(uuidOfTurn(T3));
+    const r2 = rig();
+    await ask(r2, T1, 'Alone?', 'follow_up');
+    expect(turnRows(r2)[0]?.threadId).toBe(uuidOfTurn(T1));
+  });
+
+  it('a session end forgets the last answered thread', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'idle' });
+    await ask(r, T2, 'Later?', 'follow_up');
+    expect(turnRows(r)[1]?.threadId).toBe(uuidOfTurn(T2));
+  });
+
+  it('HubAgentView.threads links each turn in the panel to its thread', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    await ask(r, T2, 'Second?', 'follow_up');
+    expect(r.client.panel().threads).toEqual([
+      { turnId: T1, threadId: uuidOfTurn(T1) },
+      { turnId: T2, threadId: uuidOfTurn(T1) },
+    ]);
+    expect(r.client.threadOf(T2)).toBe(uuidOfTurn(T1));
+    expect(r.client.threadMog(uuidOfTurn(T1))).toBe(MOG);
+  });
+
+  it('[AC-C15] turns() marks a live or queued turn as in progress, a finished one not', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1), accepted(T2, { position: 1, newSession: false }));
+    await r.client.submit(turn('Live?'), 'ask');
+    await r.client.submit(turn('Queued?'), 'ask');
+    expect(r.client.turns().map((t) => t.inProgress)).toEqual([true, true]);
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(r.client.turns().map((t) => [t.turnUuid, t.inProgress])).toEqual([
+      [uuidOfTurn(T1), false],
+      [uuidOfTurn(T2), true],
+    ]);
+  });
+
+  it('[AC-C19] forgetThread drops the finished turns of a thread and their card, and tells the hub', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    await ask(r, T2, 'Second?', 'follow_up');
+    const before = r.changes();
+    r.client.forgetThread(uuidOfTurn(T1));
+    expect(r.client.panel().earlier).toEqual([]);
+    expect(r.client.panel().threads).toEqual([]);
+    expect(r.dropped).toEqual([T1, T2]);
+    expect(r.changes()).toBeGreaterThan(before);
+    // A late event of a forgotten turn brings nothing back.
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    await r.settle();
+    expect(r.client.panel().earlier).toEqual([]);
+  });
+
+  it('forgetThread leaves a turn in progress and other threads', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    r.script.submit.push(accepted(T2, { newSession: false }));
+    await r.client.submit(turn('Other?'), 'ask');
+    r.client.forgetThread(uuidOfTurn(T2));
+    expect(r.client.turn(T2)).toBeDefined();
+    r.client.forgetThread(uuidOfTurn(T3));
+    expect(r.client.turn(T1)).toBeDefined();
+  });
+
+  it('a turn that a Wipe overtook (the session event first) writes no turn row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'wipe' });
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    expect(turnRows(r)).toEqual([]);
+  });
+
+  const END = { kind: 'ended' as const, sessionId: 'd'.repeat(32) };
+
+  it('[Wipe] [HIGH] the real core order, turn ended{session_ended} then session ended{wipe}: no turn row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    await r.settle();
+    expect(turnRows(r)).toEqual([]);
+  });
+
+  it('[Wipe] [HIGH] a turn that ended answered just before the Wipe writes no row, and no call row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.ev(callEv(T1, C1, SALES, 'asking'));
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered'));
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    // The Wipe comes while the writes are still waiting for the home profile.
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    await r.settle();
+    expect(r.history).toEqual([]);
+  });
+
+  it('[Wipe] [L3] a write that started before the Wipe sees a moved fence', async () => {
+    const r = rig();
+    await ask(r, T1, 'Before?');
+    const row = turnRows(r)[0];
+    expect(row?.isStale?.()).toBe(false);
+    r.client.onSessionEvent({ ...END, reason: 'wipe' });
+    expect(row?.isStale?.()).toBe(true);
+  });
+
+  it('a turn that the session end cut off writes its row when the session event comes, not before', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Cut off?'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'session_ended', calls: 0 });
+    await r.settle();
+    expect(turnRows(r)).toEqual([]);
+    r.client.onSessionEvent({ ...END, reason: 'idle' });
+    await r.settle();
+    expect(turnRows(r)).toHaveLength(1);
+    expect(turnRows(r)[0]?.end.t).toBe('failed');
+  });
+
+  it('turns() says which turns the panel sends: the 20 newest ended turns only', async () => {
+    const r = rig();
+    const ids = Array.from({ length: 22 }, (_, i) => i.toString(16).padStart(32, '0'));
+    for (const id of ids) {
+      r.script.submit.push(accepted(id, { newSession: false }));
+      await r.client.submit(turn(`Q ${id}`), 'ask');
+      r.script.result = NOTE;
+      r.ev({ kind: 'ended', turnId: id, outcome: 'answered', calls: 0 });
+      await r.settle();
+    }
+    const t = r.client.turns();
+    expect(t).toHaveLength(22);
+    expect(t.filter((x) => x.shown)).toHaveLength(20);
+    expect(t.filter((x) => !x.shown).map((x) => x.turnUuid)).toEqual([
+      uuidOfTurn(ids[0] as string),
+      uuidOfTurn(ids[1] as string),
+    ]);
+    expect(r.client.panel().earlier).toHaveLength(20);
+  });
+
+  it('a turn stays in progress until finish is over, and the change that settles it is announced', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Settling?'), 'ask');
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    // `finish` waits for its pulls: the turn is ended but not settled yet.
+    expect(r.client.turn(T1)?.state).toBe('done');
+    expect(r.client.turns()[0]?.inProgress).toBe(true);
+    const before = r.changes();
+    await r.settle();
+    expect(r.client.turns()[0]?.inProgress).toBe(false);
+    expect(r.changes()).toBeGreaterThan(before);
+  });
+
+  it('[Wipe] clear() (every Wipe scope) also fences the writes of a turn in flight', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Wiped?'), 'ask');
+    r.script.result = NOTE;
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    r.client.clear();
+    await r.settle();
+    expect(r.history).toEqual([]);
   });
 });

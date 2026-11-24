@@ -81,6 +81,7 @@ export const SEC_DISC: readonly Disclosure[] = [
       'When a question needs more than one workspace, Bottle sends it to Genie Code in your agent workspace.',
       "Genie Code uses that workspace's AI model.",
       "It bills about 30,000 to 50,000 tokens per question to that workspace's Genie budget.",
+      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
     ],
   },
   {

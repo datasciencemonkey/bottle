@@ -736,6 +736,21 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(JSON.stringify(ends)).not.toContain('Genie Code is not installed');
     });
 
+    it('[ADR 0121] a fallback of an agent turn saves its row with the turn as split group', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      await send(turn(), { notice: 'n', splitGroupId: '51111111-2222-4333-8444-555555555540' });
+      await send(turn());
+      expect(ends[0]?.splitGroupId).toBe('51111111-2222-4333-8444-555555555540');
+      expect(ends[1]?.splitGroupId).toBeUndefined();
+    });
+
     it('[R-8] an answered request offers the chip, with the request id in the chip id', async () => {
       const c = fakeCard();
       const offered: string[] = [];

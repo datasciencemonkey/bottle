@@ -89,6 +89,17 @@ describe('T10 recordExchange (#38, MEM-25a, MEM-26)', () => {
     expect(distilSummary('Short answer.')).toBe('Short answer.');
   });
 
+  it('[ADR 0121] an agent turn row (noSummary) keeps the question and the answer, with no summary', async () => {
+    const { store, svc } = setup();
+    const x = genieExchangeDouble();
+    await svc.recordExchange({ ...x, noSummary: true });
+    const p = at(upserts(store), 0);
+    expect(p.homeWorkspace).toBe(true);
+    expect(p.questionUser).toBe(x.questionUser);
+    expect(p.finalAnswerMd).toBe(x.answerMd);
+    expect(p.answerSummary ?? null).toBeNull();
+  });
+
   it('[MEM-25a] a non-home exchange stores the pointer and the full answer only (D60)', async () => {
     const { store, svc } = setup();
     const x = genieExchangeDouble({ homeWorkspace: false });

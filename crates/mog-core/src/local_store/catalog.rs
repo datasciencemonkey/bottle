@@ -268,7 +268,9 @@ const MOG_UPSERT: Stmt = Stmt {
 // with no answer (a late `pending` event, a resume) never clears `final_answer_md`, the summary,
 // the key numbers or the deep link (MEM-26, U9), and never moves a finished status back to
 // `pending` or `uncertain`. No statement sets `expires_at`: an exchange has
-// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one.
+// no TTL. Only Forget (one exchange, a user action) and Wipe (R14, Core) delete one. The hub
+// Conversations delete (`mem.exchange.delete`, ADR 0121, local only) leaves a tombstone, and the
+// upsert never brings a tombstone back (it keeps `deleted_at` and the erased text).
 
 const EXCHANGE_UPSERT: Stmt = Stmt {
     id: "mem.exchange.upsert",
@@ -297,7 +299,8 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           completed_at = coalesce(excluded.completed_at, genie_exchange.completed_at), \
           row_hlc = max(genie_exchange.row_hlc, excluded.row_hlc), \
           updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 \
-          WHERE genie_exchange.mog_id = excluded.mog_id",
+          WHERE genie_exchange.mog_id = excluded.mog_id \
+          AND genie_exchange.deleted_at IS NULL",
     params: &[
         req("exchangeId", UUID),
         req("requestId", UUID),
@@ -355,12 +358,45 @@ const EXCHANGE_RECENT: Stmt = Stmt {
           workspace_host AS workspaceHost, question_user AS questionUser, \
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
           deep_link AS deepLink, conversation_id AS conversationId, \
+          backend_kind AS backendKind, split_group_id AS splitGroupId, \
           asked_at AS askedAt, completed_at AS completedAt \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \
           ORDER BY asked_at DESC, exchange_id DESC LIMIT :limit",
     params: &[MOG_ID, req("limit", LIMIT)],
     kind: Kind::Query,
+    access: Access::Brain,
+};
+
+/// Delete the named exchanges of one MOG, for the hub Conversations "Delete" (ADR 0121). It is a
+/// tombstone, not a row delete: it sets `deleted_at`, erases the question and answer text and
+/// keeps the ids, so a later Wipe or Forget with "Also delete Genie conversations" still reads
+/// the `conversation_id` and removes the Genie conversation. Wipe and Forget hard-delete the row
+/// later. It is a local delete only: it writes no `forget_log` row and calls no remote service.
+/// The brain sends 1 to 200 request ids; `Tags` checks the list is at most 200 strings of at
+/// most 36 characters. A value that is no request id matches no row, and a row that is already
+/// a tombstone matches none. A citing `memory_item` keeps its row. The correlated `EXISTS`
+/// repeats the `mog_id` filter, so the MEM-01 guard sees one in each `SELECT`.
+const EXCHANGE_DELETE: Stmt = Stmt {
+    id: "mem.exchange.delete",
+    sql: "UPDATE genie_exchange SET deleted_at = :now, question_user = NULL, \
+          answer_summary = NULL, final_answer_md = NULL, key_numbers = '[]', \
+          updated_at = :now \
+          WHERE mog_id = :mogId AND deleted_at IS NULL AND EXISTS \
+          (SELECT 1 FROM json_each(:requestIds) j \
+          WHERE genie_exchange.mog_id = :mogId AND j.value = genie_exchange.request_id)",
+    params: &[
+        MOG_ID,
+        req("now", MS),
+        req(
+            "requestIds",
+            ParamType::Tags {
+                max_items: 200,
+                max_chars: 36,
+            },
+        ),
+    ],
+    kind: Kind::Write,
     access: Access::Brain,
 };
 
@@ -1335,6 +1371,7 @@ pub const STATEMENTS: &[Stmt] = &[
     EXCHANGE_RECENT,
     EXCHANGE_DEPENDENTS,
     EXCHANGE_BY_SESSION,
+    EXCHANGE_DELETE,
     ITEM_UPSERT,
     ITEM_GET,
     ITEM_LIST_ROWS,

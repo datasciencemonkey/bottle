@@ -23,6 +23,8 @@ use mog_core::types::{RememberHit, Transcript};
 
 /// The `mogId` of the hub Memory area's `view_emit` (`MEMORY_VIEW_ID` in `hub-memory.ts`).
 const MEMORY_VIEW_ID: &str = "memory";
+/// The `mogId` of the hub Conversations area's `view_emit` (ADR 0121).
+const CONVERSATIONS_VIEW_ID: &str = "conversations";
 /// The most characters of a voice "remember" body: the summary cap of a memory.
 const VOICE_TEXT_MAX: usize = 600;
 
@@ -85,6 +87,15 @@ pub fn mint_for_view(
             return None;
         }
         return Some(tickets.mint_ui(new_ticket_id()?, card_mog, now_ms));
+    }
+    if from == "hub" && args_mog == CONVERSATIONS_VIEW_ID {
+        // ADR 0121: a typed follow-up in an agent thread is the user's own ask. The ticket binds
+        // the MOG only, like the card chip.
+        let mog = str_at(payload, "mogId").filter(|m| is_uuid(m))?;
+        if action != "agent.thread_send" {
+            return None;
+        }
+        return Some(tickets.mint_hub_thread(new_ticket_id()?, mog, now_ms));
     }
     if from != "hub" || args_mog != MEMORY_VIEW_ID {
         return None;
@@ -351,6 +362,93 @@ mod tests {
         assert!(mint_for_view(&card, &chip_click(MOG_A, "agent-more:op-1"), None, T0).is_none());
     }
 
+    fn thread_send(mog: &Value) -> Value {
+        json!({"mogId": "conversations", "kind": "click",
+               "payload": {"action": "agent.thread_send", "threadId": MOG_B, "mogId": mog,
+                           "question": "And last year?"}})
+    }
+
+    #[test]
+    fn adr_0121_a_hub_thread_send_mints_a_single_use_ask_ticket_for_its_mog() {
+        use mog_core::action_ticket::{Purpose, Refusal, TICKET_TTL_MS};
+        let t = ActionTickets::new();
+        let id = mint_for_view("hub", &thread_send(&json!(MOG_A)), Some(&t), T0).unwrap();
+        // Redeems as Ask with Null params, as the session host does for `agent_turn_submit`.
+        assert!(t
+            .redeem(&id, MOG_A, Purpose::Ask, &Value::Null, T0 + 1)
+            .is_ok());
+        // Single use.
+        assert_eq!(
+            t.redeem(&id, MOG_A, Purpose::Ask, &Value::Null, T0 + 1),
+            Err(Refusal::Unknown)
+        );
+        // Bound to the MOG, only for Ask, and only for 60 s.
+        let id = mint_for_view("hub", &thread_send(&json!(MOG_A)), Some(&t), T0).unwrap();
+        assert_eq!(
+            t.redeem(&id, MOG_B, Purpose::Ask, &Value::Null, T0 + 1),
+            Err(Refusal::WrongMog)
+        );
+        let id = mint_for_view("hub", &thread_send(&json!(MOG_A)), Some(&t), T0).unwrap();
+        assert_eq!(
+            t.redeem(&id, MOG_A, Purpose::Pin, &json!({"text": "x"}), T0 + 1),
+            Err(Refusal::WrongPurpose)
+        );
+        let id = mint_for_view("hub", &thread_send(&json!(MOG_A)), Some(&t), T0).unwrap();
+        assert_eq!(
+            t.redeem(&id, MOG_A, Purpose::Ask, &Value::Null, T0 + TICKET_TTL_MS),
+            Err(Refusal::Expired)
+        );
+        assert_eq!(t.open_count(), 0);
+    }
+
+    #[test]
+    fn adr_0121_a_thread_send_ticket_is_refused_for_other_actions_windows_and_mogs() {
+        let t = ActionTickets::new();
+        for mog in [
+            json!("conversations"),
+            json!("not-a-uuid"),
+            json!(7),
+            Value::Null,
+        ] {
+            assert!(
+                mint_for_view("hub", &thread_send(&mog), Some(&t), T0).is_none(),
+                "{mog}"
+            );
+        }
+        let mut no_mog = thread_send(&json!(MOG_A));
+        no_mog["payload"].as_object_mut().unwrap().remove("mogId");
+        assert!(mint_for_view("hub", &no_mog, Some(&t), T0).is_none());
+        for action in [
+            "conversations.delete",
+            "agent.thread_open",
+            "memory.rate",
+            "thread.send",
+        ] {
+            let mut c = thread_send(&json!(MOG_A));
+            c["payload"]["action"] = json!(action);
+            assert!(mint_for_view("hub", &c, Some(&t), T0).is_none(), "{action}");
+        }
+        // Another window, another area, another kind, no store.
+        for from in [
+            format!("card-{MOG_A}"),
+            format!("mog-{MOG_A}"),
+            "other".to_owned(),
+        ] {
+            assert!(
+                mint_for_view(&from, &thread_send(&json!(MOG_A)), Some(&t), T0).is_none(),
+                "{from}"
+            );
+        }
+        let mut area = thread_send(&json!(MOG_A));
+        area["mogId"] = json!("memory");
+        assert!(mint_for_view("hub", &area, Some(&t), T0).is_none());
+        let mut hover = thread_send(&json!(MOG_A));
+        hover["kind"] = json!("hover");
+        assert!(mint_for_view("hub", &hover, Some(&t), T0).is_none());
+        assert!(mint_for_view("hub", &thread_send(&json!(MOG_A)), None, T0).is_none());
+        assert_eq!(t.open_count(), 0);
+    }
+
     #[test]
     fn a_hub_click_mints_only_with_a_uuid_mog_and_string_fields() {
         let t = ActionTickets::new();
@@ -383,6 +481,7 @@ mod tests {
             T0
         )
         .is_none());
+        // The Conversations area mints only for `agent.thread_send` (ADR 0121), not for a rate.
         let mut conv = hub_click(rate);
         conv["mogId"] = json!("conversations");
         assert!(mint_for_view("hub", &conv, Some(&t), T0).is_none());

@@ -80,6 +80,9 @@ describe('partOf', () => {
       chip,
     });
     expect(p?.sections).toEqual([{ id: 'answer', md: WITHHELD_TEXT }]);
+    expect(p?.notShownToAgent).toBe(true);
+    // The raw text (and the reply text) is nowhere in the part.
+    expect(JSON.stringify(p)).not.toContain('IGNORE');
   });
 
   it('gives no part for a call that is not answered or has an empty answer', () => {
@@ -99,11 +102,11 @@ describe('partOf', () => {
 });
 
 describe('chips', () => {
-  it('a live turn has Stop and Open in Agent', () => {
+  it('a live turn has Stop and Open in Conversations', () => {
     for (const state of ['planning', 'running', 'slow'] as const)
       expect(cardChips(view({ state }))).toEqual([
         { id: `agent-stop:${T1}`, label: 'Stop' },
-        { id: `agent-open:${T1}`, label: 'Open in Agent' },
+        { id: `agent-open:${T1}`, label: 'Open in Conversations' },
       ]);
   });
 
@@ -114,13 +117,13 @@ describe('chips', () => {
     });
   });
 
-  it('a finished turn keeps Open in Agent only; needs_you leads with Open Settings', () => {
+  it('a finished turn keeps Open in Conversations only; needs_you leads with Open Settings', () => {
     expect(cardChips(view({ state: 'done' }))).toEqual([
-      { id: `agent-open:${T1}`, label: 'Open in Agent' },
+      { id: `agent-open:${T1}`, label: 'Open in Conversations' },
     ]);
     expect(cardChips(view({ state: 'needs_you' })).map((c) => c.label)).toEqual([
       'Open Settings',
-      'Open in Agent',
+      'Open in Conversations',
     ]);
   });
 
@@ -222,7 +225,10 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     const r = rig();
     r.card.show(MOG, view());
     expect(r.s.log).toEqual(['turn:running']);
-    expect(r.s.controls.get('agent')?.map((c) => c.label)).toEqual(['Stop', 'Open in Agent']);
+    expect(r.s.controls.get('agent')?.map((c) => c.label)).toEqual([
+      'Stop',
+      'Open in Conversations',
+    ]);
     expect(r.shown).toEqual([MOG]);
     expect(r.open).toEqual([true]);
     expect(r.card.shown(MOG)).toBe(T1);
@@ -399,7 +405,7 @@ describe('chip clicks from the card', () => {
     return { log, input };
   }
 
-  it('routes Stop, Open in Agent, Open Settings and the R-9 chip with its ticket', () => {
+  it('routes Stop, Open in Conversations, Open Settings and the R-9 chip with its ticket', () => {
     const r = chipRig();
     const from = `card-${MOG}`;
     r.input(from, 'chip_click', { chipId: `agent-stop:${T1}` });

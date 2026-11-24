@@ -257,4 +257,69 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     expect(isExchangeMemory(new LocalMemoryService(new RecordingLocalStore()))).toBe(true);
     expect(isExchangeMemory({ recordExchange: async () => undefined })).toBe(false);
   });
+
+  it('[AC-C1] [AC-C2] [ADR 0121] an agent turn row: genie_agent, the user question, the combined answer, the thread as split group, no summary', async () => {
+    const { store, record } = rig();
+    await record({
+      opId: OP,
+      mogId: MOG,
+      profile: PROFILE,
+      question: Q,
+      backend: 'genie_agent',
+      threadId: '51111111-2222-4333-8444-555555555540',
+      homeWorkspace: true,
+      end: {
+        t: 'answer',
+        md: ANSWER,
+        incomplete: false,
+        keyNumbers: [],
+        deepLink: '',
+        queryItems: [],
+      },
+    });
+    const p = exchange(store);
+    expect(p).toMatchObject({
+      requestId: OP,
+      backendKind: 'genie_agent',
+      homeWorkspace: true,
+      questionUser: Q,
+      status: 'completed',
+      finalAnswerMd: ANSWER,
+      splitGroupId: '51111111-2222-4333-8444-555555555540',
+    });
+    expect(p['answerSummary']).toBeUndefined();
+    expect(p['conversationId']).toBeUndefined();
+    expect(p['keyNumbers'] ?? []).toEqual([]);
+  });
+
+  it('[ADR 0121] a Genie call row with a split group keeps it, and keeps its summary', async () => {
+    const { store, record } = rig();
+    await record(answered({ splitGroupId: '51111111-2222-4333-8444-555555555541' }));
+    expect(exchange(store)).toMatchObject({
+      backendKind: 'genie_one_mcp',
+      splitGroupId: '51111111-2222-4333-8444-555555555541',
+    });
+    expect(typeof exchange(store)['answerSummary']).toBe('string');
+  });
+
+  it('[Wipe] [L3] a write that a Wipe overtook while it looked up the host saves nothing', async () => {
+    const { store, record } = rig();
+    let stale = false;
+    // The Wipe lands during the lookups; the writer checks the fence before the first store call.
+    const end = answered({ isStale: () => stale });
+    const done = record(end);
+    stale = true;
+    await done;
+    expect(ids(store)).toEqual([]);
+  });
+
+  it('[Wipe] [L3] a Wipe between the MOG row and the exchange stops the exchange write', async () => {
+    let stale = false;
+    const { store, record } = rig(() => {
+      stale = true;
+      return { rows: [{ changes: 1 }] };
+    });
+    await record(answered({ isStale: () => stale }));
+    expect(ids(store)).toEqual(['mem.mog.upsert']);
+  });
 });

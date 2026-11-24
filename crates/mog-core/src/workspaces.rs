@@ -71,6 +71,26 @@ pub trait ProfileSource: Send + Sync {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>>;
 }
 
+/// SEC-28b: the admin lock on D1 as read from its source. `None` means the read failed.
+/// No admin source exists before slice 3, so it reads "not locked".
+fn read_d1_lock() -> Option<bool> {
+    Some(false)
+}
+
+/// SEC-28b: an admin lock on D1. It fails closed: a lock that cannot be read counts as locked.
+fn d1_locked() -> bool {
+    lock_of(read_d1_lock())
+}
+
+fn lock_of(read: Option<bool>) -> bool {
+    read.unwrap_or(true)
+}
+
+/// D1 as the agent session sees it: the lock forces it off (AC-2b.5).
+fn effective_d1(setting: bool, locked: bool) -> bool {
+    setting && !locked
+}
+
 impl ProfileSource for ProfileService {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
         self.list(refresh)
@@ -113,7 +133,10 @@ fn is_auth_error(e: &CoreError) -> bool {
     )
 }
 
-/// The model alias of a profile name: lower case, `[a-z0-9-]` only, at most 40 characters.
+/// The longest model alias, a `-N` suffix included. It matches the `workspace` limit of `ask_genie`.
+const ALIAS_MAX_CHARS: usize = 32;
+
+/// The model alias of a profile name: lower case, `[a-z0-9-]` only, at most `ALIAS_MAX_CHARS` (32) characters.
 fn alias_slug(name: &str) -> String {
     let mut out = String::new();
     for c in name.chars() {
@@ -125,7 +148,7 @@ fn alias_slug(name: &str) -> String {
         }
     }
     let t = out.trim_matches('-');
-    let t: String = t.chars().take(40).collect();
+    let t: String = t.chars().take(ALIAS_MAX_CHARS).collect();
     let t = t.trim_matches('-').to_owned();
     if t.is_empty() {
         "ws".to_owned()
@@ -481,13 +504,14 @@ impl WorkspaceStore {
             self.probe(&mut rows);
         }
         rows.sort_by(|a, b| b.is_home.cmp(&a.is_home).then(a.profile.cmp(&b.profile)));
+        let locked = d1_locked();
         Ok(WorkspaceList {
             home: data.home.clone(),
             lamp_mog_id: data.lamp_mog_id.clone(),
             workspaces: rows,
             agent: AgentSettings {
-                cross_workspace_data: data.agent.cross_workspace_data,
-                cross_workspace_locked: false,
+                cross_workspace_data: effective_d1(data.agent.cross_workspace_data, locked),
+                cross_workspace_locked: locked,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 run_profile: data.agent.run_profile.clone(),
@@ -641,7 +665,11 @@ impl WorkspaceStore {
             let mut alias = base.clone();
             let mut n = 2;
             while used.contains(&alias) {
-                alias = format!("{base}-{n}");
+                // The whole alias, suffix included, stays within the cap.
+                let suffix = format!("-{n}");
+                let keep = ALIAS_MAX_CHARS - suffix.len();
+                let head = base[..base.len().min(keep)].trim_end_matches('-');
+                alias = format!("{head}{suffix}");
                 n += 1;
             }
             used.push(alias.clone());
@@ -660,7 +688,7 @@ impl WorkspaceStore {
         });
         Ok(crate::agent_run::session::Snapshot {
             catalog,
-            cross_workspace: data.agent.cross_workspace_data,
+            cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
             budget: data.agent.genie_call_budget.get(),
             agent_profile,
             agent_host,
@@ -736,3 +764,24 @@ impl GatewayComponents for WorkspaceStore {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod d1_lock_tests {
+    use super::{d1_locked, effective_d1};
+
+    #[test]
+    fn ac_2b_5_a_lock_forces_d1_off_and_no_lock_keeps_the_setting() {
+        assert!(!effective_d1(true, true));
+        assert!(!effective_d1(false, true));
+        assert!(effective_d1(true, false));
+        assert!(!effective_d1(false, false));
+        assert!(!d1_locked(), "no admin source before slice 3");
+    }
+
+    #[test]
+    fn l3_a_lock_that_cannot_be_read_counts_as_locked() {
+        assert!(super::lock_of(None));
+        assert!(!super::lock_of(Some(false)));
+        assert!(super::lock_of(Some(true)));
+    }
+}

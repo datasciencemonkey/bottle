@@ -33,6 +33,12 @@ export interface HubAgentView {
   /** Newest first. */
   earlier: AgentTurnView[];
   genieCode: GenieCodeStatus;
+  /** The thread of each turn in the panel, so Conversations can show it ("Open in Conversations"). */
+  threads: { turnId: string; threadId: string }[];
+  /**
+   * @deprecated The jump to the Agent area is withdrawn: "Open" sends `hub:conversations.open`
+   * with `{ threadId }`. The field stays only for the existing wiring and the hub notice.
+   */
   notice?: { kind: 'error' | 'info'; text: string };
 }
 
@@ -144,6 +150,20 @@ function asSession(v: unknown): AgentSessionState | undefined {
     queued,
     tokens,
   };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function asThreadLinks(v: unknown): HubAgentView['threads'] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: HubAgentView['threads'] = [];
+  for (const t of v) {
+    if (!isObj(t) || !isTurnId(t['turnId']) || !isStr(t['threadId']) || !UUID.test(t['threadId'])) {
+      return undefined;
+    }
+    out.push({ turnId: t['turnId'], threadId: t['threadId'] });
+  }
+  return out;
 }
 
 function asChip(v: unknown): AgentWsChip | undefined {
@@ -263,10 +283,11 @@ export function asHubAgentView(p: unknown): HubAgentView | undefined {
   const genieCode = asGenieCodeStatus(p['genieCode']);
   const waiting = asTurnList(p['waiting']);
   const earlier = asTurnList(p['earlier']);
-  if (!session || !genieCode || !waiting || !earlier) return undefined;
+  const threads = asThreadLinks(p['threads']);
+  if (!session || !genieCode || !waiting || !earlier || !threads) return undefined;
   // The queue holds at most 3 waiting turns.
   if (waiting.length > 3) return undefined;
-  const out: HubAgentView = { session, waiting, earlier, genieCode };
+  const out: HubAgentView = { session, waiting, earlier, genieCode, threads };
   if (p['live'] !== undefined) {
     const live = asAgentTurnView(p['live']);
     if (!live) return undefined;

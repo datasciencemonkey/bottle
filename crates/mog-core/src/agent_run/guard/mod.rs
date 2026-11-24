@@ -43,10 +43,6 @@ mod tests;
 
 pub use receipt::ToolOut;
 
-/// D1 (combine across workspaces) is not supported in 2a. With this off, a workspace that is not
-/// the agent workspace always gets a receipt, whatever `SessionSpec::cross_workspace` says.
-pub const D1_SUPPORTED: bool = false;
-
 /// The one tool that the model may call.
 pub const TOOL_NAME: &str = "ask_genie";
 /// The longest `workspace` argument.

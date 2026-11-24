@@ -2,11 +2,12 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
-import type { CaptureState, MogId, SegmentRef } from '../../shared/interfaces';
+import type { AgentTurn, CaptureState, MogId, SegmentRef } from '../../shared/interfaces';
 import { createBrainLog } from '../log';
 import { createArrivalGate, noPasteOnEmpty } from '../arrival-gate';
 import { call } from '../../shared/ipc';
-import { createAskGate, wireAskGate } from '../ask-gate';
+import { capQuestion, createAskGate, wireAskGate } from '../ask-gate';
+import { sanitizeQuestion } from '../question-sanitizer';
 import {
   BrainBus,
   onViewInput,
@@ -55,7 +56,7 @@ import {
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
-import { createAgentClient, ipcAgentApi } from '../agent-run';
+import { createAgentClient, ipcAgentApi, uuidOfTurn, type AgentClient } from '../agent-run';
 import { createAskRouter, createFollowUpWindow } from '../agent-route';
 import {
   clearingAgentPanel,
@@ -87,7 +88,7 @@ import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { STORE_EVENT } from '../../shared/store-view';
 import { wirePermissions } from '../permission-wiring';
-import { withOfflineFallback } from '../offline-intent';
+import { offlineDecision, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
 import { wireTalkNoMog } from '../talk-no-mog';
@@ -202,8 +203,29 @@ export function startBrain(): Brain {
     wireWorkspaces(bus, workspaces);
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
     // (`mem.exchange.recent`) and sends them to the hub; the hub view runs no store statement.
+    const agentRef: {
+      client?: AgentClient;
+      /** A follow-up in an agent thread (the hub composer, or ⌥G on the thread). */
+      send?: (
+        threadId: string,
+        mogId: string | undefined,
+        question: string,
+        ticket?: string,
+      ) => void;
+    } = {};
     const conversations = wireHubConversations(bus, {
       store: new IpcLocalMemoryStore(),
+      // ADR 0121: the agent threads. The chips come from the workspaces list; the turns in memory
+      // win over the stored turn with the same UUID; a Delete makes the client forget the turns.
+      chipOf: (profile) => {
+        const w = workspaces.catalog().find((c) => c.profile === profile);
+        return {
+          name: w?.name ?? profile,
+          colorVariant: w?.colorVariant ?? MOG_PALETTE[0]?.id ?? '',
+        };
+      },
+      memoryTurns: () => agentRef.client?.turns() ?? [],
+      forgetThread: (threadId) => agentRef.client?.forgetThread(threadId),
       mogs: async () =>
         (await components.T1.list()).mogs.map((m) => ({
           mogId: m.mogId,
@@ -284,6 +306,8 @@ export function startBrain(): Brain {
       sendAccess: (access: ThreadAccess) => {
         void emitTo('hub', HUB_THREAD_ACCESS_EVENT, access).catch(() => undefined);
       },
+      // ADR 0121: the composer of an agent thread. The host minted the Ask ticket for the click.
+      agentSend: (a, ticket) => agentRef.send?.(a.threadId, a.mogId, a.question, ticket),
     });
     // #123 (MEM-32a, MEM-32c, MEM-32d): the hub Forget dialog runs Forget on T10 on a user click.
     // TODO(#163): pass `home` (the home host and workspace id from T7) for the memory review link.
@@ -473,16 +497,54 @@ export function startBrain(): Brain {
       // direct ask takes the card from every agent turn of this MOG.
       direct: (turn, notice, turnId) => {
         agentCard.takeover(turn.mogId, turnId);
-        return directSend(turn, { notice });
+        // The fallback row joins its turn (ADR 0121): it is the home part of the turn.
+        return directSend(turn, {
+          notice,
+          ...(turnId !== undefined ? { splitGroupId: uuidOfTurn(turnId) } : {}),
+        });
       },
       showTurn: (mogId, view) => agentCard.show(mogId, view),
       dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
       followUp,
-      onChange: () => void hubRef.current?.push(),
+      onChange: () => {
+        void hubRef.current?.push();
+        // A Delete that waited for a turn to settle goes now.
+        void conversations.retryDeferred();
+      },
       log: agentLog,
     });
+    agentRef.client = agentClient;
+    agentRef.send = (threadId, mogId, raw, ticket) => {
+      void (async () => {
+        // The hub names the MOG (the host bound the ticket to it); ⌥G takes the MOG of the thread.
+        // Either way it must be a defined MOG.
+        const known = conversations.threadMog(threadId) ?? agentClient.threadMog(threadId);
+        // The hub's MOG must own the thread: a mismatch writes a turn under one MOG with the
+        // root of another.
+        if (mogId !== undefined && known !== undefined && known !== mogId)
+          return showNote(mogId, 'Not sent.');
+        const target = mogId ?? known;
+        const clean = sanitizeQuestion(raw);
+        if (target === undefined) return;
+        if (!(await components.T1.list()).mogs.some((m) => m.mogId === target)) return;
+        if (clean === '') return showNote(target, 'Not sent.');
+        const home = await workspaces.home();
+        if (home === undefined) return showNote(target, 'Not sent.');
+        const question = capQuestion(clean).text;
+        const turn: AgentTurn = {
+          mogId: target,
+          question,
+          decision: offlineDecision(question),
+          recall: [],
+          target: home,
+        };
+        // A reply in the thread of the open session is a follow-up; else it starts a session.
+        const mode = agentClient.inSession(threadId) ? 'follow_up' : 'ask';
+        await agentClient.submit(turn, mode, ticket, threadId);
+      })().catch(() => (mogId !== undefined ? showNote(mogId, 'Not sent.') : undefined));
+    };
     const hubRef: { current?: HubAgentWiring } = {};
     agentClear.fn = () => {
       agentClient.clear();
@@ -504,7 +566,7 @@ export function startBrain(): Brain {
       note: showNote,
       refreshGenieCode: () => void workspaces.refreshGenieCode(),
     });
-    // The hub Agent panel: the live turn, the waiting turns and the earlier turns, in memory only.
+    // The agent turns in memory (live, waiting, earlier) go to hub Conversations (ADR 0121).
     hubRef.current = wireHubAgent(bus, {
       client: agentClient,
       genieCode: () => workspaces.genieCode(),
@@ -514,12 +576,14 @@ export function startBrain(): Brain {
         void workspaces.showSettings();
       },
     });
-    // The agent chips of the card: Stop, Open in Agent, Open Settings, "Ask other workspaces too".
+    // The agent chips of the card: Stop, Open in Conversations, Open Settings, "Ask other workspaces too".
     wireAgentChips(bus, {
       stop: (turnId) => void agentClient.stop(turnId),
-      openAgent: () => {
+      // ADR 0121: the thread of the turn opens in hub Conversations, also before it is stored.
+      openAgent: (turnId) => {
         void showHub();
-        void hubRef.current?.open();
+        const threadId = agentClient.threadOf(turnId);
+        if (threadId !== undefined) void conversations.openThread(threadId);
       },
       openSettings: () => {
         void showHub();
@@ -785,6 +849,7 @@ export function startBrain(): Brain {
           void routeAskToFocusedThread(r, {
             focus: threadFocus,
             followup,
+            agentSend: (threadId, question) => agentRef.send?.(threadId, undefined, question),
             release: () => owner.release(owned.utteranceId),
             hubFocused: () => isHubFocused(),
           })

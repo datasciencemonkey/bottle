@@ -769,13 +769,109 @@
     min-height: 0;
   }
 
+  /* The list column: the toolbar (Clear failed) above the listbox, one border on the right. */
+  .conv-listcol {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--mog-edge);
+  }
+
   .conv-list {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
-    /* No left padding: the rows start on the area header's left edge, like the Memory tree. */
+    /* No left padding: the rows start on the area header's left edge, like the Memory tree.
+       The right border is on .conv-listcol, so it runs past the Clear failed toolbar. */
     padding: 0 12px 24px 0;
-    border-right: 1px solid var(--mog-edge);
     overscroll-behavior: contain;
+  }
+
+  .conv-toolbar {
+    display: flex;
+    flex: none;
+    justify-content: flex-end;
+  }
+
+  .conv-list-bar {
+    padding: 8px 12px 0 20px;
+  }
+
+  .conv-detail-bar {
+    padding: 12px 24px 0;
+  }
+
+  /* An agent thread that runs: a dot that breathes (the keyframes are in agent-run.css). */
+  .conv-live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--mog-eye);
+    vertical-align: middle;
+    animation: agent-breathe 2s ease-in-out infinite alternate;
+  }
+
+  .conv-row-meta .agent-pill {
+    margin-right: 4px;
+  }
+
+  .conv-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  /* The turns that wait, under the live one: a muted row with a quiet × (24 px target). */
+  .conv-queued {
+    margin: 12px 0 0;
+  }
+
+  .conv-queued .agent-queued-row {
+    justify-content: space-between;
+  }
+
+  .conv-queued-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  /* The Undo toast of Delete and Clear failed, at the foot of the list column: it never covers
+     the composer. With no list (the empty state) it sits at the foot of the area. */
+  .conv {
+    position: relative;
+  }
+
+  .conv-toast-live {
+    position: absolute;
+    right: 0;
+    bottom: 16px;
+    left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .conv-toast {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+    padding: 4px 6px 4px 14px;
+    border: 1px solid var(--mog-edge);
+    border-radius: var(--mog-radius-pill);
+    background: var(--mog-surface-raised);
+    box-shadow: var(--mog-shadow);
+    font-size: var(--mog-text-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .conv-live-dot {
+      animation: none;
+    }
   }
 
   /* The listbox takes focus; the ring goes on the active option, not round the whole pane. */
@@ -821,6 +917,9 @@
   }
 
   .conv-row-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--mog-text-muted);
     font-size: var(--mog-text-xs);
     font-variant-numeric: tabular-nums;
@@ -842,6 +941,21 @@
 
   .conv-status--failed {
     color: var(--mog-lid);
+  }
+
+  /* A thread that waits for the user (a sign-in) is not a failure: the spark colour, not the lid. */
+  .conv-status--needs {
+    color: var(--mog-spark);
+  }
+
+  /* The agent turn reads at the same measure as the question and the composer. */
+  .conv-detail .agent-turn,
+  .conv-detail .agent-note,
+  .conv-detail .agent-parts,
+  .conv-detail .conv-queued,
+  .conv-detail .agent-session-row,
+  .conv-detail .agent-confirm {
+    max-width: 616px;
   }
 
   /* The pane is a column of two parts (#145): the exchange list scrolls, and the composer stays

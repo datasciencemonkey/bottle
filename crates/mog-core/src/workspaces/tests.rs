@@ -677,11 +677,38 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
     assert!(snap.agent_profile.is_none() && snap.agent_host.is_none() && snap.catalog.is_empty());
 }
 
+/// I1: the whole alias, `-N` suffix included, stays within the 32 chars of the `workspace` arg.
+#[test]
+fn a_long_profile_name_with_a_collision_suffix_stays_within_32_chars() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    let (long_a, long_b) = ("a".repeat(80), "A".repeat(80));
+    for (id, name, home) in [("a", "A", &long_a), ("b", "B", &long_b)] {
+        put_config(&cfg, id, name, home);
+    }
+    let w = WorkspaceStore::new(
+        &s.0,
+        cfg,
+        Arc::new(FakeT7(vec![profile(&long_a, true), profile(&long_b, true)])),
+    );
+    let aliases: Vec<String> = w
+        .catalog_snapshot()
+        .unwrap()
+        .catalog
+        .iter()
+        .map(|c| c.alias.clone())
+        .collect();
+    assert_eq!(aliases.len(), 2);
+    assert_ne!(aliases[0], aliases[1]);
+    assert!(aliases.iter().all(|a| a.len() <= 32), "{aliases:?}");
+    assert!(aliases[1].ends_with("-2"), "{aliases:?}");
+}
+
 #[test]
 fn alias_slugs_are_safe_short_and_never_empty() {
     assert_eq!(alias_slug("Sales (EU)"), "sales-eu");
     assert_eq!(alias_slug("--"), "ws");
-    assert_eq!(alias_slug(&"a".repeat(80)).len(), 40);
+    assert_eq!(alias_slug(&"a".repeat(80)).len(), 32);
     assert_eq!(alias_slug("ÄÖ"), "ws");
 }
 

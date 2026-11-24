@@ -3,7 +3,6 @@ import { PanelLeftIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { HUB_AGENT_EVENT, asHubAgentView } from '../../shared/hub-agent';
 import { HUB_WORKSPACES_EVENT, asHubWorkspaceList } from '../../shared/hub-workspaces';
 import type { HubRecording } from '../../shared/recording-view';
 import {
@@ -15,7 +14,6 @@ import {
 } from '../view-ipc';
 import type { MogId } from '../../shared/interfaces';
 import { About } from './About';
-import { AgentPanel, useHubAgent } from './AgentPanel';
 import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
@@ -42,6 +40,7 @@ import { sttModelApi } from './sttModelApi';
 import { StoreNotice } from './StoreNotice';
 import { ThreadComposer } from './ThreadComposer';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { useHubAgent } from './use-hub-agent';
 import { useHubSidebar } from './use-hub-sidebar';
 import { WipeSettings } from './WipeSettings';
 import { useHubWorkspaces, WorkspaceSettings } from './WorkspaceSettings';
@@ -190,34 +189,6 @@ export function Hub() {
       off?.();
     };
   }, []);
-  // Slice 2a: "Open in Agent" on the card sends a new notice, and the hub shows the Agent area.
-  const lastAgentNotice = useRef('');
-  useEffect(() => {
-    let off: (() => void) | undefined;
-    let gone = false;
-    void listen<unknown>(
-      HUB_AGENT_EVENT,
-      (e) => {
-        const n = asHubAgentView(e.payload)?.notice;
-        if (n === undefined) {
-          lastAgentNotice.current = '';
-          return;
-        }
-        const key = `${n.kind}|${n.text}`;
-        if (key === lastAgentNotice.current) return;
-        lastAgentNotice.current = key;
-        setView('agent');
-      },
-      { target: getCurrentWindow().label },
-    ).then((u) => {
-      if (gone) u();
-      else off = u;
-    });
-    return () => {
-      gone = true;
-      off?.();
-    };
-  }, []);
   const recording = useHubRecording();
   const openRecordingSettings = useCallback(() => {
     pickView('settings');
@@ -333,8 +304,9 @@ export function Hub() {
             active={view === 'conversations'}
             onOpen={showConversations}
             composer={threadComposer}
+            agent={agent}
+            agentMogId={[...mogs.keys()][0]}
           />
-          <AgentPanel view={agent} active={view === 'agent'} />
           <MemoryArea active={view === 'memory'} forgetMogId={[...mogs.keys()][0]} />
           <Recordings
             active={view === 'recordings'}
