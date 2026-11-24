@@ -142,7 +142,7 @@ describe('citation markers', () => {
     expect(fold.hidden).toBe(true);
   });
 
-  it('opens Open in Databricks through link_open, from the part footer and from shift-click', async () => {
+  it('opens the Genie One link through link_open, from the turn link and from shift-click', async () => {
     const { el } = await render(card(turn('Sales [1].', cites)));
     await click(el.querySelector('[data-agent-cite="1"]'));
     expect(inputEmits()).toEqual([]);
@@ -151,9 +151,13 @@ describe('citation markers', () => {
       expect.objectContaining({ kind: 'click', payload: { target: 'link_open', url: LINK } }),
     );
     tauri.invoke.mockClear();
-    await click(
+    // The part does not repeat the link: the turn shows it once, "Open Genie One in <workspace>".
+    expect(
       el.querySelector('[data-agent-part="c-00000001"] [data-action="open-in-databricks"]'),
-    );
+    ).toBeNull();
+    const genie = el.querySelector('[data-action="open-genie-one"]');
+    expect(genie?.textContent).toBe(`Open Genie One in ${sales.name}`);
+    await click(genie);
     expect(inputEmits()).toContainEqual(
       expect.objectContaining({ kind: 'click', payload: { target: 'link_open', url: LINK } }),
     );

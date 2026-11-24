@@ -128,8 +128,14 @@ const STATUS: Record<OperationState, [string, boolean]> = {
   ABANDONED: ['abandoned', true],
 };
 
-/** A write of one exchange. `noSummary`: save no `answerSummary` (the row of an agent turn). */
-export type ExchangeWrite = GenieExchange & { noSummary?: true };
+/**
+ * A write of one exchange. `noSummary`: save no `answerSummary` (the row of an agent turn).
+ * `citations`: the workspace (profile) that each `[n]` of an agent turn's answer names (ADR 0122).
+ */
+export type ExchangeWrite = GenieExchange & {
+  noSummary?: true;
+  citations?: { n: number; profile: string }[];
+};
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The most key numbers kept for one exchange. */
@@ -535,6 +541,7 @@ export class LocalMemoryService implements MemoryService {
         completedAt: terminal ? now : undefined,
         rowHlc: this.#hlc(now),
         deviceId: this.#deviceId(),
+        citations: x.citations,
       }),
     );
   }

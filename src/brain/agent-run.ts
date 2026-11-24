@@ -44,7 +44,7 @@ import {
   whyOfOutcome,
   whyOfRefusal,
 } from './agent-card';
-import { citationsOf } from './agent-citations';
+import { citationsByWorkspace } from './agent-citations';
 import type { FollowUpWindow } from './agent-route';
 import { keyNumbersOf, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
@@ -142,6 +142,8 @@ interface TurnRec {
   ran?: boolean;
   /** `finish` is over: the turn row is asked for, and a Delete may take the turn. */
   settled: boolean;
+  /** The workspace (profile) of each `[n]` of the summary, saved with the turn row. */
+  citations?: { n: number; profile: ProfileName }[];
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -533,6 +535,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         threadId: r.threadId,
         isStale: staleOrDefer(r, gen, cg, () => deferTurn(r, out)),
         homeWorkspace: true,
+        ...(out === 'answered' && r.citations?.length ? { citations: r.citations } : {}),
       });
     } catch {
       fault();
@@ -718,9 +721,16 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       .map((s) => r.parts.get(s.callId)?.workspace)
       .filter((c): c is AgentWsChip => c !== undefined);
     const workspaces = chips.filter((c, i) => chips.findIndex((x) => x.name === c.name) === i);
-    const citations = citationsOf(res.answer, res.sources, r.parts);
+    const { md, citations, workspaceIds } = citationsByWorkspace(res.answer, res.sources, r.parts);
+    // The turn row keeps which workspace (profile) each number names, for Conversations.
+    const profileOf = (alias: string) =>
+      [r, ...recs.values()].map((x) => x.catalog.get(alias)?.profile).find((p) => p !== undefined);
+    r.citations = workspaceIds.flatMap((alias, i) => {
+      const profile = profileOf(alias);
+      return profile === undefined ? [] : [{ n: i + 1, profile }];
+    });
     const summary: NonNullable<AgentTurnView['summary']> = {
-      md: res.answer,
+      md,
       // Only D1 on can combine: with D1 off the kind stays "note" (AC-2b.6; the owner rule of the answer supersedes its label: the view shows no note label).
       kind: r.crossWorkspace ? res.answerKind : 'note',
       workspaces,

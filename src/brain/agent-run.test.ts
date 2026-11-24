@@ -14,7 +14,13 @@ import type {
   AgentTurnView,
 } from '../shared/ipc';
 import { createFollowUpWindow } from './agent-route';
-import { createAgentClient, uuidOfTurn, type AgentApi, type AgentClient } from './agent-run';
+import {
+  asTurnEvent,
+  createAgentClient,
+  uuidOfTurn,
+  type AgentApi,
+  type AgentClient,
+} from './agent-run';
 import { createSimClock } from './clock';
 import type { PartFence } from './genie-direct';
 import { createGenieHistory, type ExchangeMemory, type GenieEnd } from './genie-history';
@@ -456,10 +462,44 @@ describe('a finished call and a finished turn', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
     await r.settle();
     const s = r.client.panel().earlier[0]?.summary as { md: string; citations?: unknown[] };
-    expect(s.md).toBe('Sales [1] and finance [2], not [3] or [x].');
-    // D1 is off: the Finance part is withheld from the agent, so [2] gets no link.
+    // D1 is off: the Finance part is withheld from the agent, so its [2] goes, as does [3].
+    expect(s.md).toBe('Sales [1] and finance, not or [x].');
     expect(s.citations).toMatchObject([{ n: 1, callId: C1, workspace: { name: SALES.name } }]);
     expect(s.citations).toHaveLength(1);
+    // The turn row saves which workspace each number names.
+    expect(r.history.find((h) => h.backend === 'genie_agent')?.citations).toEqual([
+      { n: 1, profile: SALES.profile },
+    ]);
+  });
+
+  it('[owner bug] two calls to one workspace are one source: one number, saved with the turn row', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.ev({ kind: 'started', turnId: T1 });
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'No match.'));
+    r.script.details.set(`${T1}:${C2}`, detail(T1, C2, SALES, 'answered', 'Top is **X**.'));
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    await r.settle();
+    r.ev(callEv(T1, C2, SALES, 'answered', 2));
+    await r.settle();
+    r.script.result = {
+      answer: 'Top is X [1] [2].',
+      answerKind: 'note',
+      sources: [
+        { workspaceId: 'ws-a', callId: C1, turnId: T1 },
+        { workspaceId: 'ws-a', callId: C2, turnId: T1 },
+      ],
+    };
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    const s = r.client.panel().earlier[0]?.summary;
+    expect(s?.md).toBe('Top is X [1] [1].');
+    expect(s?.citations).toHaveLength(1);
+    expect(s?.citations?.[0]).toMatchObject({ n: 1, callId: C2 });
+    const row = r.history.find((h) => h.backend === 'genie_agent');
+    expect(row?.end).toMatchObject({ t: 'answer', md: 'Top is X [1] [1].' });
+    expect(row?.citations).toEqual([{ n: 1, profile: SALES.profile }]);
   });
 
   it('[AC-2a.12] a hidden summary shows no note and folds nothing', async () => {
@@ -1454,5 +1494,23 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     lift();
     await r.settle();
     expect(r.history).toEqual([]);
+  });
+});
+
+describe('the wire form of a call id', () => {
+  it('[owner bug] takes the core call id c-<8 hex> and drops any other form', () => {
+    const ev = (callId: string) =>
+      asTurnEvent({
+        kind: 'call',
+        turnId: T1,
+        callId,
+        workspaceId: 'ws-a',
+        state: 'answered',
+        used: 1,
+        budget: 10,
+      });
+    expect(ev('c-0a1b2c3d')).toMatchObject({ kind: 'call', callId: 'c-0a1b2c3d' });
+    // The form that the 0.1.8 core sent: every call event was dropped, so no part was shown.
+    expect(ev('call-f84ecf32a509')).toBeUndefined();
   });
 });

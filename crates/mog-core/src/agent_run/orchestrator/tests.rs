@@ -1866,6 +1866,65 @@ fn markers_outside_the_sources_are_removed_from_the_answer() {
 }
 
 #[test]
+fn adr_0122_a_sources_footer_that_the_model_wrote_is_removed() {
+    // The owner bug of 0.1.8: a plain "[1] Source: logfood, call-…" line under the answer.
+    assert_eq!(
+        host::strip_source_footer(
+            "Top is X [1].\n\n[1] Source: logfood, call-f84ecf32a509",
+            &[]
+        ),
+        "Top is X [1]."
+    );
+    assert_eq!(
+        host::strip_source_footer(
+            "Up [1] [2].\n\n---\n**Sources:**\n- [1] sales (c-0a1b2c3d)\n- [2] finance\n",
+            &[]
+        ),
+        "Up [1] [2]."
+    );
+    assert_eq!(
+        host::strip_source_footer("A [1].\nSource: sales", &[]),
+        "A [1]."
+    );
+    // A line in the middle stays, and so does a last line that only starts with "Sources".
+    let keep = "Source: the sales table.\nSources show growth [1].";
+    assert_eq!(host::strip_source_footer(keep, &[]), keep);
+    // A known call id goes from the text, also with the brackets that hold only it.
+    assert_eq!(
+        host::strip_source_footer(
+            "Revenue grew [1] (c-0a1b2c3d) fast, see c-0a1b2c3d.",
+            &["c-0a1b2c3d"]
+        ),
+        "Revenue grew [1] fast, see."
+    );
+}
+
+#[test]
+fn adr_0122_the_turn_result_has_no_model_footer_or_call_id() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            _ => {
+                let got = results_in(body);
+                let (w, c) = got[0].clone();
+                let answer = format!("Top is X [1].\n\n[1] Source: {w}, {c}");
+                reply_of(vec![final_item(
+                    json!({"answer": answer, "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer.as_deref(), Some("Top is X [1]."));
+    assert_eq!(res.sources.len(), 1);
+}
+
+#[test]
 fn a_panic_in_a_tool_thread_fails_the_turn() {
     let r8 = Arc::new(FakeR8 {
         calls: Mutex::default(),

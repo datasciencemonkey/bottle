@@ -683,7 +683,10 @@ export interface AgentWsChip {
 }
 /** ADR 0122: one `[n]` citation in a combined summary. */
 export interface AgentCitation {
-  /** The number in the summary text, 1-based (an index into the turn result `sources`). */
+  /**
+   * The number in the summary text, 1-based: one number for each workspace, in the order each is
+   * first cited (the brain writes the markers of the text again with these numbers).
+   */
   n: number;
   callId: string;
   workspace: AgentWsChip;

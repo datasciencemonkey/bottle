@@ -32,7 +32,14 @@ import type {
   AgentWsChip,
   CardSection,
 } from '../../shared/ipc';
-import { isLoneAnswer, summaryFooterLinks, WITHHELD_TEXT } from '../../shared/agent-answer-rule';
+import {
+  foldedUnderLone,
+  genieOneLinks,
+  loneAnswerIndex,
+  openGenieOneText,
+  WITHHELD_TEXT,
+  type AnswerPart,
+} from '../../shared/agent-answer-rule';
 import { LINK_OPEN, bareHost, openInDatabricksUrl } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
@@ -138,10 +145,13 @@ export function callLabel(c: AgentCallView, now: number): string {
   }
 }
 
-/** The footer line of a finished turn. */
+/**
+ * The footer line of a finished turn: the tokens it used. The workspace whose model planned the
+ * turn is an internal detail (the orchestrator always runs on the home profile), so it is not shown.
+ */
 export function footerText(t: AgentTurnView): string | undefined {
   if (t.tokens === undefined) return undefined;
-  return `Planned in ${t.agentWorkspace.name} · ${tokensText(t.tokens)}`;
+  return tokensText(t.tokens);
 }
 
 /** A 1 s tick while something on screen counts time. */
@@ -181,8 +191,12 @@ export const FLASH_MS = 1600;
 export const citeLabel = (n: number, workspace: string): string => `Source ${n}: ${workspace}`;
 export const CITE_HINT = 'Shift-click or Shift+Enter opens it in Databricks.';
 
-/** The marker `[n]` of the summary: a small chip in the colour of its workspace. */
-function CiteChip({
+/**
+ * The marker `[n]` of the summary: a small chip in the colour of its workspace. A click reaches
+ * the answer of `cite.callId`; Shift-click opens its trusted link. Hub Conversations uses it for
+ * a stored turn too.
+ */
+export function CiteChip({
   cite,
   onReveal,
   onOpenLink,
@@ -261,6 +275,7 @@ function Part({
   onOpenLink,
   titled = false,
   flash,
+  linked,
 }: {
   part: AgentPartView;
   onOpenLink?: ((url: string) => void) | undefined;
@@ -268,6 +283,8 @@ function Part({
   titled?: boolean;
   /** The part was just reached from a citation: it is highlighted for a moment. */
   flash?: 0 | 1 | undefined;
+  /** The links that the turn shows once under its answer: the part does not repeat them. */
+  linked?: ReadonlySet<string> | undefined;
 }) {
   const answer = sectionOf(part.sections, 'answer');
   const keys = sectionOf(part.sections, 'keyNumbers');
@@ -315,7 +332,7 @@ function Part({
           ))}
         </ul>
       )}
-      {url !== undefined && onOpenLink && (
+      {url !== undefined && onOpenLink && !linked?.has(url) && (
         <a
           className="genie-toggle agent-databricks"
           href={url}
@@ -334,35 +351,48 @@ function Part({
   );
 }
 
-/** "Open in Databricks" under the answer of the MOG: one link for each workspace it names. */
-export function SummaryFooter({
+/**
+ * "Open Genie One in <workspace>" under a turn: one small link for each workspace that answered,
+ * to its Genie One conversation (`genieOneLinks`). The click goes the trusted link path.
+ */
+export function GenieOneLinks({
   links,
   onOpenLink,
 }: {
   links: { url: string; name: string }[];
   onOpenLink: (url: string) => void;
 }) {
+  if (links.length === 0) return null;
   return (
-    <>
+    <p className="agent-genie-links" data-agent-genie-links>
       {links.map((l) => (
         <a
           key={l.url}
           className="genie-toggle agent-databricks"
           href={l.url}
           rel="noopener noreferrer"
-          data-action="open-in-databricks"
+          data-action="open-genie-one"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (e.detail > 1) return;
             onOpenLink(l.url);
           }}
         >
-          {links.length > 1 ? `${OPEN_IN_DATABRICKS}: ${l.name}` : OPEN_IN_DATABRICKS}
+          {openGenieOneText(l.name)}
         </a>
       ))}
-    </>
+    </p>
   );
 }
+
+/** What the answer rule needs to know about a live part. */
+export const answerPartOf = (p: AgentPartView): AnswerPart => ({
+  answered: true,
+  withheld: sectionOf(p.sections, 'answer')?.md === WITHHELD_TEXT,
+  fromEarlier: p.fromEarlier === true,
+  workspace: p.workspace.name,
+});
 
 /** The parts of a turn: the cited ones, then the fold "1 more answer". */
 export function TurnParts({
@@ -371,24 +401,35 @@ export function TurnParts({
   answersFirst = false,
   combined = false,
   reveal,
+  underLone,
+  linked,
 }: {
   turn: AgentTurnView;
   onOpenLink?: ((url: string) => void) | undefined;
   /** A part to show and flash, when the user clicked a citation. */
   reveal?: PartReveal | undefined;
-  /** Every answer shows open under "Answer from <workspace>"; none folds. */
+  /** Every answer shows open under "Answer from <workspace>"; none folds but `underLone`. */
   answersFirst?: boolean;
   /**
    * The text of the model is the main answer: the parts of the workspaces fold under it, except
    * a part that the agent did not see (a receipt, or withheld), which stays in view with its tag.
    */
   combined?: boolean;
+  /** The calls that fold under the lone answer (an earlier wording to the same workspace). */
+  underLone?: ReadonlySet<string> | undefined;
+  /** The links that the turn shows once under its answer. */
+  linked?: ReadonlySet<string> | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [dismissed, setDismissed] = useState<number | undefined>(undefined);
-  const foldIt = (p: AgentPartView) => (combined ? p.notShownToAgent !== true : p.folded === true);
-  const shown = turn.parts.filter((p) => answersFirst || !foldIt(p));
-  const folded = answersFirst ? [] : turn.parts.filter(foldIt);
+  const foldIt = (p: AgentPartView) =>
+    answersFirst
+      ? underLone?.has(p.callId) === true
+      : combined
+        ? p.notShownToAgent !== true
+        : p.folded === true;
+  const shown = turn.parts.filter((p) => !foldIt(p));
+  const folded = turn.parts.filter(foldIt);
   const foldId = `agent-fold-${turn.turnId}`;
   // A reached part that sits in the fold opens it, until the user closes the fold again.
   const forced =
@@ -411,6 +452,7 @@ export function TurnParts({
               onOpenLink={onOpenLink}
               titled={answersFirst}
               flash={flashOf(p.callId)}
+              linked={linked}
             />
           ))}
         </ul>
@@ -441,7 +483,13 @@ export function TurnParts({
           </button>
           <ul id={foldId} className="agent-parts" aria-label="Workspace answers" hidden={!foldOpen}>
             {folded.map((p) => (
-              <Part key={p.callId} part={p} onOpenLink={onOpenLink} flash={flashOf(p.callId)} />
+              <Part
+                key={p.callId}
+                part={p}
+                onOpenLink={onOpenLink}
+                flash={flashOf(p.callId)}
+                linked={linked}
+              />
             ))}
           </ul>
         </>
@@ -514,18 +562,35 @@ export const answersFirstOf = (turn: AgentTurnView): boolean =>
   turn.parts.length > 0 && !hasSummaryText(turn);
 
 /**
- * The text of the model is the main answer: it has text, and the turn does not have exactly one
- * answered, not withheld part of its own (`isLoneAnswer`). Then that Genie answer shows as it is.
+ * The text of the model is the main answer: it has text, and no Genie answer of the turn is the
+ * answer (`loneAnswerIndex`: exactly one answered, not withheld part of its own, or several that
+ * all come from one workspace). Then that Genie answer shows as it is.
  */
 export const hasSummaryText = (turn: AgentTurnView): boolean =>
   turn.summary !== undefined &&
   turn.summary.md.trim() !== '' &&
-  !isLoneAnswer(
-    turn.parts.map((p) => ({
-      answered: true,
-      withheld: sectionOf(p.sections, 'answer')?.md === WITHHELD_TEXT,
-      fromEarlier: p.fromEarlier === true,
-    })),
+  loneAnswerIndex(turn.parts.map(answerPartOf)) < 0;
+
+/** The calls that fold under the lone answer of a turn (see `foldedUnderLone`). */
+export const underLoneOf = (turn: AgentTurnView): Set<string> => {
+  const at = foldedUnderLone(turn.parts.map(answerPartOf));
+  return new Set(turn.parts.flatMap((p, i) => (at.has(i) ? [p.callId] : [])));
+};
+
+/**
+ * The "Open Genie One" links of a live turn, from its parts (a cited source of an earlier turn
+ * is a part too): the newest answer of each workspace wins.
+ */
+export const turnGenieOneLinks = (turn: AgentTurnView): { url: string; name: string }[] =>
+  genieOneLinks(
+    turn.parts.map((p) => {
+      const footer = sectionOf(p.sections, 'footer');
+      return {
+        name: p.workspace.name,
+        deepLink: footer?.deepLink,
+        workspaceHost: footer?.workspaceHost,
+      };
+    }),
   );
 
 /** The first line of the first answer of a turn, for a list: never the note of the agent. */
@@ -598,19 +663,10 @@ export function TurnBody({
       allowedAppUrls: [...new Set(hosts)].filter((h) => h !== '').map((h) => `https://${h}`),
     };
   }, [turn.parts, turn.summary]);
-  // "Open in Databricks" of each cited workspace, unless the answer carries that link already.
-  const footerLinks = useMemo(
-    () =>
-      summaryFooterLinks(
-        turn.summary?.md ?? '',
-        (turn.summary?.citations ?? []).map((c) => ({
-          name: c.workspace?.name ?? '',
-          deepLink: c.deepLink,
-          workspaceHost: c.workspaceHost,
-        })),
-      ),
-    [turn.summary],
-  );
+  // "Open Genie One in <workspace>" once for each workspace that answered.
+  const genieLinks = useMemo(() => turnGenieOneLinks(turn), [turn]);
+  const linked = useMemo(() => new Set(genieLinks.map((l) => l.url)), [genieLinks]);
+  const underLone = useMemo(() => underLoneOf(turn), [turn]);
   const note = turn.summary && combined && (
     <div className="agent-summary" data-agent-summary data-agent-note>
       {turn.summary.workspaces.length > 1 && (
@@ -650,7 +706,6 @@ export function TurnBody({
           renderMarker={renderMarker}
         />
       </div>
-      {onOpenLink && <SummaryFooter links={footerLinks} onOpenLink={onOpenLink} />}
     </div>
   );
   return (
@@ -682,7 +737,10 @@ export function TurnBody({
         answersFirst={answersFirst}
         combined={combined}
         reveal={reveal}
+        underLone={underLone}
+        linked={onOpenLink ? linked : undefined}
       />
+      {onOpenLink && <GenieOneLinks links={genieLinks} onOpenLink={onOpenLink} />}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
     </div>

@@ -327,6 +327,14 @@
   margin-block: -4px;
 }
 
+/* "Open Genie One in <workspace>": one small link for each workspace the turn asked. */
+.agent-genie-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+}
+
 .agent-fold:hover,
 .agent-databricks:hover,
 .agent-x:hover {

@@ -67,6 +67,8 @@ export interface GenieEnd {
   isStale?: () => boolean;
   /** Slice 2a: false for a call to a workspace that is not home (the table keeps no question text). */
   homeWorkspace?: boolean;
+  /** With `backend: 'genie_agent'`: the workspace (profile) that each `[n]` of the answer names. */
+  citations?: { n: number; profile: ProfileName }[];
 }
 
 /** The part of T10 that the history uses. */
@@ -141,6 +143,9 @@ function exchangeOf(x: GenieEnd, host: string, mogId: MogId): ExchangeWrite {
     deepLink: e.t === 'answer' ? e.deepLink : '',
     homeWorkspace: x.homeWorkspace ?? true,
     ...(agent ? { noSummary: true as const } : {}),
+    ...(agent && x.citations !== undefined && x.citations.length > 0
+      ? { citations: x.citations }
+      : {}),
     ...((agent ? x.threadId : x.splitGroupId) !== undefined
       ? { splitGroupId: agent ? x.threadId : x.splitGroupId }
       : {}),

@@ -1329,7 +1329,8 @@ fn build_result(
             turn_id: c.turn_id.clone(),
         });
     }
-    let answer = strip_bad_markers(answer, out.len());
+    let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
+    let answer = strip_bad_markers(&strip_source_footer(answer, &ids), out.len());
     AgentTurnResult {
         answer: Some(cut_answer(&answer)),
         answer_kind: if d1 && cites_many_workspaces(&out) {
@@ -1382,6 +1383,64 @@ pub(super) fn strip_bad_markers(answer: &str, n_sources: usize) -> String {
     }
     out.push_str(&answer[last..]);
     out
+}
+
+/// Bottle draws the sources of an answer itself (ADR 0122), so a sources footer that the model
+/// wrote goes. The footer is the last lines of the answer, from the first "Sources" heading,
+/// "Source: …" or "[n] Source: …" line, or list item that names a call id, when every line under it
+/// is one of those, a "[n] …" item, or blank. A rule (`---`) and blank lines right above it go
+/// too. A line in the middle of the answer stays. Then every call id of `call_ids` that is still
+/// in the text goes (with brackets that hold only the id): a call id is internal.
+pub(super) fn strip_source_footer(answer: &str, call_ids: &[&str]) -> String {
+    static FOOT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static RULE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ITEM: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let item = ITEM.get_or_init(|| {
+        regex::Regex::new(r"^\s*(?:[-*+]\s+)?\[\d{1,3}\](?:[^(]|$)").expect("a fixed pattern")
+    });
+    let foot = FOOT.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)^\s*(?:[-*+]\s+)?(?:\[\d{1,3}\]\s*)?[*_#\s]*sources?[*_]{0,2}\s*(?::.*)?$",
+        )
+        .expect("a fixed pattern")
+    });
+    let call = CALL.get_or_init(|| {
+        regex::Regex::new(r"(?i)\b(?:call-[0-9a-f]{6,}|c-[0-9a-f]{8})\b").expect("a fixed pattern")
+    });
+    let rule = RULE.get_or_init(|| {
+        regex::Regex::new(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$").expect("a fixed pattern")
+    });
+    let lines: Vec<&str> = answer.lines().collect();
+    // From the end: the run of footer-like lines, and the topmost strong footer line in it.
+    let mut top: Option<usize> = None;
+    for (i, l) in lines.iter().enumerate().rev() {
+        // A call id alone is not a footer: only a list item or a `[n]` line with one is.
+        let listed = item.is_match(l) || l.trim_start().starts_with(['-', '*', '+']);
+        if foot.is_match(l) || (listed && call.is_match(l)) {
+            top = Some(i);
+        } else if !(l.trim().is_empty() || item.is_match(l)) {
+            break;
+        }
+    }
+    let mut text = match top {
+        Some(mut end) => {
+            while end > 0 && (lines[end - 1].trim().is_empty() || rule.is_match(lines[end - 1])) {
+                end -= 1;
+            }
+            lines[..end].join("\n").trim_end().to_owned()
+        }
+        None => answer.to_owned(),
+    };
+    for id in call_ids.iter().filter(|id| !id.is_empty()) {
+        let re = regex::Regex::new(&format!(
+            r"\s*[(\[]\s*(?:callId:?\s*)?{0}\s*[)\]]|\s*\b(?:callId:?\s*)?{0}\b",
+            regex::escape(id)
+        ))
+        .expect("an escaped id");
+        text = re.replace_all(&text, "").into_owned();
+    }
+    text
 }
 
 /// More than one workspace among the sources.
