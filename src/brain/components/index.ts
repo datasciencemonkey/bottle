@@ -57,6 +57,7 @@ import {
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
 import { createAgentClient, ipcAgentApi, uuidOfTurn, type AgentClient } from '../agent-run';
+import { wireOrchestrator, ipcOrchestratorDeps } from '../orchestrator';
 import { createAskRouter, createFollowUpWindow, threadReplyMog } from '../agent-route';
 import {
   clearingAgentPanel,
@@ -197,9 +198,11 @@ export function startBrain(): Brain {
     // hub Settings → Workspace list and runs the hub workspace actions. A change of the home
     // workspace, or of its name or colour, pushes the new identity to the lamp.
     const workspaces = createWorkspaces(
-      ipcWorkspacesDeps(
-        () => void workspaces.lampMogId().then((id) => id && talkTarget.reidentify(id)),
-      ),
+      ipcWorkspacesDeps(() => {
+        void workspaces.lampMogId().then((id) => id && talkTarget.reidentify(id));
+        // The orchestrator runs on the home workspace: a new home can change its status.
+        void orchestrator.refresh();
+      }),
     );
     wireWorkspaces(bus, workspaces);
     // #103 (#40): the hub Conversations list. The brain reads the saved exchanges of each MOG
@@ -431,7 +434,7 @@ export function startBrain(): Brain {
       return s;
     };
     // Slice 2a: the direct home path of ADR 0097 (#573). The router below sends a question here
-    // unless the live Genie Code session takes it (plan Amendment 2, R-1 to R-15).
+    // unless the orchestrator model takes it (ADR 0122, R-1 to R-15).
     // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
     // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
     const directSend = createGenieDirectSend({
@@ -455,10 +458,8 @@ export function startBrain(): Brain {
         void workspaces.showSettings();
       },
       hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
-      // R-8: "Ask other workspaces too" on an answered direct card.
-      offerOthers: (turn, opId) => askRouter.offerOthers(turn, opId),
     });
-    // Slice 2a: the one live Genie Code session. The client turns `agent:turn` and `agent:session`
+    // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
     // events into the card of the turn and the history rows; the follow-up window is R-13.
     const followUp = createFollowUpWindow(cardClock);
     const agentLog = createBrainLog();
@@ -567,30 +568,34 @@ export function startBrain(): Brain {
     bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({
-      context: () => ({
-        genieCode: workspaces.genieCode(),
-        workspaces: workspaces.catalog(),
-      }),
+      context: () => ({ orchestrator: orchestrator.status() }),
       names: routeNames,
       followUp,
       agent: agentClient,
       direct: directSend,
       closeAgentCard: (mogId) => agentCard.takeover(mogId),
-      removeChip: (mogId, opId) => stackFor(mogId).clearControls(`more:${genieBlurbId(opId)}`),
-      note: showNote,
-      refreshGenieCode: () => void workspaces.refreshGenieCode(),
+      refreshOrchestrator: () => void orchestrator.refresh(),
     });
+    // ADR 0122: the orchestrator model and the dictation switch in Settings → Workspace, and the
+    // status that the router reads.
+    const orchestrator = wireOrchestrator(
+      bus,
+      ipcOrchestratorDeps({
+        settings: () => workspaces.last()?.agent,
+        homeName: () => workspaces.catalog().find((c) => c.isHome)?.name ?? null,
+        write: (args) => workspaces.writeSettings(args),
+      }),
+    );
     // The agent turns in memory (live, waiting, earlier) go to hub Conversations (ADR 0121).
     hubRef.current = wireHubAgent(bus, {
       client: agentClient,
-      genieCode: () => workspaces.genieCode(),
       send: sendHubAgent,
       openSettings: () => {
         void showHub();
         void workspaces.showSettings();
       },
     });
-    // The agent chips of the card: Stop, Open in Conversations, Open Settings, "Ask other workspaces too".
+    // The agent chips of the card: Stop, Open in Conversations, Open Settings.
     wireAgentChips(bus, {
       stop: (turnId) => void agentClient.stop(turnId),
       // ADR 0121: the thread of the turn opens in hub Conversations, also before it is stored.
@@ -603,7 +608,6 @@ export function startBrain(): Brain {
         void showHub();
         void workspaces.showSettings();
       },
-      askOthers: (mogId, opId, ticket) => void askRouter.askOthers(mogId, opId, ticket),
       cardDone: (mogId) => agentCard.close(mogId),
     });
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
@@ -618,8 +622,8 @@ export function startBrain(): Brain {
       // #163: the target is the MOG's home profile (no hop yet, TODO(#164)). With none,
       // nothing is sent: the pick card asks the user to pick one.
       target: (mogId) => homes.home(mogId),
-      // Slice 2a: the router sends the question to the live Genie Code session or to the direct
-      // home path (ADR 0097).
+      // The router sends the question to the orchestrator model or to the direct home path
+      // (ADR 0097).
       send: (turn) => askRouter.send(turn),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
@@ -795,8 +799,9 @@ export function startBrain(): Brain {
     const homes = createHomeProfiles(ipcHomeProfileDeps(() => workspaces.home()));
     const insertionOn = () => true;
     // ADR 0122: the pre-pass, the 1500 ms deadline and the grounding check wrap the router step.
-    // TODO(integration): pass `cleanDictation: () => <the "Clean up dictation" setting>` here.
-    const route = withDictationCleanup(withOfflineFallback(ipcUtteranceDeps()));
+    const route = withDictationCleanup(withOfflineFallback(ipcUtteranceDeps()), {
+      cleanDictation: () => orchestrator.cleanDictation(),
+    });
     const pick = createProfilePick({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),
@@ -900,7 +905,7 @@ export function startBrain(): Brain {
       if (!ok) return;
       void emitTo('hub', STORE_EVENT, storeGate.view()).catch(() => undefined);
       void conversations.push();
-      void workspaces.refresh();
+      void workspaces.refresh().then(() => orchestrator.refresh());
     });
     brain = { components, bus, talkTarget, conversations, ready: subscribed };
   }

@@ -1,7 +1,7 @@
 /** The brain side of the one MOG with workspaces (ADR 0117, S1-B). All IPC is fake. */
 import type { HubWorkspaceList } from '../shared/hub-workspaces';
 import { HUB_WORKSPACES_EVENT } from '../shared/hub-workspaces';
-import type { GenieCodeStatus, WorkspaceList } from '../shared/ipc';
+import type { WorkspaceList } from '../shared/ipc';
 import { MOG_PALETTE } from '../shared/mog-palette';
 import { memoryConfigs, sequentialIds } from '../test-support/mog-doubles';
 import { workspaceList } from '../test-support/workspace-list';
@@ -824,15 +824,7 @@ describe('workspaces: data MOG, lamp and identity (ADR 0117)', () => {
   });
 });
 
-describe('workspaces: the Genie Code relays of slice 2a', () => {
-  const READY: GenieCodeStatus = {
-    binary: 'ready',
-    version: '0.5.0',
-    pinned: '0.5.0',
-    agentProfile: 'work',
-    agentProfileState: 'ready',
-  };
-  const NOT_INSTALLED: GenieCodeStatus = { ...READY, binary: 'not_installed' };
+describe('workspaces: the agent settings relays (ADR 0122)', () => {
   const list = () =>
     workspaceList('work', [
       { profile: 'work', mogIds: [id(1)] },
@@ -841,86 +833,50 @@ describe('workspaces: the Genie Code relays of slice 2a', () => {
       { profile: 'gone', mogIds: [id(4)], available: true, signIn: 'missing' },
     ]);
 
-  function genieRig(status: GenieCodeStatus = READY) {
+  function agentRig() {
     const r = rig(list());
     r.configs.files.set(id(1), cfg('Sales', 'work', 'coral'));
     r.configs.files.set(id(2), cfg('Lab', 'lab', 'amber'));
-    let current = status;
-    const reads: (boolean | undefined)[] = [];
-    r.deps.genieCodeStatus = async (recheck) => {
-      reads.push(recheck);
-      return current;
-    };
-    return { ...r, reads, setStatus: (s: GenieCodeStatus) => (current = s) };
+    return r;
   }
 
-  it('sends the Genie Code status and the agent profile with the list', async () => {
-    const r = genieRig();
+  it('sends the agent profile with the list', async () => {
+    const r = agentRig();
     await r.ws.refresh();
-    expect(r.last()?.agent.genieCode).toEqual(READY);
     expect(r.last()?.agent.runProfile).toBeNull();
-    expect(r.ws.genieCode()).toEqual(READY);
   });
 
-  it('a hub that opens reads the status again', async () => {
-    const r = genieRig();
-    await r.ws.act({ action: 'workspaces.ready' });
-    expect(r.reads).toEqual([undefined]);
-    expect(r.last()?.agent.genieCode?.binary).toBe('ready');
-  });
-
-  it('[AC-2a.25] "Genie Code runs on" writes runProfile; null means home', async () => {
-    const r = genieRig();
+  it('[AC-2a.25] a change of the agent profile writes runProfile; null means home', async () => {
+    const r = agentRig();
     await r.ws.refresh();
     await r.ws.act({ action: 'workspace.agent_profile', profile: 'lab' });
     expect(r.calls.find((c) => c[0] === 'settings_write')?.[1]).toEqual({ runProfile: 'lab' });
     expect(r.last()?.agent.runProfile).toBe('lab');
     await r.ws.act({ action: 'workspace.agent_profile', profile: null });
     expect(r.last()?.agent.runProfile).toBeNull();
-    // The status of the agent profile is read again after each change.
-    expect(r.reads.length).toBe(3);
   });
 
-  it('Check again asks for a recheck and sends the new status', async () => {
-    const r = genieRig({ ...READY, agentProfileState: 'not_eligible' });
+  it('writeSettings writes the orchestrator model and the dictation switch, then sends the list', async () => {
+    const r = agentRig();
     await r.ws.refresh();
-    r.setStatus(READY);
-    await r.ws.act({ action: 'genie_code.recheck' });
-    expect(r.reads.at(-1)).toBe(true);
-    expect(r.last()?.agent.genieCode?.agentProfileState).toBe('ready');
+    const before = r.sent.length;
+    await r.ws.writeSettings({ agentEndpoint: 'system.ai.gpt-oss-20b' });
+    await r.ws.writeSettings({ cleanDictation: false });
+    const writes = r.calls.filter((c) => c[0] === 'settings_write').map((c) => c[1]);
+    expect(writes).toEqual([{ agentEndpoint: 'system.ai.gpt-oss-20b' }, { cleanDictation: false }]);
+    expect(r.sent.length).toBe(before + 2);
   });
 
-  it('Install shows the busy state, then the result', async () => {
-    const r = genieRig(NOT_INSTALLED);
+  it('a refused write shows a notice and keeps the list', async () => {
+    const r = agentRig();
     await r.ws.refresh();
-    r.deps.genieCodeInstall = async () => READY;
-    await r.ws.act({ action: 'genie_code.install', consent: true });
-    const seen = r.sent.map((l) => l.agent.genieCode?.binary);
-    expect(seen.slice(-2)).toEqual(['installing', 'ready']);
-  });
-
-  it('an install that fails says so with a fixed text and reads the status again', async () => {
-    const r = genieRig(NOT_INSTALLED);
-    await r.ws.refresh();
-    r.deps.genieCodeInstall = async () => Promise.reject({ error: 'install_failed' });
-    await r.ws.act({ action: 'genie_code.install', consent: true });
-    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.install_failed });
-    expect(r.last()?.agent.genieCode?.binary).toBe('not_installed');
-    r.deps.genieCodeInstall = async () => Promise.reject({ error: 'checksum_mismatch' });
-    await r.ws.act({ action: 'genie_code.install', consent: true });
-    expect(r.last()?.notice?.text).toBe(WORKSPACE_TEXT.checksum_mismatch);
-  });
-
-  it('a failed status read keeps the last status', async () => {
-    const r = genieRig();
-    await r.ws.refresh();
-    r.deps.genieCodeStatus = async () => Promise.reject({ error: 'host_failed' });
-    await r.ws.refreshGenieCode(true);
-    expect(r.ws.genieCode()).toEqual(READY);
+    r.deps.settingsWrite = async () => Promise.reject({ error: 'invalid_args' });
+    await r.ws.writeSettings({ agentEndpoint: 'bad' });
+    expect(r.last()?.notice?.kind).toBe('error');
   });
 
   it('the catalog lists the usable available workspaces with their names, home first', async () => {
-    const r = genieRig();
+    const r = agentRig();
     await r.ws.refresh();
     expect(r.ws.catalog().map((c) => [c.profile, c.name, c.isHome])).toEqual([
       ['work', 'Sales', true],

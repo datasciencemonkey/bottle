@@ -1,20 +1,13 @@
 /** Slice 2a: the brain side of the hub Agent panel. IPC doubles; all values are fake. */
 import { HUB_SCOPE, asHubAgentView, type HubAgentView } from '../shared/hub-agent';
-import type { GenieCodeStatus } from '../shared/ipc';
 import { BrainBus } from './bus';
 import { clearingAgentPanel, wireHubAgent, type HubAgentWiringDeps } from './hub-agent-wiring';
 
 const T1 = 'a'.repeat(32);
-const READY: GenieCodeStatus = {
-  binary: 'ready',
-  pinned: '0.5.0',
-  agentProfile: null,
-  agentProfileState: 'ready',
-};
 const THREAD = '41111111-2222-4333-8444-000000000001';
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-function rig(genie: GenieCodeStatus | null = READY) {
+function rig() {
   const bus = new BrainBus();
   const log: string[] = [];
   const sent: HubAgentView[] = [];
@@ -30,7 +23,6 @@ function rig(genie: GenieCodeStatus | null = READY) {
       newSession: async () => void log.push('new'),
       refreshSession: async () => void log.push('refresh'),
     },
-    genieCode: () => genie ?? undefined,
     send: async (v) => void sent.push(v),
     openSettings: () => void log.push('settings'),
   };
@@ -82,11 +74,11 @@ describe('hub Agent panel wiring', () => {
     expect(r.sent[0]?.notice).toBeUndefined();
   });
 
-  it('[L5] with no Genie Code status the panel still draws, with a placeholder', async () => {
-    const r = rig(null);
+  it('[L5] the panel is a valid view even though the brain holds no session-host status', async () => {
+    const r = rig();
     await r.wiring.push();
     expect(r.sent).toHaveLength(1);
-    expect(asHubAgentView(r.sent[0])?.genieCode.binary).toBe('not_installed');
+    expect(asHubAgentView(r.sent[0])).toBeDefined();
   });
 
   it('[M1] a Wipe clears the panel content, and a failed Wipe does not', async () => {
@@ -261,7 +253,6 @@ describe('hub Agent panel wiring', () => {
         newSession: async () => undefined,
         refreshSession: async () => undefined,
       },
-      genieCode: () => READY,
       send: () => Promise.reject(new Error('no hub')),
       openSettings: () => undefined,
     });

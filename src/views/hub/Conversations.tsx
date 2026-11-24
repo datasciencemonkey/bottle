@@ -596,7 +596,7 @@ export function Conversations({
   now?: () => number;
   /** #145: the reply composer of the selected thread's detail, or no composer at all. */
   composer?: ((thread: ThreadComposerThread) => ReactNode) | undefined;
-  /** The Genie Code agent view (`hub:agent`): the in-memory turns of the agent threads. */
+  /** The orchestrator agent view (`hub:agent`): the in-memory turns of the agent threads. */
   agent?: HubAgentView | undefined;
   /** The MOG that the Hub knows, for a follow-up in a thread that the store does not have yet. */
   agentMogId?: string | undefined;

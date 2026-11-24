@@ -14,7 +14,6 @@ import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
 import { ANSWER_READY, ASKING_GENIE } from '../shared/genie-status';
 import {
-  ASK_OTHERS_LABEL,
   CHANGE_WORKSPACE_LABEL,
   GENIE_DATA_FLOW_TEXT,
   TRY_AGAIN_LABEL,
@@ -727,14 +726,14 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
         newOpId: () => OP,
         onEnd: (x) => void ends.push(x),
       });
-      await send(turn(), { notice: 'Genie Code is not installed. Asked sales only.' });
+      await send(turn(), { notice: 'The orchestrator model is not reachable. Asked sales only.' });
       expect(c.expanded.at(-1)?.answerMd).toBe(
-        '*Genie Code is not installed. Asked sales only.*\n\nChurn was 4.2%.',
+        '*The orchestrator model is not reachable. Asked sales only.*\n\nChurn was 4.2%.',
       );
       // History keeps the answer as Genie wrote it. "Remember this" reads the saved exchange
       // (`remember-flow.ts`, `finalAnswerMd`), so neither one ever holds the notice.
       expect(ends[0]?.end).toMatchObject({ t: 'answer', md: 'Churn was 4.2%.' });
-      expect(JSON.stringify(ends)).not.toContain('Genie Code is not installed');
+      expect(JSON.stringify(ends)).not.toContain('The orchestrator model is not reachable');
     });
 
     it('[ADR 0121] a fallback of an agent turn saves its row with the turn as split group', async () => {
@@ -894,56 +893,12 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(h.writes()).toBe(1);
     });
 
-    it('[R-8] an answered request offers the chip, with the request id in the chip id', async () => {
-      const c = fakeCard();
-      const offered: string[] = [];
-      const send = createGenieDirectSend({
-        genie: fakeBridge([answerEvent]).bridge,
-        cardFor: () => c.card,
-        newOpId: () => OP,
-        offerOthers: (_t, opId) => {
-          offered.push(opId);
-          return { id: `agent-more:${opId}`, label: ASK_OTHERS_LABEL };
-        },
-      });
-      await send(turn());
-      expect(offered).toEqual([OP]);
-      expect([...c.controls.values()].flatMap((x) => x.list)).toEqual([
-        { id: `agent-more:${OP}`, label: 'Ask other workspaces too' },
-      ]);
-    });
-
-    it('[R-8] a failed request offers no chip, and the next request takes the old chip away', async () => {
-      const c = fakeCard();
-      const events: AskEvent[] = [answerEvent];
-      const send = createGenieDirectSend({
-        genie: {
-          submit: (req) => ({
-            opId: req.opId,
-            events: (async function* () {
-              for (const e of events) yield e;
-            })(),
-          }),
-        },
-        cardFor: () => c.card,
-        newOpId: () => OP,
-        offerOthers: (_t, opId) => ({ id: `agent-more:${opId}`, label: ASK_OTHERS_LABEL }),
-      });
-      await send(turn());
-      expect(c.controls.size).toBe(1);
-      events[0] = { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' };
-      await send(turn());
-      // The old chip left at the send; the failed card has only its Try again control.
-      expect([...c.controls.keys()].every((k) => k.startsWith('retry:'))).toBe(true);
-    });
-
-    it('[R-8] with no offer (the agent cannot run) the card has no extra control', async () => {
+    it('[R-8] an answered request offers no "Ask other workspaces too" chip (ADR 0122)', async () => {
       const c = fakeCard();
       const send = createGenieDirectSend({
         genie: fakeBridge([answerEvent]).bridge,
         cardFor: () => c.card,
         newOpId: () => OP,
-        offerOthers: () => undefined,
       });
       await send(turn());
       expect(c.controls.size).toBe(0);

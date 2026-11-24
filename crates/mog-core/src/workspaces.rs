@@ -475,8 +475,10 @@ impl WorkspaceStore {
         }
     }
 
-    /// The home profile, read only. `None` when there is none or the file cannot be read. It
-    /// never picks a home (ADR 0117, FLAG 5).
+    /// The home profile, read only. On the first load the store takes the home from the MOG
+    /// configs (the normal migration, `load`); this call changes nothing else. `None` when there
+    /// is none or the file cannot be read. It never picks a home when the choice is ambiguous
+    /// (ADR 0117, FLAG 5).
     pub fn home(&self) -> Option<ProfileName> {
         let _g = self.guard();
         self.load().ok()?.home

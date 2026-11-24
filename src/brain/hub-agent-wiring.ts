@@ -11,7 +11,6 @@
  */
 import { emitTo } from '@tauri-apps/api/event';
 import { asAgentAction, HUB_AGENT_EVENT, HUB_SCOPE, type HubAgentView } from '../shared/hub-agent';
-import type { GenieCodeStatus } from '../shared/ipc';
 import type { AgentClient } from './agent-run';
 import { onViewInput, type BrainBus } from './bus';
 import type { WipeScope } from '../shared/wipe-view';
@@ -73,17 +72,20 @@ export function clearingAgentPanel(
   };
 }
 
-const PLACEHOLDER: GenieCodeStatus = {
-  binary: 'not_installed',
-  pinned: '',
+/**
+ * COMPAT (ADR 0122): the shared `HubAgentView` still holds a status field of the old session
+ * host, and its validator refuses a view without it. The hub no longer reads it: the orchestrator
+ * state comes on `hub:orchestrator`. Delete this constant when the shared view drops the field.
+ */
+const COMPAT_STATUS: HubAgentView['genieCode'] = {
+  binary: 'ready',
+  pinned: 'orchestrator',
   agentProfile: null,
-  agentProfileState: 'no_home',
+  agentProfileState: 'ready',
 };
 
 export interface HubAgentWiringDeps {
   client: Pick<AgentClient, 'panel' | 'stop' | 'newSession' | 'refreshSession'>;
-  /** The last known Genie Code status (`workspaces.genieCode`). */
-  genieCode(): GenieCodeStatus | undefined;
   /** Send the panel to the hub window only. */
   send(view: HubAgentView): Promise<unknown>;
   /** Show the hub on Settings → Workspace. */
@@ -97,9 +99,7 @@ export interface HubAgentWiring {
 
 export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentWiring {
   const build = (): HubAgentView => {
-    // L5: with no status yet (a read that failed) the panel still draws, with a placeholder.
-    const genieCode = deps.genieCode() ?? PLACEHOLDER;
-    return { ...deps.client.panel(), genieCode };
+    return { ...deps.client.panel(), genieCode: COMPAT_STATUS };
   };
   const push = async (): Promise<void> => {
     try {

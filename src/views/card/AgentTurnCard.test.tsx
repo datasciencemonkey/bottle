@@ -57,9 +57,7 @@ afterEach(() => {
 
 describe('agent turn text', () => {
   it('writes the header of each state', () => {
-    expect(turnHeadline(view({ state: 'planning', calls: [] }))).toBe(
-      'Planning with Genie Code in Sales…',
-    );
+    expect(turnHeadline(view({ state: 'planning', calls: [] }))).toBe('Planning in Sales…');
     expect(turnHeadline(view())).toBe('Asking 2 workspaces · 3 of 10 Genie calls');
     expect(turnHeadline(view({ state: 'done' }))).toBe('Answered from Sales · 1 of 2 answered');
     const both = view({
@@ -157,7 +155,7 @@ describe('AgentTurnCard', () => {
     expect(parts.hidden).toBe(true);
     expect(el.querySelector('.agent-part-title')).toBeNull();
     expect(el.querySelector('[data-agent-footer]')?.textContent).toBe(
-      'Planned by Genie Code in Sales · 41k tokens',
+      'Planned in Sales · 41k tokens',
     );
     const fold = el.querySelector<HTMLButtonElement>('[data-action="fold"]');
     expect(fold?.textContent).toBe('3 workspace answers');

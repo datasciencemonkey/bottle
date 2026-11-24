@@ -35,6 +35,7 @@ import { Switch } from '../ui/switch';
 import { cn } from '../ui/utils';
 import { DomainPicker } from '../DomainPicker';
 import { askBrain, emitView, type MogViewState } from '../view-ipc';
+import type { HubOrchestratorView } from '../../shared/hub-orchestrator';
 import { AgentSettings } from './AgentSettings';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { SettingsGroup } from './SettingsGroup';
@@ -531,10 +532,13 @@ export function WorkspaceSettings({
   homeDomains = [],
   onChoose,
   agentBusy = false,
+  orchestrator,
 }: {
   list: HubWorkspaceList | undefined;
-  /** Slice 2a: a turn of the agent runs, so a change of the agent workspace applies after it. */
+  /** A turn of the agent runs, so a change of the combine switch applies after it. */
   agentBusy?: boolean;
+  /** ADR 0122: the orchestrator model controls. Undefined until the brain sends them. */
+  orchestrator?: HubOrchestratorView | undefined;
   /** MOG states that carry the home domain picker (PG-18, PG-20). */
   homeDomains?: readonly MogViewState[];
   /** Reopens the home pick dialog. */
@@ -633,9 +637,9 @@ export function WorkspaceSettings({
       <p className="mt-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
         New workspaces start off. Turn one on to let your MOG use it.
       </p>
-      {/* Slice 2a: where Genie Code runs, how many Genie calls one question may make, and the
-          status of Genie Code. */}
-      <AgentSettings list={list} busy={agentBusy} />
+      {/* ADR 0122: the orchestrator model, dictation cleanup, and how many Genie calls one
+          question may make. */}
+      <AgentSettings list={list} orchestrator={orchestrator} busy={agentBusy} />
     </section>
   );
 }

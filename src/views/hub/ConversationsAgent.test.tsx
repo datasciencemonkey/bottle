@@ -8,6 +8,7 @@
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { HUB_AGENT_EVENT, HUB_SCOPE, type HubAgentView } from '../../shared/hub-agent';
+import { HUB_ORCHESTRATOR_EVENT } from '../../shared/hub-orchestrator';
 import {
   CONVERSATIONS_VIEW_ID,
   HUB_CONVERSATIONS_EVENT,
@@ -185,6 +186,16 @@ const feed = async (
   await tauri.emitTo('hub', HUB_CONVERSATIONS_EVENT, { rows, agentThreads });
   if (v) await tauri.emitTo('hub', HUB_AGENT_EVENT, v);
 };
+
+/** The brain sends the orchestrator view (ADR 0122): the composer reads its state. */
+const orchestratorState = (state: string) =>
+  tauri.emitTo('hub', HUB_ORCHESTRATOR_EVENT, {
+    models: [{ id: 'system.ai.claude-haiku-5-5', label: 'Claude Haiku 5.5' }],
+    selected: 'system.ai.claude-haiku-5-5',
+    cleanDictation: true,
+    state,
+    homeName: 'Sales',
+  });
 
 describe('agent threads in the list', () => {
   beforeEach(() => tauri.reset());
@@ -442,7 +453,7 @@ describe('the agent thread detail', () => {
     });
     const line = q(el, '[data-agent-session]');
     expect(line?.textContent).toMatch(
-      /^Genie Code in Sales · started .+ · 3 questions · 124k tokens$/,
+      /^MOG agent in Sales · started .+ · 3 questions · 124k tokens$/,
     );
     // No turn runs: New session sends its action at once and the focus goes to the line.
     await click(q(el, '[data-agent-new-session]'));
@@ -547,15 +558,13 @@ describe('the composer in an agent thread', () => {
     expect(payloads(CONVERSATIONS_VIEW_ID).at(-1)).toEqual({ action: 'thread.inactive' });
   });
 
-  it('with Genie Code not ready it says why and offers Open Settings', async () => {
+  it('with the orchestrator model not ready it says why and offers Open Settings', async () => {
     const { el } = await mount();
-    const off = view({
-      genieCode: { ...READY, binary: 'not_installed' },
-    });
-    await feed([thread(THREAD_A, [stored('a')])], [], off);
+    await feed([thread(THREAD_A, [stored('a')])], [], view());
+    await orchestratorState('unreachable');
     expect(el.querySelector('textarea')).toBeNull();
     expect(q(el, '[data-agent-composer="not-ready"]')?.textContent).toContain(
-      'Genie Code is not installed.',
+      'The orchestrator model is not reachable. Questions go to your home workspace only.',
     );
     await click(q(el, '[data-agent-open-settings]'));
     expect(payloads(HUB_SCOPE)).toContainEqual({ action: 'agent.open_settings' });
@@ -891,9 +900,8 @@ describe('review fixes (needs you, queued only, toast, composer, list line)', ()
 
   it('[P3-14] the agent composer and the not-ready Settings button match the Genie composer', async () => {
     const { el } = await mount();
-    await feed([thread(THREAD_A, [stored('a')])], [], {
-      ...view({ genieCode: { ...READY, binary: 'not_installed' } }),
-    });
+    await feed([thread(THREAD_A, [stored('a')])], [], view());
+    await orchestratorState('no_model');
     expect(q(el, '[data-agent-open-settings]')?.className).toContain('border');
     await feed([], [], { ...view(), earlier: [memTurn('e', { state: 'needs_you' })] });
   });

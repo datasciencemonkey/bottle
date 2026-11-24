@@ -19,7 +19,7 @@ import type {
   AgentTurnCall,
   AgentTurnView,
   AgentWsChip,
-  GenieCodeStatus,
+  OrchestratorStatus,
 } from '../shared/ipc';
 import { CARD_DONE } from '../shared/genie-status';
 import type { ArrivalGate } from './arrival-gate';
@@ -41,7 +41,6 @@ const NO_FLOW = '';
 
 export const CHIP = {
   stop: 'agent-stop:',
-  more: 'agent-more:',
   resend: 'agent-resend:',
   open: 'agent-open:',
   settings: 'agent-settings:',
@@ -159,38 +158,26 @@ export function cardChips(t: AgentTurnView): ChipView[] {
   return chips;
 }
 
-/** The fixed one-line fallback reasons (plan section 1, "Fallback notice"). */
+/** The fixed one-line fallback reasons (ADR 0122: the orchestrator model is not ready). */
 export type FallbackWhy =
-  | 'not_installed'
-  | 'installing'
-  | 'unsupported_os'
-  | 'wrong_version'
-  | 'not_available'
-  | 'signed_out'
-  | 'timeout'
-  | 'offline'
-  | 'failed';
+  'no_home' | 'signed_out' | 'no_model' | 'unreachable' | 'timeout' | 'offline' | 'failed';
 
 export function fallbackNotice(
   why: FallbackWhy,
   ws: { agent: string; home: string },
-  /** False for an "Ask other workspaces too" turn: home was asked already, so the line says no more. */
+  /** False for a turn that asked home already, so the line says no more. */
   askedHome = true,
 ): string {
   const asked = askedHome ? ` Asked ${ws.home} only.` : '';
   switch (why) {
-    case 'not_installed':
-      return `Genie Code is not installed.${asked}`;
-    case 'installing':
-      return `Genie Code is still installing.${asked}`;
-    case 'unsupported_os':
-      return `Genie Code is not available on this Mac yet.${asked}`;
-    case 'wrong_version':
-      return `Genie Code is not the version that Bottle needs.${asked}`;
-    case 'not_available':
-      return `Genie Code is not available in ${ws.agent}.${asked}`;
+    case 'no_home':
+      return 'No home workspace is set.';
     case 'signed_out':
-      return `Your sign-in to ${ws.agent} expired.${asked}`;
+      return `Your sign-in to ${ws.home} expired.${asked}`;
+    case 'no_model':
+      return `The orchestrator model is not available in ${ws.home}.${asked}`;
+    case 'unreachable':
+      return `The orchestrator model is not reachable.${asked}`;
     case 'timeout':
       return `The agent timed out.${asked}`;
     case 'offline':
@@ -200,35 +187,26 @@ export function fallbackNotice(
   }
 }
 
-/** R-11: why Genie Code is not ready, from its last known status. */
-export function whyOfStatus(
-  s: Pick<GenieCodeStatus, 'binary' | 'agentProfileState'> | undefined,
-): FallbackWhy {
+/** Why the orchestrator model is not ready, from its last known status. Undefined: unknown. */
+export function whyOfStatus(s: Pick<OrchestratorStatus, 'state'> | undefined): FallbackWhy {
   if (s === undefined) return 'failed';
-  switch (s.binary) {
-    case 'not_installed':
-      return 'not_installed';
-    case 'installing':
-      return 'installing';
-    case 'unsupported_os':
-      return 'unsupported_os';
-    case 'wrong_version':
-      return 'wrong_version';
+  switch (s.state) {
     case 'ready':
-      return s.agentProfileState === 'signed_out' ? 'signed_out' : 'not_available';
+      return 'failed';
+    case 'no_home':
+    case 'signed_out':
+    case 'no_model':
+    case 'unreachable':
+      return s.state;
   }
 }
 
 /** The fallback reason of a refused `agent_turn_submit` (an IPC code), or undefined for none. */
 export function whyOfRefusal(code: string): FallbackWhy | undefined {
   switch (code) {
-    case 'genie_code_missing':
-      return 'not_installed';
-    case 'genie_code_version':
-      return 'wrong_version';
     case 'agent_profile_unsupported':
     case 'agent_not_eligible':
-      return 'not_available';
+      return 'no_model';
     case 'agent_signed_out':
       return 'signed_out';
     case 'agent_session_unavailable':
@@ -440,15 +418,13 @@ export interface AgentChipDeps {
   openAgent(turnId: string): void;
   /** Show the hub on Settings → Workspace. */
   openSettings(): void;
-  /** R-9: the click on "Ask other workspaces too". `ticket` is the host's `actionTicket`. */
-  askOthers(mogId: MogId, opId: string, ticket: string | undefined): void;
   /** The user closed the card of an agent turn (`card_done`). */
   cardDone(mogId: MogId): void;
 }
 
 /**
  * Feed the agent chips of a card from the brain Channel. Only the card of the MOG speaks for its
- * chips. `agent-more:` needs the host ticket, so it reads `input.actionTicket` here.
+ * chips.
  */
 export function wireAgentChips(bus: BrainBus, deps: AgentChipDeps): () => void {
   return onViewInput(bus, (input) => {
@@ -465,8 +441,6 @@ export function wireAgentChips(bus: BrainBus, deps: AgentChipDeps): () => void {
         return deps.openAgent(chip.arg);
       case 'settings':
         return deps.openSettings();
-      case 'more':
-        return deps.askOthers(input.mogId, chip.arg, input.actionTicket);
       case 'queued':
         return;
       case 'resend':

@@ -134,6 +134,9 @@ pub fn to_chat_reply(reply: &Value) -> Option<Value> {
     Some(json!({"choices": [{"message": {"role": "assistant", "content": content}}]}))
 }
 
+/// The largest `max_tokens` that a chat request may ask for.
+pub const MAX_OUTPUT_TOKENS: u64 = 64_000;
+
 /// The top-level fields of a chat request that Bottle sends. Any other field is refused: the
 /// request is an allowlist, never a passthrough (RTR-20a, ADR 0122). `model` is accepted and
 /// ignored; `stream` only as `false`.
@@ -186,10 +189,15 @@ pub fn from_chat_request(request: &Map<String, Value>) -> Option<Map<String, Val
         .get("max_completion_tokens")
         .or_else(|| request.get("max_tokens"))
     {
-        out.insert("max_output_tokens".to_owned(), n.clone());
+        // A whole number up to the cap, nothing else.
+        let n = n.as_u64().filter(|n| *n <= MAX_OUTPUT_TOKENS)?;
+        out.insert("max_output_tokens".to_owned(), json!(n));
     }
     for k in ["temperature", "top_p"] {
         if let Some(v) = request.get(k) {
+            if !v.as_f64().is_some_and(f64::is_finite) {
+                return None;
+            }
             out.insert(k.to_owned(), v.clone());
         }
     }
@@ -344,6 +352,12 @@ mod tests {
             json!({"messages": [{"role": "user", "content": [{"type": "input_image"}]}]}),
             json!({"messages": [{"role": "user", "content": [{"type": "mcp_call"}]}]}),
             json!({"messages": "x"}),
+            json!({"messages": [user], "temperature": "hot"}),
+            json!({"messages": [user], "top_p": null}),
+            json!({"messages": [user], "max_tokens": "9"}),
+            json!({"messages": [user], "max_tokens": -1}),
+            json!({"messages": [user], "max_tokens": 64_001}),
+            json!({"messages": [user], "max_tokens": 1.5}),
             json!({}),
         ];
         for b in bad {

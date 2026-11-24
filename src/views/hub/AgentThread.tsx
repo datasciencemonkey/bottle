@@ -4,7 +4,7 @@
  * (`agentThreads`) and the in-memory turns of `hub:agent` (`HubAgentView`) as one thread, and sends
  * one `AgentAction` for each click with `view_emit`.
  *
- * - Header: "Genie Code in sales · started 10:42 · 3 questions · 124k tokens" and [New session],
+ * - Header: "MOG agent in sales · started 10:42 · 3 questions · 124k tokens" and [New session],
  *   or "This session ended. A reply starts a new session." when no session is open at all.
  * - Turns, oldest first: the question, a meta line, the answer of each workspace ("Answer from
  *   sales", open) and then "Note from your MOG" as one small muted block.
@@ -30,7 +30,7 @@ import {
   type AgentThreadPart,
   type AgentThreadTurn,
 } from '../../shared/hub-conversations';
-import type { AgentTurnView } from '../../shared/ipc';
+import type { AgentTurnView, OrchestratorState } from '../../shared/ipc';
 import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
   NOTE_LABEL,
@@ -48,6 +48,7 @@ import {
 } from '../card/AgentTurnCard';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { Button } from '../ui/button';
+import { DIRECT_TAIL, notReadyReason } from './orchestrator-text';
 import { emitView } from '../view-ipc';
 
 function send(action: AgentAction): void {
@@ -252,11 +253,11 @@ export function liveMeta(e: AgentEntry): { pill?: string; text: string; running:
 
 // --- Text moved from the old Agent panel ---------------------------------------------------------
 
-/** "Genie Code in sales · started 10:42 · 3 questions · 124k tokens". */
+/** "MOG agent in sales · started 10:42 · 3 questions · 124k tokens". */
 export function sessionText(v: HubAgentView): string {
   const t = v.live ?? v.waiting[0] ?? v.earlier[0];
   const ws = t?.agentWorkspace.name ?? v.session.agentProfile ?? 'your workspace';
-  const parts = [`Genie Code in ${ws}`];
+  const parts = [`MOG agent in ${ws}`];
   if (v.session.startedAt !== undefined)
     parts.push(
       `started ${new Date(v.session.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
@@ -267,37 +268,12 @@ export function sessionText(v: HubAgentView): string {
 }
 
 /** Why the agent cannot run, in one sentence, with where the question goes instead. */
-export function notReadyText(g: HubAgentView['genieCode']): string {
-  // The brain sends a status with no pinned version while it has not read the real one yet.
-  if (g.pinned === '') return 'Checking Genie Code…';
-  const home = 'your home workspace';
-  const tail = `Questions that name another workspace go to ${home} only.`;
-  switch (g.binary) {
-    case 'not_installed':
-      return `Genie Code is not installed. ${tail}`;
-    case 'installing':
-      return `Genie Code is still installing. ${tail}`;
-    case 'unsupported_os':
-      return `Genie Code is not available on this Mac yet. ${tail}`;
-    case 'wrong_version':
-      return `Genie Code is not the version that Bottle needs. ${tail}`;
-    case 'ready':
-      break;
-  }
-  switch (g.agentProfileState) {
-    case 'not_eligible':
-      return `Genie Code is not available in your agent workspace. ${tail}`;
-    case 'signed_out':
-      return `Your sign-in to your agent workspace expired. ${tail}`;
-    case 'no_home':
-      return `Choose a home workspace first. ${tail}`;
-    default:
-      return `Genie Code cannot run on this profile. ${tail}`;
-  }
+export function notReadyText(
+  state: Exclude<OrchestratorState, 'ready'>,
+  homeName: string | null,
+): string {
+  return `${notReadyReason(state, homeName)} ${DIRECT_TAIL}`;
 }
-
-export const agentReady = (g: HubAgentView['genieCode'] | undefined): boolean =>
-  g === undefined || (g.binary === 'ready' && g.agentProfileState === 'ready');
 
 export function NewSessionConfirm({
   live,
