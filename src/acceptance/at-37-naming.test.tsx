@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * AT-37 "Licences, brand and supply chain" (#71), section 15: the naming part. It stops later PRs
- * from bringing back a former product name, from losing the Labs label, or from showing "MOG" as
+ * from bringing back a former product name, from losing the experimental label, or from showing "MOG" as
  * anything other than a UI noun. The scope (what counts as UI text and package metadata) is in
  * ADR 0030. The bundle-ID and crate rules also run in `src-tauri/tests/skeleton.rs` (MB-10c).
  */
@@ -15,7 +15,7 @@ import { MogView } from '../views/mog/MogView';
 import { CardView } from '../views/card/CardView';
 import type { MascotRenderer } from '../views/mog/mascot';
 import {
-  LABS_LABEL,
+  EXPERIMENTAL_LABEL,
   PRODUCT_NAME,
   bannedNameHits,
   htmlTitle,
@@ -90,7 +90,7 @@ async function renderedViewText(): Promise<string[]> {
   return text;
 }
 
-describe('AT-37 naming: Bottle, the Labs label and the MOG noun (#71)', () => {
+describe('AT-37 naming: Bottle, the experimental label and the MOG noun (#71)', () => {
   beforeEach(() => tauri.reset());
 
   it('[MB-10a] [AT-37] the scan covers the views, the Tauri host, the manifests and the user docs', () => {
@@ -121,18 +121,18 @@ describe('AT-37 naming: Bottle, the Labs label and the MOG noun (#71)', () => {
     }
   });
 
-  it('[MB-10b] [AT-37] the hub title bar shows the Labs label', () => {
-    expect(htmlTitle(read('hub.html'))).toBe(`${PRODUCT_NAME} (${LABS_LABEL})`);
+  it('[MB-10b] [AT-37] the hub title bar shows the experimental label', () => {
+    expect(htmlTitle(read('hub.html'))).toBe(`${PRODUCT_NAME} (${EXPERIMENTAL_LABEL})`);
     expect(rustWindowTitles(read('src-tauri/src/windows.rs'))).toContain(
-      `${PRODUCT_NAME} (${LABS_LABEL})`,
+      `${PRODUCT_NAME} (${EXPERIMENTAL_LABEL})`,
     );
   });
 
-  it('[MB-10b] [AT-37] the hub and About show the Labs label', async () => {
+  it('[MB-10b] [AT-37] the hub and About show the experimental label', async () => {
     const hub = await render(<Hub />);
-    expect(hub.el.querySelector('main > p')?.textContent).toBe(LABS_LABEL);
+    expect(hub.el.querySelector('main > p')?.textContent).toBe(EXPERIMENTAL_LABEL);
     const about = await render(<About />);
-    expect(about.el.querySelector('[data-label="labs"]')?.textContent).toBe(LABS_LABEL);
+    expect(about.el.querySelector('[data-label="labs"]')?.textContent).toBe(EXPERIMENTAL_LABEL);
     await act(async () => [hub, about].forEach((r) => r.root.unmount()));
   });
 

@@ -20,13 +20,21 @@ const squash = (s: string) => s.replace(/\s+/g, ' ');
 describe('About screen (in the V1 hub)', () => {
   beforeEach(() => tauri.reset());
 
-  it('[MB-10a] [MB-10b] [AT-37] shows the product name and the Labs label', async () => {
+  it('[MB-10a] [MB-10b] [AT-37] shows the product name and the experimental label', async () => {
     const { el } = await render(<About />);
     expect(el.querySelector('h2')?.textContent).toBe('About Bottle');
-    expect(el.querySelector('[data-label="labs"]')?.textContent).toBe(
-      'Databricks Labs / experimental',
-    );
+    expect(el.querySelector('[data-label="labs"]')?.textContent).toBe('experimental');
     expect(el.textContent).not.toMatch(/mother ?bricks/i);
+  });
+
+  it('[MB-10b] shows the independent-project notice and the trademark notice', async () => {
+    const { el } = await render(<About />);
+    expect(el.querySelector('[data-label="independent"]')?.textContent).toBe(
+      'Bottle is an independent open-source project and is not an official Databricks product.',
+    );
+    expect(el.querySelector('[data-label="trademarks"]')?.textContent).toBe(
+      'Databricks, Databricks Genie and Unity Catalog are trademarks of Databricks, Inc.',
+    );
   });
 
   it('[SEC-21b] [AT-37] shows every notice of THIRD_PARTY_NOTICES.md as plain text', async () => {

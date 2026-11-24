@@ -59,14 +59,15 @@ const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) 
 );
 
 /**
- * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
- * stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one line.
+ * The product name and the experimental label (MB-10a, MB-10b); the title bar shows the label
+ * too. Both stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one
+ * line.
  */
 function HubHeader() {
   return (
     <>
       <h1 className="hub-title">Bottle</h1>
-      <p className="hub-labs">Databricks Labs / experimental</p>
+      <p className="hub-labs">experimental</p>
     </>
   );
 }

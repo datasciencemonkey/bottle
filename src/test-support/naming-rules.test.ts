@@ -16,7 +16,7 @@ describe('naming-rules helpers (#71)', () => {
     for (const s of [OLD.join(' '), OLD.join(''), OLD.join('').toLowerCase(), OLD.join('-')]) {
       expect(bannedNameHits(`About ${s} here`)).toEqual([s]);
     }
-    expect(bannedNameHits('Bottle (Databricks Labs / experimental)')).toEqual([]);
+    expect(bannedNameHits('Bottle (experimental)')).toEqual([]);
     expect(bannedNameHits('Mother Databricks')).toEqual([]);
   });
 

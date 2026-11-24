@@ -10,11 +10,8 @@ use std::path::PathBuf;
 // ---------- MB-10b / MB-10c (#71): the native window titles ----------
 
 #[test]
-fn mb_10b_hub_title_bar_shows_labs_label() {
-    assert_eq!(
-        WindowKind::Hub.spec().title,
-        "Bottle (Databricks Labs / experimental)"
-    );
+fn mb_10b_hub_title_bar_shows_experimental_label() {
+    assert_eq!(WindowKind::Hub.spec().title, "Bottle (experimental)");
 }
 
 #[test]

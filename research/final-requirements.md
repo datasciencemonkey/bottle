@@ -607,7 +607,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 | MB-08b | M | MVP-D | When the notice version increases, the hub must show the notice again before the next capture. | A version change blocks capture until the user accepts it. | T · AT-24 | D50, UX-CON-2 | ALL |
 | MB-09 | S | v1 | The hub must show a history of utterances, routes, conversations and blurbs with a filter for each MOG. | History obeys the Wipe selection (U9). | D · AT-01 | v0.2 MB-5 | ALL |
 | MB-10a | M | MVP-D | The app must use the product name "Bottle". | No UI text or package metadata contains "Mother Bricks" or "Motherbricks". | I · AT-37 | B0 (binding rename), D41, D80 | ALL |
-| MB-10b | M | MVP-D | The app must show the label "Databricks Labs / experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
+| MB-10b | M | MVP-D | The app must show the label "experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
 | MB-10c | M | MVP-D | The UI must use "MOG" only as a UI noun. | No package or bundle ID contains "MOG". | I · AT-37 | D41 | ALL |
 | MB-11a | M | MVP-D | WindowHost must restart a view window that stops. | The window shows again in 2 s or less. | T · AT-15 | ARC | ALL |
 | MB-11b | M | MVP-D | When WindowHost restarts a view window, the brain must send the current state to that window again. | The restarted window shows the same mood and cards in 2 s or less. | T · AT-15 | ARC | ALL |

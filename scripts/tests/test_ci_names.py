@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import ci_checks  # noqa: E402
 
 OLD = "Mother" + " " + "Bricks"
-HUB_TITLE = "Bottle (Databricks Labs / experimental)"
+HUB_TITLE = "Bottle (experimental)"
 
 
 def page(title):
@@ -28,14 +28,14 @@ def good_tree(root):
         f'a {{ title: "{HUB_TITLE}" }}\nb {{ title: "MOG card", url: "mog.html" }}\n')
     (root / "docs" / "user" / "guide.md").write_text("A MOG floats. See `mog-core`.\n")
     (root / "src" / "views" / "hub").mkdir(parents=True)
-    labs = "<p>Databricks Labs / experimental</p>"
+    labs = "<p>experimental</p>"
     (root / "src" / "views" / "hub" / "Hub.tsx").write_text(
         f'export const Hub = () => <main aria-label="MOGs"><h1>Bottle</h1>{labs}</main>;\n')
     (root / "src" / "views" / "hub" / "About.tsx").write_text(
         f"export const About = () => <section><h2>About Bottle</h2>{labs}</section>;\n")
     (root / "src-tauri" / "tauri.conf.json").write_text(json.dumps(
         {"productName": "Bottle", "identifier": "com.databricks.bottle",
-         "bundle": {"shortDescription": "Bottle (Databricks Labs / experimental)"}}))
+         "bundle": {"shortDescription": "Bottle (experimental)"}}))
     (root / "package.json").write_text(json.dumps({"name": "bottle", "description": "Bottle app"}))
     (root / "src-tauri" / "Cargo.toml").write_text('[package]\nname = "bottle"\n')
     return root
@@ -75,23 +75,23 @@ def test_mb_10a_names_check_skips_tests_and_records(tmp_path):
 
 
 def test_mb_10b_names_check_needs_the_labs_label_in_the_hub_title(tmp_path):
-    """[MB-10b] [AT-37] The hub page title and the native hub title show the Labs label."""
+    """[MB-10b] [AT-37] The hub page title and the native hub title show the experimental label."""
     root = good_tree(tmp_path)
     (root / "hub.html").write_text(page("Bottle hub"))
     (root / "src-tauri" / "src" / "windows.rs").write_text('a { title: "Bottle" }\n')
     problems = ci_checks.naming_problems(root)
-    assert any("hub.html" in p and "Labs" in p for p in problems)
-    assert any("windows.rs" in p and "Labs" in p for p in problems)
+    assert any("hub.html" in p and "experimental" in p for p in problems)
+    assert any("windows.rs" in p and "experimental" in p for p in problems)
 
 
-def test_mb_10b_names_check_needs_the_labs_label_in_hub_and_about(tmp_path):
-    """[MB-10b] [AT-37] The hub view and About show the Labs label."""
+def test_mb_10b_names_check_needs_the_experimental_label_in_hub_and_about(tmp_path):
+    """[MB-10b] [AT-37] The hub view and About show the experimental label."""
     root = good_tree(tmp_path)
     for name in ("Hub.tsx", "About.tsx"):
         (root / "src" / "views" / "hub" / name).write_text("export const X = () => <p>Bottle</p>;\n")
     problems = ci_checks.naming_problems(root)
-    assert any("Hub.tsx" in p and "Labs" in p for p in problems)
-    assert any("About.tsx" in p and "Labs" in p for p in problems)
+    assert any("Hub.tsx" in p and "experimental" in p for p in problems)
+    assert any("About.tsx" in p and "experimental" in p for p in problems)
 
 
 def test_mb_10c_names_check_bans_mog_in_package_and_bundle_ids(tmp_path):

@@ -157,7 +157,7 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(hubRule).toMatch(/display:\s*grid/);
     // review of #602 round 4, blocker 1: a leading `var(--hub-sidebar-width, 0px)` column, so a
     // pinned rail pushes the header row (outside `.hub-body`) over the same way it pushes
-    // `.hub-content`, instead of covering "Bottle" and the Labs label.
+    // `.hub-content`, instead of covering "Bottle" and the experimental label.
     expect(hubRule).toMatch(/grid-template-columns:\s*var\(--hub-sidebar-width, 0px\) auto 1fr/);
     expect(hubRule).toMatch(/height:\s*100vh/);
     expect(hubRule).not.toMatch(/min-height/);
