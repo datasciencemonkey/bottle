@@ -585,3 +585,91 @@ fn rec_delete_proves_nothing_uploaded_only_from_the_first_part() {
     assert!(!seam.never_uploaded("2026-12-01_0900"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A live hand-off over a volume that takes every write, with the job events it sends.
+fn live_handoff_ok() -> (
+    LiveHandoff,
+    Arc<Mutex<Vec<mog_core::types::RecordingSummary>>>,
+) {
+    use mog_core::clock::SimWallClock;
+    use mog_core::recording_cloud::cloud::{CloudDeps, RecordingCloudService};
+    use mog_core::recording_cloud::http::ScriptedHttp;
+    struct NoWait;
+    impl mog_core::http_transport::Pause for NoWait {
+        fn pause(&self, _d: Duration) {}
+    }
+    struct Ws;
+    impl mog_core::recording_cloud::cloud::WorkspaceInfo for Ws {
+        fn host_url(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("https://dbc-fake.cloud.databricks.com".into())
+        }
+        fn workspace_id(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("1".into())
+        }
+    }
+    let http = ScriptedHttp::new();
+    for _ in 0..10 {
+        http.empty("files.create_directory", 200);
+        http.empty("files.upload", 204);
+    }
+    http.empty("files.download", 404);
+    let service = Arc::new(RecordingCloudService::new(CloudDeps {
+        http: Arc::new(http),
+        workspace: Arc::new(Ws),
+        wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+        pause: Arc::new(NoWait),
+    }));
+    let settings = Arc::new(MemorySettingsStore::new(RecordingSettings {
+        enabled: true,
+        consent_ack: true,
+        storage: Some(
+            serde_json::from_value(serde_json::json!({"kind":"volume","root":"/Volumes/c/s/v"}))
+                .unwrap(),
+        ),
+        ..RecordingSettings::default()
+    }));
+    let jobs: Arc<Mutex<Vec<mog_core::types::RecordingSummary>>> = Arc::default();
+    let sink = jobs.clone();
+    let adapter = Arc::new(mog_core::recording_cloud::contract::CloudAdapter::new(
+        service,
+        settings.clone(),
+        Arc::new(mog_core::recording_cloud::contract::NoLocalAudio),
+        Arc::new(move |s: &mog_core::types::RecordingSummary| sink.lock().unwrap().push(s.clone())),
+        Arc::new(|| 1_795_100_700_000i64),
+    ));
+    let active = Arc::new(ActiveNames::default());
+    let fallback = PipelineHandoff::new(Arc::new(|_, _| {}), settings.clone(), active.clone());
+    (LiveHandoff::new(adapter, settings, fallback, active), jobs)
+}
+
+#[test]
+fn rec_parts_a_stop_with_no_audio_still_ends_the_job_so_the_row_never_vanishes() {
+    let d = temp("live-noaudio");
+    let (h, jobs) = live_handoff_ok();
+    h.started(&started(&d));
+    let mut done = rec(&d, "rec-1234", Some("fake-home"), 0);
+    done.name = "2026-11-20_0900".into();
+    h.finished(done);
+    assert!(!d.exists(), "the empty temp dir goes at once");
+    let mut last = None;
+    for _ in 0..300 {
+        last = jobs.lock().unwrap().last().cloned();
+        if last
+            .as_ref()
+            .is_some_and(|s| s.status == mog_core::types::RecordingStatus::Failed)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let last = last.expect("job events");
+    assert_eq!(
+        last.status,
+        mog_core::types::RecordingStatus::Failed,
+        "{last:?}"
+    );
+    assert_eq!(
+        last.error_kind,
+        Some(mog_core::types::RecordingErrorKind::AudioUnreadable)
+    );
+}

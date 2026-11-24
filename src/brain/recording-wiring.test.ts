@@ -350,6 +350,26 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.mood.callRecording).toHaveBeenLastCalledWith(false);
   });
 
+  it('[REC-H9] the end of a call reads the list at once, so the new row shows with no job event', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    // The record key starts it (no hub click): only recording.state reaches the brain.
+    t.fake.pushState({ phase: 'recording', startedAtMs: 100, endsAtMs: 3_600_100 });
+    await flush();
+    expect(t.fake.api.list).not.toHaveBeenCalled();
+    t.fake.rows.push({
+      id: '2026-11-24_1741',
+      name: '2026-11-24_1741',
+      startedAt: 20_000,
+      durationS: 0,
+      status: 'uploading',
+    });
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    expect(t.fake.api.list).toHaveBeenCalledTimes(1);
+    const rows = t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows ?? [];
+    expect(rows[0]).toMatchObject({ id: '2026-11-24_1741', status: 'uploading' });
+  });
+
   it('[REC-H8] a refused start shows its plain text with one action', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.api.start.mockRejectedValue({ error: 'recording_busy' });

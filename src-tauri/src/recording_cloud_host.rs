@@ -598,6 +598,8 @@ impl LiveHandoff {
                     .is_some()
                 {
                     sidecar::remove(&dir);
+                    // Only an empty dir goes (every part uploaded); a failed job keeps its audio.
+                    let _ = std::fs::remove_dir(&dir);
                 }
             });
         if spawned.is_err() {
@@ -684,11 +686,13 @@ impl PartsHandoff for LiveHandoff {
         match tx {
             Some(tx) => {
                 if rec.parts.is_empty() {
-                    // No audio came in: nothing to upload. Dropping the sender ends the worker
-                    // with no result; the empty dir and the sidecar go.
-                    drop(tx);
+                    // No audio came in: nothing to upload or resume, so the empty dir and the
+                    // sidecar go. The worker still ends the job (failed, no audio), so the row
+                    // stays in the list with its reason. Before, the worker just stopped: the
+                    // job.json stayed at `recording`, and the list hid it as a deleted upload.
                     remove_dir_if_empty(&rec.dir);
                     sidecar::remove(&rec.dir);
+                    let _ = tx.send(LiveMsg::Finished(Vec::new()));
                     return;
                 }
                 let parts = rec.parts.iter().map(local_part).collect();

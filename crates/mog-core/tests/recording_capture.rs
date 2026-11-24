@@ -816,6 +816,29 @@ fn cap_10a_five_seconds_of_zero_system_audio_is_silent_or_denied() {
 }
 
 #[test]
+fn cap_10a_denied_system_audio_still_records_the_mic_and_never_stops_the_call() {
+    // System Audio Recording not allowed: the tap gives zeros. The notice state is set, but the
+    // recording runs on and its part holds the whole mic track.
+    let r = rig();
+    r.session.start(opts("n", 60)).unwrap();
+    play(&r, 8_000, 0.2, 0.0);
+    r.session.tick();
+    let Snapshot::Recording(info) = r.session.snapshot() else {
+        panic!("still recording")
+    };
+    assert_eq!(info.system_audio, SystemAudioState::SilentOrDenied);
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.cause, StopCause::User);
+    assert_eq!(done.parts.len(), 1);
+    let (_, _, _, s) = decode(&done.parts[0].path);
+    assert!(s.len() >= 8 * 16_000 - 1_600, "{} samples", s.len());
+    assert!(
+        (s[64_000] - (0.2 * 32_767.0) as i32).abs() < 50,
+        "the mic is in it"
+    );
+}
+
+#[test]
 fn adr_0103_no_system_audio_backend_records_mic_only() {
     let r = rig_with(true, None);
     let info = r.session.start(opts("n", 60)).unwrap();

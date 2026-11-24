@@ -165,6 +165,11 @@ pub struct CloudAdapter {
     inflight: Mutex<HashSet<String>>,
     /// The recordings that upload during the call or resume after a crash, by name.
     live: Mutex<HashMap<String, LiveStatus>>,
+    /// The last end (done or failed) of a run in this process, by name. The job.json write of
+    /// a failure is best effort: when it does not land, the volume still says `writing_notes`
+    /// (or another step), and the list and Retry read this end instead of a step that no run
+    /// owns any more.
+    ends: Mutex<HashMap<String, JobManifest>>,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -307,8 +312,27 @@ impl CloudAdapter {
             on_job,
             inflight: Mutex::new(HashSet::new()),
             live: Mutex::new(HashMap::new()),
+            ends: Mutex::new(HashMap::new()),
             now_ms,
         }
+    }
+
+    /// `m` from the volume, or the end this process saw for it when `m` is still at a step
+    /// (not done, not failed) that no run, worker or capture here owns now.
+    fn settled(&self, m: JobManifest, active: &HashSet<String>) -> JobManifest {
+        if matches!(m.status, Status::Done | Status::Failed)
+            || self.in_flight(&m.name)
+            || self.is_live(&m.name)
+            || active.contains(&m.name)
+        {
+            return m;
+        }
+        self.ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&m.name)
+            .cloned()
+            .unwrap_or(m)
     }
 
     /// Take `name` for one run, or `None` when a run on it is in flight.
@@ -372,9 +396,20 @@ impl CloudAdapter {
             // capture, and the in-flight guard comes before this call.
             Status::Failed | Status::Recording => true,
             Status::Done => false,
+            // A run here failed at this step, but its job.json write did not land.
+            _ if self.ended_failed(&m.name) => true,
             _ => parse_iso_utc_ms(&m.updated_at)
                 .is_none_or(|t| (self.now_ms)() - t >= STALE_AFTER_MS),
         }
+    }
+
+    /// Did the last run of `name` in this process end failed?
+    fn ended_failed(&self, name: &str) -> bool {
+        self.ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .is_some_and(|m| m.status == Status::Failed)
     }
 
     /// The service (for the pipeline hand-off).
@@ -383,6 +418,15 @@ impl CloudAdapter {
     }
 
     fn emit(&self, m: &JobManifest) {
+        {
+            let mut ends = self.ends.lock().unwrap_or_else(PoisonError::into_inner);
+            if matches!(m.status, Status::Done | Status::Failed) {
+                ends.insert(m.name.clone(), m.clone());
+            } else {
+                // A new run works on it: its own end counts from now.
+                ends.remove(&m.name);
+            }
+        }
         if let Some(s) = summary_of(m) {
             let s = self.overlay(s);
             (self.on_job)(&s);
@@ -881,6 +925,7 @@ impl RecordingCloud for CloudAdapter {
         // at its step, so Retry shows.
         let rows: Vec<JobManifest> = rows
             .into_iter()
+            .map(|m| self.settled(m, &active))
             .map(|mut m| {
                 let stuck = !self.in_flight(&m.name)
                     && !active.contains(&m.name)
@@ -971,7 +1016,8 @@ impl RecordingCloud for CloudAdapter {
             .service
             .detail(profile.as_str(), Self::root(storage), id.as_str())
             .map_err(err)?;
-        let summary = summary_of(&d.job).ok_or(RecordingErrorKind::Internal)?;
+        let job = self.settled(d.job, &self.local.active());
+        let summary = summary_of(&job).ok_or(RecordingErrorKind::Internal)?;
         let instructions = d
             .transcript
             .as_ref()

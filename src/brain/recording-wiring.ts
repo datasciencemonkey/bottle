@@ -418,6 +418,9 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       recOn = on;
       deps.mood?.callRecording(on);
       if (on) void warnIfLocalOnly();
+      // The call ended (Stop, ⌥R or the length): read the list now, so its row shows at once
+      // and goes on to uploading, transcribing and notes, also with no job event yet.
+      else void refreshList();
     }
     publish();
   };
