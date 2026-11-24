@@ -74,7 +74,7 @@ def test_mb_10a_names_check_skips_tests_and_records(tmp_path):
     assert ci_checks.naming_problems(root) == []
 
 
-def test_mb_10b_names_check_needs_the_labs_label_in_the_hub_title(tmp_path):
+def test_mb_10b_names_check_needs_the_experimental_label_in_the_hub_title(tmp_path):
     """[MB-10b] [AT-37] The hub page title and the native hub title show the experimental label."""
     root = good_tree(tmp_path)
     (root / "hub.html").write_text(page("Bottle hub"))
@@ -89,6 +89,17 @@ def test_mb_10b_names_check_needs_the_experimental_label_in_hub_and_about(tmp_pa
     root = good_tree(tmp_path)
     for name in ("Hub.tsx", "About.tsx"):
         (root / "src" / "views" / "hub" / name).write_text("export const X = () => <p>Bottle</p>;\n")
+    problems = ci_checks.naming_problems(root)
+    assert any("Hub.tsx" in p and "experimental" in p for p in problems)
+    assert any("About.tsx" in p and "experimental" in p for p in problems)
+
+
+def test_mb_10b_names_check_rejects_the_label_hidden_in_a_comment(tmp_path):
+    """[MB-10b] [AT-37] "experimental" in a comment, not rendered as JSX text, does not count."""
+    root = good_tree(tmp_path)
+    for name in ("Hub.tsx", "About.tsx"):
+        (root / "src" / "views" / "hub" / name).write_text(
+            "// experimental\nexport const X = () => <p>Bottle</p>;\n")
     problems = ci_checks.naming_problems(root)
     assert any("Hub.tsx" in p and "experimental" in p for p in problems)
     assert any("About.tsx" in p and "experimental" in p for p in problems)

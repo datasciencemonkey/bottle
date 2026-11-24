@@ -137,7 +137,7 @@ describe('V1 hub view', () => {
   it('[V1] shows the product name and the experimental label', async () => {
     const { el } = await render(<Hub />);
     expect(el.querySelector('h1')?.textContent).toBe('Bottle');
-    expect(el.textContent).toContain('experimental');
+    expect(el.querySelector('main > p')?.textContent).toBe('experimental');
   });
 
   it('[ADR 0117] the hub has no MOG list: no live chips, no mogs area, one ready ping', async () => {

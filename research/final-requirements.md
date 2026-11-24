@@ -1982,7 +1982,7 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D38 | Default models | Cleanup Llama 3.1 8B; router Llama 8B or Flash-Lite; writer gpt-oss-120b; judge Llama 8B; ASR Flash-Lite. **Amended by D57 (paths and names), D58 (regional fallback gpt-oss-20b; gpt-6-luna eval only), D59 (ASR residency).** | **Amended** | |
 | D39 | Auth hardening | CLI ≥ 1.17; absolute path; clean env; plaintext-storage warning; host-only tokens; tags and User-Agent; optional `--client-id` app (S); PAT profiles rejected. | Active | **Confirmed (U6)** |
 | D40 | Overlap with Genie One desktop | Proceed and differentiate. **Amended by D61** with the verified feature set. | **Amended by D61** | **Confirmed (U3)** |
-| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** | Amended by B0 | **Confirmed (U13, U14)** |
+| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** **Label superseded 2026-11-24: "experimental" (MB-10b).** | Amended by B0 | **Confirmed (U13, U14)** |
 | D42 | Telemetry | Off until an admin sets `OtlpTable`; content-free spans; content logging needs both opt-ins. | Active | |
 | D43 | Wake word | MVP and v1: idle MOG never opens the mic. v2 wake word needs a new notice, admin policy, local-only processing, no storage before the wake word. | Active | |
 | D44 | Running MOGs | Any number defined; 8 running by default; one brain window; thin views. | Active (fallback in D73) | |

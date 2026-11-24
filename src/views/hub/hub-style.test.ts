@@ -167,13 +167,13 @@ describe('hub and MOG chrome styling (#561)', () => {
     expect(wideRule).toMatch(/padding-bottom:\s*0/);
   });
 
-  // review of #602 round 4, blocker 1: `.hub-title`/`.hub-labs` are direct children of `main`
+  // review of #602 round 4, blocker 1: `.hub-title`/`.hub-experimental` are direct children of `main`
   // (AT-37), outside `.hub-body` — the box the earlier `--hub-sidebar-width` padding lived on —
   // so a pinned rail used to sit on top of them with nothing telling them to move over.
   it('[blocker 1, review #602 round 4] the header row moves with the sidebar-width column', () => {
     const css = read('hub.css').replace(/\/\*[\s\S]*?\*\//g, '');
     const title = /(?:^|\n)\s*\.hub > \.hub-title\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    const labs = /(?:^|\n)\s*\.hub > \.hub-labs\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    const labs = /(?:^|\n)\s*\.hub > \.hub-experimental\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(title).toMatch(/grid-column:\s*2/);
     expect(labs).toMatch(/grid-column:\s*3/);
   });

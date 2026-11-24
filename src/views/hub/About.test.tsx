@@ -23,7 +23,7 @@ describe('About screen (in the V1 hub)', () => {
   it('[MB-10a] [MB-10b] [AT-37] shows the product name and the experimental label', async () => {
     const { el } = await render(<About />);
     expect(el.querySelector('h2')?.textContent).toBe('About Bottle');
-    expect(el.querySelector('[data-label="labs"]')?.textContent).toBe('experimental');
+    expect(el.querySelector('[data-label="experimental"]')?.textContent).toBe('experimental');
     expect(el.textContent).not.toMatch(/mother ?bricks/i);
   });
 

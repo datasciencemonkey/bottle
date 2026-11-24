@@ -17,7 +17,7 @@ export function About() {
   return (
     <section data-view="about" aria-labelledby="about-title" className="hub-section">
       <h2 id="about-title">About Bottle</h2>
-      <p data-label="labs" className="hub-muted">
+      <p data-label="experimental" className="hub-muted">
         experimental
       </p>
       <p data-label="independent" className="hub-muted">

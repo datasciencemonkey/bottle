@@ -290,14 +290,23 @@ def naming_problems(root):
         if m:
             titles[rel] = m.group(1).strip()
     if titles.get("hub.html") != EXPERIMENTAL_TITLE:
-        problems.append(f"hub.html: the page title must be {EXPERIMENTAL_TITLE!r} (experimental label, MB-10b)")
+        problems.append(
+            f"hub.html: the page title must be {EXPERIMENTAL_TITLE!r} "
+            f"(experimental label, MB-10b)")
     windows = texts.get("src-tauri/src/windows.rs", "")
     window_titles = re.findall(r'\btitle:\s*"([^"]*)"', windows)
     if EXPERIMENTAL_TITLE not in window_titles:
-        problems.append(f"src-tauri/src/windows.rs: the hub title must be {EXPERIMENTAL_TITLE!r} (experimental label, MB-10b)")
+        problems.append(
+            f"src-tauri/src/windows.rs: the hub title must be {EXPERIMENTAL_TITLE!r} "
+            f"(experimental label, MB-10b)")
     for rel in EXPERIMENTAL_VIEWS:
-        if EXPERIMENTAL_LABEL not in texts.get(rel, ""):
-            problems.append(f"{rel}: the view must show {EXPERIMENTAL_LABEL!r} (experimental label, MB-10b)")
+        # A plain substring test would pass if the label only sat in a comment (review finding).
+        # The label must render: a JSX text node, trimmed, equal to the label.
+        jsx_texts = [t.strip() for t in JSX_TEXT.findall(texts.get(rel, ""))]
+        if EXPERIMENTAL_LABEL not in jsx_texts:
+            problems.append(
+                f"{rel}: the view must show {EXPERIMENTAL_LABEL!r} as rendered text "
+                f"(experimental label, MB-10b)")
     problems += id_problems(texts)
     nouns = [(f"{rel} <title>", t) for rel, t in titles.items()]
     nouns += [(rel, t) for rel, t in descriptions(texts)]

@@ -132,7 +132,9 @@ describe('AT-37 naming: Bottle, the experimental label and the MOG noun (#71)', 
     const hub = await render(<Hub />);
     expect(hub.el.querySelector('main > p')?.textContent).toBe(EXPERIMENTAL_LABEL);
     const about = await render(<About />);
-    expect(about.el.querySelector('[data-label="labs"]')?.textContent).toBe(EXPERIMENTAL_LABEL);
+    expect(about.el.querySelector('[data-label="experimental"]')?.textContent).toBe(
+      EXPERIMENTAL_LABEL,
+    );
     await act(async () => [hub, about].forEach((r) => r.root.unmount()));
   });
 
