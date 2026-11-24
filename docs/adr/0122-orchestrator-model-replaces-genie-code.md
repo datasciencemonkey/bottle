@@ -36,7 +36,7 @@ After the 0.1.6 test, the owner found these problems:
    - Gateway facts (DEFAULT, 2026-11-24): Anthropic models refuse `text.format` structured output. So the ask loop ends with a terminal `submit_answer` tool, and the router asks for JSON in its instructions and validates the reply. One call takes about 1.3 to 2.4 s, so dictation cleanup has a 1.5 s budget. Past that, Bottle pastes the local pre-pass text.
    - ⌥G sends the local pre-pass text as the question. The model's `cleaned_text` is used only for the dictation paste, and only after a strict check: only words from the input, the same negations, and no new links or instructions.
 2. **Two modes with different permissions.**
-   - **Clean mode** runs on every utterance as `model_invoke` role `router`. It has no tools, so RTR-20a and ADR 0056 do not change. A local filler pre-pass runs first. The call has a deadline of about 900 ms, and on a timeout Bottle uses the pre-pass text.
+   - **Clean mode** runs on every utterance as `model_invoke` role `router`. It has no tools, so RTR-20a and ADR 0056 do not change. A local filler pre-pass runs first. For dictation the call has a 1.5 s deadline (`DICTATION_CLEANUP_DEADLINE_MS`) and no retry. On a timeout, Bottle pastes the pre-pass text.
    - **Ask mode** runs only on ⌥G, as a Rust tool loop in `agent_run::orchestrator`.
      - It has one tool, `ask_genie(workspace, question)`. Every call goes through the existing guard (`agent_run/guard`): switched-on workspaces only, the D2 budget, quarantine, D1 receipts and the 3-refusals stop.
      - The loop has hard caps on steps and time.
