@@ -31,7 +31,7 @@ const UNIVERSAL_FILLERS = [
  * they go only for that language (Handy `gated_filler_words_for_language`).
  */
 const GATED_FILLERS: Readonly<Record<string, readonly string[]>> = {
-  en: ['um', 'ah', 'eh'],
+  en: ['um', 'ah', 'eh', 'er'],
   de: ['äh', 'ähm'],
   fr: ['euh'],
 };
@@ -427,22 +427,159 @@ function numberSignature(text: string): string {
     .join(' ');
 }
 
+// ---------- protected spans (ADR 0122) ----------
+
+const SPAN_OPEN = '';
+const SPAN_CLOSE = '';
+const SPAN_DIGIT_BASE = 0xe010;
+
+/** Code, quoted text, URLs and email addresses. The pre-pass never edits inside them. */
+const PROTECTED =
+  /`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|\b(?:https?:\/\/|www\.)[^\s]*[^\s.,;:!?)"'”]|[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
+
+/** Swaps each protected span for a mark with no letters and no digits, so no rule can match it. */
+function protectSpans(text: string): { masked: string; restore: (s: string) => string } {
+  const spans: string[] = [];
+  const masked = text.replace(PROTECTED, (m) => {
+    const code = [...String(spans.length)]
+      .map((d) => String.fromCharCode(SPAN_DIGIT_BASE + Number(d)))
+      .join('');
+    spans.push(m);
+    return `${SPAN_OPEN}${code}${SPAN_CLOSE}`;
+  });
+  const restore = (s: string) =>
+    s.replace(/([-]+)/g, (_m, code: string) => {
+      const i = Number([...code].map((c) => c.charCodeAt(0) - SPAN_DIGIT_BASE).join(''));
+      return spans[i] ?? '';
+    });
+  return { masked, restore };
+}
+
+// ---------- discourse fillers, repeats, false starts (ADR 0122) ----------
+
+const DISCOURSE = '(?:you know|I mean|like)';
+
 /**
- * The pre-pass: fillers, stutters, the user dictionary, then numerals (CAP-66a). It checks its
- * own work (CAP-68): fillers, stutters and the dictionary must not change a number, and the
- * numerals step must only swap each run for its value. When a check fails, the pre-pass gives
- * the raw text, so a pre-pass error never reaches the card, the router step or the model.
+ * Removes "you know", "I mean" and "like" only when commas or the sentence edge set them off, as in
+ * "It was, like, huge." or "You know, we ship." A bare "I like pizza" or "you know the answer" stays.
+ * A mark between two digits stays too: "5, like, 6" is a list.
+ */
+export function removeDiscourseFillers(text: string): string {
+  const digitSide = (s: string, at: number, dir: -1 | 1) => {
+    for (let i = at; i >= 0 && i < s.length; i += dir) {
+      if (/\s/.test(s.charAt(i))) continue;
+      return /\p{N}/u.test(s.charAt(i));
+    }
+    return false;
+  };
+  let out = text.replace(
+    new RegExp(`,\\s*${DISCOURSE}\\s*,\\s*`, 'giu'),
+    (m: string, offset: number, whole: string) =>
+      digitSide(whole, offset - 1, -1) || digitSide(whole, offset + m.length, 1) ? m : ' ',
+  );
+  out = out.replace(new RegExp(`(^|[.!?]\\s+)${DISCOURSE}\\s*,\\s*`, 'giu'), '$1');
+  out = out.replace(new RegExp(`\\s*,\\s*${DISCOURSE}(?=\\s*\\.?\\s*$)`, 'giu'), '');
+  return tidy(out);
+}
+
+/** Words that a speaker says twice by slip and that are never a real double word. */
+const STUTTER_WORDS: ReadonlySet<string> = new Set(
+  (
+    'i the a an to of in on at and but or so we you he she they it my your our their this for with ' +
+    'is are was be if as do'
+  ).split(' '),
+);
+
+const PHRASE_WORD = /^(?:\p{Ll}[\p{Ll}']*|I)$/u;
+
+/**
+ * Removes an unambiguous false start: a short function word said twice ("the the", "I I"), a 2 or
+ * 3 word phrase said twice in a row ("I want to I want to go"), and a cut word that the next word
+ * completes ("wh- what"). A double content word ("had had", "very very") stays.
+ */
+export function collapseRepeats(text: string): string {
+  let words = text.split(/\s+/).filter((w) => w !== '');
+  const key = (w: string) => w.toLowerCase();
+  // Cut word: "th- the", "wh- what".
+  words = words.filter((w, i) => {
+    const frag = /^(\p{L}{1,3})-$/u.exec(w)?.[1];
+    const next = words[i + 1];
+    return !(frag && next && key(next).startsWith(key(frag)));
+  });
+  // Phrase repeat, longest first.
+  for (const n of [3, 2]) {
+    for (let i = 0; i + 2 * n <= words.length;) {
+      const a = words.slice(i, i + n);
+      const b = words.slice(i + n, i + 2 * n);
+      const same = a.every((w, k) => key(w) === key(b[k] as string));
+      if (same && b.every((w) => PHRASE_WORD.test(w)) && a.every((w) => /^[\p{L}']+$/u.test(w))) {
+        words.splice(i + n, n);
+      } else i++;
+    }
+  }
+  // Function word twice.
+  const out: string[] = [];
+  for (const w of words) {
+    const prev = out[out.length - 1];
+    if (
+      prev !== undefined &&
+      STUTTER_WORDS.has(key(w)) &&
+      key(prev) === key(w) &&
+      PHRASE_WORD.test(w)
+    )
+      continue;
+    out.push(w);
+  }
+  return out.join(' ');
+}
+
+const ABBREVIATIONS: ReadonlySet<string> = new Set(
+  'e.g. i.e. etc. vs. dr. mr. mrs. ms. st. no. approx. inc. ltd. jr. sr. fig.'.split(' '),
+);
+
+/**
+ * Capitalises the first letter of the text and of each sentence, only for a plain lowercase word.
+ * A name, a code word, an abbreviation and a word with a digit or a symbol stay as they are.
+ */
+export function capitalizeSentences(text: string): string {
+  return text.replace(
+    /(^|[.!?]\s+)(\p{Ll}[\p{Ll}']*)(?![\p{L}\p{N}_.@/\\:-])/gu,
+    (m: string, lead: string, word: string, offset: number, whole: string) => {
+      if (lead !== '') {
+        const before =
+          whole
+            .slice(0, offset + 1)
+            .split(/\s+/)
+            .pop() ?? '';
+        if (ABBREVIATIONS.has(before.toLowerCase())) return m;
+      }
+      return lead + word.charAt(0).toUpperCase() + word.slice(1);
+    },
+  );
+}
+
+/**
+ * The pre-pass: fillers, stutters, false starts, the user dictionary, numerals, then punctuation
+ * spacing and sentence capitals (CAP-66a, ADR 0122). Code, quoted text, URLs and email addresses
+ * pass through unchanged. It checks its own work (CAP-68): fillers, stutters and the dictionary
+ * must not change a number, and the numerals step must only swap each run for its value. When a
+ * check fails, the pre-pass gives the raw text, so a pre-pass error never reaches the card, the
+ * router step or the model.
  */
 export function prepass(raw: string, opts: PrepassOptions = {}): string {
   const language = opts.language ?? 'en';
-  const noFillers = removeFillers(markNumberBreaks(raw, language), language);
-  const noStutters = collapseStutters(noFillers);
+  const { masked, restore } = protectSpans(raw);
+  const noFillers = removeFillers(markNumberBreaks(masked, language), language);
+  const noDiscourse = language.toLowerCase().startsWith('en')
+    ? removeDiscourseFillers(noFillers)
+    : noFillers;
+  const noStutters = collapseRepeats(collapseStutters(noDiscourse));
   const dictionary = applyDictionary(noStutters, opts.dictionary ?? []);
-  if (numberSignature(dictionary) !== numberSignature(raw)) return raw.trim();
+  if (numberSignature(dictionary) !== numberSignature(masked)) return raw.trim();
   const out = tidy(spokenNumeralsToDigits(dictionary));
   // Write each new digit token back in words: the words must be the ones it replaced.
   const before = new Set(dictionary.match(/\d+/g) ?? []);
   const restored = out.replace(/\b\d+\b/g, (d) => (before.has(d) ? d : spokenFormOf(Number(d))));
   if (numberSignature(restored) !== numberSignature(dictionary)) return raw.trim();
-  return tidy(out.split(NUMBER_BREAK).join(' '));
+  return restore(capitalizeSentences(tidy(out.split(NUMBER_BREAK).join(' '))));
 }

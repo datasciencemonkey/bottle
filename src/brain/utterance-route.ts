@@ -20,7 +20,9 @@
 import type { LeaseId, MogId, RouterDecision } from '../shared/interfaces';
 import { call, type CommandArgs, type CommandReturns } from '../shared/ipc';
 import { createRouterContextGate } from './components/router-context-gate';
+import { DEFAULT_ROUTER_MODEL } from './components/router-model';
 import type { RouterInput } from './components/router-step';
+import { DICTATION_DEADLINE_MS } from './dictation-cleanup';
 
 /** A router confidence mark (D30). The offline heuristic stays below it (RTR-15c). */
 export const ASK_CONFIDENCE = 0.7;
@@ -86,8 +88,16 @@ export interface UtteranceRouteDeps {
 }
 
 /** The production deps: the router step over `model_invoke` and the `insert_text` command. */
-export function ipcUtteranceDeps(): UtteranceRouteDeps {
-  const gate = createRouterContextGate();
+export function ipcUtteranceDeps(
+  opts: { model?: string; deadlineMs?: number } = {},
+): UtteranceRouteDeps {
+  // ADR 0122: the orchestrator model (Haiku by default; the setting replaces it later) and the
+  // 900 ms dictation deadline (CAP-67a). The deadline caps the call; `withDictationCleanup`
+  // falls back to the pre-pass text at once, with no retry.
+  const gate = createRouterContextGate({
+    model: opts.model ?? DEFAULT_ROUTER_MODEL,
+    deadlineMs: opts.deadlineMs ?? DICTATION_DEADLINE_MS,
+  });
   return {
     route: (text, mogId, input) => gate.route(text, mogId, input),
     insertText: (args) => call('insert_text', args),
