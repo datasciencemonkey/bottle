@@ -54,6 +54,8 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use super::agent_asks::AgentAsks;
+use super::component::{pair_allows, reply_conversation};
+use super::ConversationPairs;
 use super::{forwardable_tool_args, tools, McpCall, McpReply, McpTransport, PROTOCOL_VERSION};
 use super::{INVALID_META, INVALID_TOOL_ARGS, TOOL_NOT_ALLOWED};
 use crate::agent_guard::{
@@ -125,9 +127,13 @@ pub struct GenieProxyDeps {
     /// G-11a..c, G-12b: the in-flight agent asks. Clones of these deps share it, so one deps
     /// value for the whole host counts the asks of every session.
     pub asks: Arc<AgentAsks>,
-    /// ADR 0117 (FLAG 7): the workspace allow-list. With a gate, a `genie_ask` for a profile that
-    /// is neither home nor available is refused (`workspace_not_available`) before any send.
+    /// ADR 0117 (FLAG 7): the workspace allow-list. It fails closed: with no gate every
+    /// `genie_ask` is refused (`workspace_not_available`) before any send, and a `genie_ask` for a
+    /// profile that is neither home nor available is refused too.
     pub gate: Option<Arc<dyn WorkspaceGate>>,
+    /// The `(profile, conversation)` pairs of the successful asks. A poll, query result or cancel
+    /// needs a recorded pair or a profile that the gate allows (ADR 0117 follow-up).
+    pub pairs: Arc<ConversationPairs>,
 }
 
 impl fmt::Debug for GenieProxyDeps {
@@ -147,10 +153,12 @@ impl GenieProxyDeps {
             call_timeout: None,
             asks: Arc::new(AgentAsks::default()),
             gate: None,
+            pairs: Arc::new(ConversationPairs::new()),
         }
     }
 
-    /// The same deps with the workspace allow-list `gate` (ADR 0117, FLAG 7).
+    /// The same deps with the workspace allow-list `gate` (ADR 0117, FLAG 7). `None` refuses
+    /// every `genie_ask`.
     pub fn with_gate(mut self, gate: Option<Arc<dyn WorkspaceGate>>) -> Self {
         self.gate = gate;
         self
@@ -415,15 +423,27 @@ impl GenieProxy {
             Ok(t) => t,
             Err(code) => return refuse(code),
         };
-        // ADR 0117, FLAG 7: an ask goes only to the home or an available workspace. Before the
-        // in-flight ledger, so a refused ask takes no place and sends nothing.
+        // ADR 0117, FLAG 7: an ask goes only to the home or an available workspace. No gate
+        // means no ask (fail closed). Before the in-flight ledger, so a refused ask takes no
+        // place and sends nothing.
         if tool_kind(contract.name) == Kind::Ask
-            && self
+            && !self
                 .deps
                 .gate
                 .as_ref()
-                .is_some_and(|g| !g.allows(&target.profile))
+                .is_some_and(|g| g.allows(&target.profile))
         {
+            return refuse("workspace_not_available");
+        }
+        // ADR 0117 follow-up: a poll, query result or cancel needs a recorded pair or a profile
+        // that the gate allows.
+        if !pair_allows(
+            self.deps.gate.as_ref(),
+            &self.deps.pairs,
+            contract.name,
+            &target.profile,
+            args.get("conversation_id").and_then(Value::as_str),
+        ) {
             return refuse("workspace_not_available");
         }
         // G-06b, G-07a: the MOG's warehouse only; the agent's `_meta` is never read.
@@ -451,6 +471,7 @@ impl GenieProxy {
             _ => None,
         };
         let transport = Arc::clone(&self.deps.transport);
+        let pairs = Arc::clone(&self.deps.pairs);
         let tags = self.tags();
         let timeout = self.deps.call_timeout;
         let tool = contract.name;
@@ -463,6 +484,14 @@ impl GenieProxy {
                 call = call.timeout(t);
             }
             let out = transport.call_tool(call).map_err(|e| e.code());
+            // ADR 0117 follow-up: record the pair of a successful ask.
+            if let (Kind::Ask, Ok(r)) = (tool_kind(tool), &out) {
+                if !r.is_error {
+                    if let Some(c) = reply_conversation(&r.structured_content) {
+                        pairs.record(&target.profile, c);
+                    }
+                }
+            }
             // On this thread, so the ledger is right even if the session stopped meanwhile.
             let sc = out.as_ref().map(|r| &r.structured_content);
             match (tool_kind(tool), place, conversation.as_deref()) {
@@ -612,6 +641,117 @@ mod tests {
         assert_eq!(v["result"]["content"][0]["text"], AUDIT_UNAVAILABLE, "{v}");
         assert_eq!(t.calls.load(Ordering::SeqCst), 0, "nothing reached R8");
         assert!(approvals.take(MOG, Q), "the approval was not used");
+    }
+
+    /// A gate with a fixed answer.
+    #[derive(Debug)]
+    struct Fixed(bool);
+
+    impl WorkspaceGate for Fixed {
+        fn allows(&self, _: &str) -> bool {
+            self.0
+        }
+    }
+
+    struct OkLog;
+
+    impl AgentActionLog for OkLog {
+        fn record(&self, _: &str, _: &str, _: u64) -> Result<(), crate::audit::AuditError> {
+            Ok(())
+        }
+    }
+
+    fn rpc_tool(p: &GenieProxy, name: &str, args: Value) -> Value {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": name, "arguments": args}});
+        p.handle(&LoopbackRequest {
+            endpoint: crate::loopback::LoopbackEndpoint::GenieOneMcp,
+            method: "POST".into(),
+            path: PROXY_PATH.into(),
+            body: body.to_string().into_bytes(),
+        })
+        .body
+    }
+
+    fn guarded(
+        t: &Arc<CountingTransport>,
+        gate: Option<bool>,
+    ) -> (GenieProxy, Arc<OutboundApprovals>) {
+        let transport: Arc<dyn McpTransport> = t.clone();
+        let approvals = Arc::new(OutboundApprovals::default());
+        approvals.approve(MOG, Q);
+        let deps = GenieProxyDeps::new(transport, Arc::new(OneTarget))
+            .with_gate(gate.map(|g| Arc::new(Fixed(g)) as Arc<dyn WorkspaceGate>));
+        let p = GenieProxy::new(MOG, deps, Arc::new(AtomicBool::new(false)))
+            .with_guard(Arc::new(OkLog), approvals.clone());
+        (p, approvals)
+    }
+
+    #[test]
+    fn adr_0117_deps_with_no_gate_refuse_genie_ask_and_keep_the_approval() {
+        let t = Arc::new(CountingTransport::default());
+        let (p, approvals) = guarded(&t, None);
+        let v = ask(&p);
+        assert_eq!(
+            v["result"]["content"][0]["text"], "workspace_not_available",
+            "{v}"
+        );
+        assert_eq!(t.calls.load(Ordering::SeqCst), 0, "nothing reached R8");
+        assert!(approvals.take(MOG, Q), "the approval was not used");
+    }
+
+    #[test]
+    fn adr_0117_a_gate_that_allows_lets_the_ask_through() {
+        let t = Arc::new(CountingTransport::default());
+        let (p, _) = guarded(&t, Some(true));
+        assert_eq!(ask(&p)["result"]["isError"], json!(false));
+        assert_eq!(t.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn adr_0117_a_poll_needs_a_recorded_pair_or_an_allowed_profile() {
+        let t = Arc::new(CountingTransport::default());
+        let poll_args = json!({"conversation_id": "c-1", "response_id": "r-1"});
+        // A disallowed profile and no pair: refused, nothing sent.
+        let (p, _) = guarded(&t, Some(false));
+        let v = rpc_tool(&p, "genie_poll_response", poll_args.clone());
+        assert_eq!(v["result"]["content"][0]["text"], "workspace_not_available");
+        assert_eq!(t.calls.load(Ordering::SeqCst), 0);
+        // A recorded pair: allowed although the gate says no.
+        p.deps.pairs.record("p", "c-1");
+        let v = rpc_tool(&p, "genie_poll_response", poll_args.clone());
+        assert_eq!(v["result"]["isError"], json!(false), "{v}");
+        // An allowed profile with no pair (a journal resume): allowed.
+        let (p2, _) = guarded(&t, Some(true));
+        let v = rpc_tool(&p2, "genie_poll_response", poll_args);
+        assert_eq!(v["result"]["isError"], json!(false), "{v}");
+    }
+
+    #[test]
+    fn adr_0117_a_successful_ask_records_its_pair() {
+        struct Conv;
+        impl McpTransport for Conv {
+            fn call_tool(&self, _call: McpCall<'_>) -> CoreResult<McpReply> {
+                Ok(McpReply {
+                    structured_content: json!({"status": "in_progress", "conversation_id": "c-5"}),
+                    text: String::new(),
+                    is_error: false,
+                    http_status: 200,
+                    rpc_error: None,
+                })
+            }
+            fn list_tools(&self, _: &str, _: &Tags) -> CoreResult<Vec<Value>> {
+                Ok(Vec::new())
+            }
+        }
+        let approvals = Arc::new(OutboundApprovals::default());
+        approvals.approve(MOG, Q);
+        let deps = GenieProxyDeps::new(Arc::new(Conv), Arc::new(OneTarget))
+            .with_gate(Some(Arc::new(Fixed(true))));
+        let p = GenieProxy::new(MOG, deps, Arc::new(AtomicBool::new(false)))
+            .with_guard(Arc::new(OkLog), approvals);
+        assert_eq!(ask(&p)["result"]["isError"], json!(false));
+        assert!(p.deps.pairs.contains("p", "c-5"));
     }
 
     #[test]

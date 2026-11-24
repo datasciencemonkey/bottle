@@ -219,6 +219,8 @@ fn rig_with(
     });
     let targets = targets.unwrap_or_else(|| target.clone());
     let transport: Arc<dyn McpTransport> = r8.clone();
+    // The proxy fails closed with no gate, so a rig with none gets an allow-all gate.
+    let gate = gate.or_else(|| Some(Arc::new(AllowAll) as Arc<dyn WorkspaceGate>));
     let approvals = Arc::new(OutboundApprovals::default());
     let log = Arc::new(AuditActionLog::new(
         AuditLog::new(MemoryAuditStore::default(), AuditRetention::default()),
@@ -1016,6 +1018,16 @@ fn rtr_29b_g_11a_a_capped_ask_keeps_its_approval() {
 
 // ---------- ADR 0117, FLAG 7: the workspace allow-list ----------
 
+/// A gate that allows every profile.
+#[derive(Debug)]
+struct AllowAll;
+
+impl WorkspaceGate for AllowAll {
+    fn allows(&self, _: &str) -> bool {
+        true
+    }
+}
+
 /// A gate that allows a fixed set of profiles.
 #[derive(Debug)]
 struct Allow(Vec<&'static str>);
@@ -1042,10 +1054,10 @@ fn adr_0117_an_agent_ask_for_a_profile_that_is_not_available_sends_nothing_and_k
     // The approval is not used up, and no in-flight place was taken.
     assert!(r.approvals.take(MOG, QUESTION));
     r.approvals.approve(MOG, QUESTION);
-    // Polls and cancels of calls in flight are not gated.
+    // ADR 0117 follow-up: no recorded pair and a disallowed profile, so a poll is refused too.
     assert_eq!(
-        r.call("genie_poll_response", poll_args()).result()["isError"],
-        json!(false)
+        r.call("genie_poll_response", poll_args()).tool_error_text(),
+        "workspace_not_available"
     );
 }
 
