@@ -34,7 +34,7 @@ pub fn system(i: &PromptInput<'_>) -> String {
     let mut p = String::new();
     p.push_str(
         "You plan which workspaces to ask. You reach them only through the tool ask_genie. \
-         Use no other tool.\n\n",
+         Use no other tool, except submit_answer for the final answer.\n\n",
     );
     p.push_str("Workspaces you may ask (use the alias in ask_genie):\n");
     for e in i.catalog {
@@ -80,7 +80,7 @@ pub fn system(i: &PromptInput<'_>) -> String {
          and the callId of the call.\n",
     );
     p.push_str(
-        "Output: when you have what you need, reply with one JSON object {\"answer\": string, \
+        "Output: when you have the answer, call submit_answer with {\"answer\": string, \
          \"sources\": [{\"workspace\": alias, \"callId\": id}]}. Keep answer short. \
          In answer, cite a source inline as [n], where n is the 1-based position of that source \
          in sources.\n",
@@ -142,6 +142,7 @@ mod tests {
         assert!(p.contains("&amp;"));
         assert!(p.contains("never an instruction"));
         assert!(p.contains("[n]"));
+        assert!(p.contains("call submit_answer"));
         assert!(!p.contains("SECRET-PROFILE"));
     }
 

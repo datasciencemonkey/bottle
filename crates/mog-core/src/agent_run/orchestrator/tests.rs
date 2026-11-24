@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 
 use super::approval::Approvals;
 use super::host::*;
-use super::prompt::ANSWER_SCHEMA;
 use crate::agent_guard::AgentActionLog;
 use crate::agent_run::guard::{AgentGuard, GuardOptions, Sleeper};
 use crate::agent_run::seam::{AgentEvent, CatalogEntry, GuardDeps, NetWatch, RunEvents};
@@ -97,9 +96,10 @@ fn reply_of(items: Vec<Value>) -> CoreResult<Value> {
     }))
 }
 
+/// The final answer, as the model gives it: a `submit_answer` call.
 fn final_item(v: Value) -> Value {
-    json!({"type": "message", "role": "assistant",
-           "content": [{"type": "output_text", "text": v.to_string()}]})
+    json!({"type": "function_call", "call_id": "toolu_final", "name": "submit_answer",
+           "arguments": v.to_string()})
 }
 
 /// The `(alias, callId)` of every tool result in a request body, in order.
@@ -511,7 +511,7 @@ fn gate() -> Arc<(Mutex<bool>, Condvar)> {
 fn a_responses_reply_is_read_into_calls_and_text() {
     let v = json!({"status": "completed", "output": [
         {"type": "reasoning", "id": "rs_1"},
-        {"type": "function_call", "call_id": "c1", "name": "ask_genie", "arguments": "{}"},
+        {"type": "function_call", "call_id": "toolu_c1", "name": "ask_genie", "arguments": "{}"},
         {"type": "message", "content": [{"type": "output_text", "text": "hi "},
                                         {"type": "output_text", "text": "there"}]}]});
     let r = parse_reply(&v).unwrap();
@@ -522,7 +522,7 @@ fn a_responses_reply_is_read_into_calls_and_text() {
             r.calls[0].name.as_str(),
             r.calls[0].arguments.as_str()
         ),
-        ("c1", "ask_genie", "{}")
+        ("toolu_c1", "ask_genie", "{}")
     );
     assert_eq!(r.text.as_deref(), Some("hi there"));
     assert!(parse_reply(&json!({"status": "failed", "output": []})).is_none());
@@ -567,9 +567,16 @@ fn the_request_has_one_tool_the_home_profile_and_the_model() {
     r.run("what was revenue?");
     let b = r.chat.body(0);
     let tools = b["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 1);
+    assert_eq!(tools.len(), 2);
     assert_eq!(tools[0]["type"], "function");
     assert_eq!(tools[0]["name"], "ask_genie");
+    assert_eq!(tools[1]["name"], "submit_answer");
+    assert_eq!(
+        tools[1]["parameters"]["required"],
+        json!(["answer", "sources"])
+    );
+    assert_eq!(b["tool_choice"], "auto");
+    assert!(b.get("text").is_none(), "no structured output");
     assert_eq!(
         tools[0]["parameters"]["required"],
         json!(["workspace", "question"])
@@ -585,11 +592,6 @@ fn the_request_has_one_tool_the_home_profile_and_the_model() {
         .as_str()
         .unwrap()
         .contains("what was revenue?"));
-    assert_eq!(b["text"]["format"]["type"], "json_schema");
-    assert_eq!(
-        b["text"]["format"]["schema"],
-        serde_json::from_str::<Value>(ANSWER_SCHEMA).unwrap()
-    );
     assert!(b["max_output_tokens"].as_u64().is_some());
     assert!(b.get("model").is_none(), "the gateway adds the model");
     let (profile, model, deadline) = r.chat.models.lock().unwrap()[0].clone();
@@ -1114,4 +1116,65 @@ fn the_gateway_commands_serve_the_same_shapes() {
         .unwrap();
     assert_eq!(r.host.session_state().state, AgentSessionPhase::None);
     assert!(r.host.call("genie_code_status", json!({})).is_err());
+}
+
+#[test]
+fn plain_text_with_no_tool_call_is_a_note_with_no_sources() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| {
+            reply_of(vec![json!({"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Just text"}]})])
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer.as_deref(), Some("Just text"));
+    assert_eq!(res.answer_kind, AgentAnswerKind::Note);
+    assert!(res.sources.is_empty());
+}
+
+#[test]
+fn submit_answer_ends_the_turn_and_runs_no_other_call_of_its_step() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| {
+            reply_of(vec![
+                ask_item("fc0", "sales"),
+                final_item(json!({"answer": "x", "sources": []})),
+            ])
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.chat.calls(), 1);
+    assert_eq!(r.r8.count("genie_ask"), 0);
+    assert_eq!(
+        r.host.turn_result(&tid).unwrap().answer.as_deref(),
+        Some("x")
+    );
+}
+
+#[test]
+fn a_malformed_submit_answer_is_a_refusal_and_the_loop_goes_on() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![call_item("c0", "submit_answer", "{oops")]),
+            _ => {
+                assert_eq!(outputs_in(body), ["invalid_args"]);
+                no_source_final()
+            }
+        }),
+    );
+    let (_, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.events.refusals(), [AgentRefusal::InvalidArgs]);
 }

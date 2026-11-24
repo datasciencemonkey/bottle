@@ -919,27 +919,26 @@ struct LoopCtx {
     base: usize,
 }
 
-/// The one tool, as a Responses-API function tool.
+/// The tool that ends a turn: its arguments are the final answer. It has no side effect.
+pub const SUBMIT_TOOL: &str = "submit_answer";
+
+/// The two tools, as Responses-API function tools. Only `ask_genie` acts, through the guard.
 fn tools() -> Value {
     let s = guard::tool_schema();
+    let answer: Value = serde_json::from_str(ANSWER_SCHEMA).unwrap_or(Value::Null);
     json!([{
         "type": "function",
         "name": guard::TOOL_NAME,
         "description": s["description"],
         "parameters": s["inputSchema"],
+    }, {
+        "type": "function",
+        "name": SUBMIT_TOOL,
+        "description": "Give the final answer to the user. Call it once, when you have the \
+            answer. `answer` cites sources inline as [n], where n is the 1-based position in \
+            `sources`.",
+        "parameters": answer,
     }])
-}
-
-fn text_format() -> Value {
-    let schema: Value = serde_json::from_str(ANSWER_SCHEMA).unwrap_or(Value::Null);
-    json!({
-        "format": {
-            "type": "json_schema",
-            "name": "bottle_answer",
-            "strict": true,
-            "schema": schema,
-        }
-    })
 }
 
 /// The most output tokens of one model step.
@@ -1032,7 +1031,6 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> Value {
 fn run_loop(mut ctx: LoopCtx) -> LoopOut {
     let mut usage = Usage::default();
     let tools = tools();
-    let format = text_format();
     let end = |ctx: &LoopCtx, stop: LoopStop, usage: Usage| LoopOut {
         stop,
         usage,
@@ -1055,7 +1053,6 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
                 "input": ctx.input,
                 "tools": tools,
                 "tool_choice": "auto",
-                "text": format,
                 "max_output_tokens": MAX_OUTPUT_TOKENS,
             }),
             deadline: left,
@@ -1084,9 +1081,21 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
         if let Some(items) = resp["output"].as_array() {
             ctx.input.extend(items.iter().cloned());
         }
+        // `submit_answer` ends the turn. Nothing else of the step runs. A submit with arguments
+        // that are no JSON object is a refusal, like any unknown call (below).
+        if let Some(c) = reply.calls.iter().find(|c| {
+            c.name == SUBMIT_TOOL
+                && serde_json::from_str::<Value>(&c.arguments).is_ok_and(|v| v.is_object())
+        }) {
+            return end(&ctx, LoopStop::Final(c.arguments.clone()), usage);
+        }
         if reply.calls.is_empty() {
+            // Plain text is the answer, with no sources.
             return match reply.text {
-                Some(t) => end(&ctx, LoopStop::Final(t), usage),
+                Some(t) => {
+                    let v = json!({ "answer": t, "sources": [] });
+                    end(&ctx, LoopStop::Final(v.to_string()), usage)
+                }
                 None => end(&ctx, LoopStop::Failed(AgentTurnOutcome::Failed), usage),
             };
         }
