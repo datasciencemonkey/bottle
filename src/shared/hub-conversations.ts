@@ -128,7 +128,9 @@ export const CONVERSATIONS_DELETE_MAX = 200;
 export type ConversationsAction =
   | { action: 'conversations.ready' }
   | { action: 'conversations.opened' }
-  | { action: 'conversations.delete'; threads: string[] };
+  /** `onlyFailed`: Clear failed. The brain re-checks each key and skips a thread that has an
+   *  answered or in-progress exchange by the time the delete runs. */
+  | { action: 'conversations.delete'; threads: string[]; onlyFailed?: true };
 
 /** One thread: every exchange that shares one Genie `conversationId`, oldest first. */
 export interface ConversationThread {
@@ -247,7 +249,8 @@ export function asConversationsAction(p: unknown): ConversationsAction | undefin
   const t = p['threads'];
   if (!Array.isArray(t) || t.length < 1 || t.length > CONVERSATIONS_DELETE_MAX) return undefined;
   if (!t.every(isKey)) return undefined;
-  return { action: 'conversations.delete', threads: [...t] };
+  const out: ConversationsAction = { action: 'conversations.delete', threads: [...t] };
+  return p['onlyFailed'] === true ? { ...out, onlyFailed: true } : out;
 }
 
 /** Shape check of the thread composer's `agent.thread_send`. */
