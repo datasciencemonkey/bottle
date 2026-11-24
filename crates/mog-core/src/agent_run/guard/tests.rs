@@ -187,6 +187,8 @@ struct Rig {
     gate: Arc<Gate>,
     log: Arc<Log>,
     sleeper: Arc<SimSleeper>,
+    /// The turn that the `ask` helpers bind their calls to (the last one begun).
+    turn_id: Mutex<String>,
 }
 
 fn answers(profile: &str) -> &'static str {
@@ -229,6 +231,7 @@ fn rig_with(r8: Arc<FakeR8>) -> Rig {
         gate,
         log,
         sleeper,
+        turn_id: Mutex::new("t1".to_owned()),
     }
 }
 
@@ -268,10 +271,10 @@ impl Rig {
                 cross_workspace: cross,
             })
             .unwrap();
-        self.guard.bind_pid(S, 4242);
     }
 
     fn turn(&self, id: &str, budget: u8) {
+        *self.turn_id.lock().unwrap() = id.to_owned();
         self.guard
             .begin_turn(
                 S,
@@ -288,14 +291,18 @@ impl Rig {
     }
 
     fn ask_q(&self, alias: &str, q: &str) -> ToolOut {
+        let turn = self.turn_id.lock().unwrap().clone();
         self.guard
-            .ask_genie(S, &json!({"workspace": alias, "question": q}))
+            .ask_genie_for(S, &turn, &json!({"workspace": alias, "question": q}))
     }
 
     /// Ask on its own thread.
     fn ask_bg(&self, alias: &'static str) -> std::thread::JoinHandle<ToolOut> {
         let g = Arc::clone(&self.guard);
-        std::thread::spawn(move || g.ask_genie(S, &json!({"workspace": alias, "question": Q})))
+        let turn = self.turn_id.lock().unwrap().clone();
+        std::thread::spawn(move || {
+            g.ask_genie_for(S, &turn, &json!({"workspace": alias, "question": Q}))
+        })
     }
 }
 
@@ -649,7 +656,7 @@ fn invalid_args_are_refused_before_anything_is_sent() {
         let id = format!("tt{n}");
         r.turn(&id, 20);
         for a in chunk {
-            let out = r.guard.ask_genie(S, a);
+            let out = r.guard.ask_genie_for(S, &id, a);
             assert_eq!(
                 (out.text.as_str(), out.is_error),
                 ("invalid_args", true),
@@ -684,7 +691,7 @@ fn an_ask_for_an_unknown_or_closed_session_is_run_stopped() {
     let r = rig();
     let out = r
         .guard
-        .ask_genie("nope", &json!({"workspace": "a", "question": "q"}));
+        .ask_genie_for("nope", "t1", &json!({"workspace": "a", "question": "q"}));
     assert_eq!(out.text, "run_stopped");
     r.session();
     r.turn("t1", 5);
@@ -1305,27 +1312,23 @@ fn call_events_follow_the_states_and_carry_counts_only() {
 // ---------- AC-2a.16: no content in Debug, events or errors ----------
 
 #[test]
-fn ac_2a_16_no_debug_output_event_or_refusal_holds_a_question_an_answer_or_a_secret() {
+fn ac_2a_16_no_debug_output_event_or_refusal_holds_a_question_or_an_answer() {
     let r = rig();
-    let secret = r
-        .guard
+    r.guard
         .open_session(SessionSpec {
             session_id: S.into(),
             catalog: catalog(),
             cross_workspace: false,
         })
         .unwrap();
-    r.guard.bind_pid(S, 4242);
     r.turn("t1", 5);
     let a = r.ask("sales");
     let b = r.ask("finance");
     let bad = r.ask_q("legal", Q);
     let call_id = val(&a)["callId"].as_str().unwrap().to_owned();
     let detail = r.guard.call_detail("t1", &call_id).unwrap();
-    let hex = hex_of(&secret.0);
     let mut shown = vec![
         format!("{:?}", r.guard),
-        format!("{:?}", secret),
         format!("{:?}", detail),
         format!("{:?}", r.guard.calls(S)),
         format!("{:?}", r.events.0.lock().unwrap()),
@@ -1338,16 +1341,10 @@ fn ac_2a_16_no_debug_output_event_or_refusal_holds_a_question_an_answer_or_a_sec
     shown.push(bad.text.clone());
     shown.push(b.text.clone());
     for (i, t) in shown.iter().enumerate() {
-        for canary in ["QUESTION-CANARY", "ANSWER-CANARY", "FINANCE-CANARY", &hex] {
+        for canary in ["QUESTION-CANARY", "ANSWER-CANARY", "FINANCE-CANARY"] {
             assert!(!t.contains(canary), "#{i} {canary} in {t}");
         }
     }
-    // The text block for the model has the agent workspace answer, and no secret.
-    assert!(!a.text.contains(&hex));
-}
-
-fn hex_of(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[test]
@@ -1365,435 +1362,4 @@ fn the_state_debug_shows_counts_only() {
         !call.contains("CANARY") && !call.contains("finance"),
         "{call}"
     );
-}
-
-// ---------- the socket and the shim (unix) ----------
-
-#[cfg(unix)]
-mod channel {
-    use std::io::{Cursor, Read, Write};
-    use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::agent_run::guard::channel::{
-        hex_decode, read_frame, socket_path, write_frame, MAX_FRAME,
-    };
-    use crate::agent_run::guard::peer::{own_parent_pid, own_uid, parent_pid, peer};
-    use crate::agent_run::guard::shim::{self, ShimOpts};
-
-    struct Wired {
-        r: Rig,
-        path: PathBuf,
-        secret: crate::agent_run::seam::RunSecret,
-        dir: PathBuf,
-    }
-
-    impl Drop for Wired {
-        fn drop(&mut self) {
-            self.r.guard.shutdown();
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    static N: AtomicUsize = AtomicUsize::new(0);
-
-    fn tmp() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "bgt-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::SeqCst)
-        ))
-    }
-
-    /// A guard with a live socket. The server PID is the parent of this process, so the peer
-    /// check sees the same relation as a shim under the app-server.
-    fn wired_with(uid: Option<u32>, server_pid: u32, r: Rig) -> Wired {
-        let dir = tmp();
-        let secret = r
-            .guard
-            .open_session(SessionSpec {
-                session_id: S.into(),
-                catalog: catalog(),
-                cross_workspace: false,
-            })
-            .unwrap();
-        r.guard.bind_pid(S, server_pid);
-        let path = match uid {
-            Some(u) => r.guard.listen_as(&dir, u).unwrap(),
-            None => r.guard.listen(&dir).unwrap(),
-        };
-        r.guard
-            .begin_turn(
-                S,
-                TurnSpec {
-                    turn_id: "t1".into(),
-                    budget: 5,
-                },
-            )
-            .unwrap();
-        Wired {
-            r,
-            path,
-            secret,
-            dir,
-        }
-    }
-
-    fn wired() -> Wired {
-        wired_with(None, own_parent_pid(), rig())
-    }
-
-    fn hello_frame(sid: &str, secret: &[u8]) -> Value {
-        json!({"hello": {"sessionId": sid, "secret": hex_of(secret)}})
-    }
-
-    /// Connect and send `hello`. `Ok(reply)` if the guard answered, `Err` if it closed.
-    fn connect(w: &Wired, hello: &Value) -> Result<(UnixStream, Value), ()> {
-        let mut s = UnixStream::connect(&w.path).map_err(|_| ())?;
-        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let _ = write_frame(&mut s, hello);
-        match read_frame(&mut s) {
-            Ok(Some(v)) => Ok((s, v)),
-            _ => Err(()),
-        }
-    }
-
-    #[test]
-    fn the_peer_and_its_parent_are_read_from_the_socket() {
-        let w = wired();
-        let (s, _) = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        let p = peer(&s).unwrap();
-        // The other end of this socket is the guard in this same process.
-        assert_eq!(p.pid, std::process::id());
-        assert_eq!(p.uid, own_uid());
-        assert_eq!(parent_pid(p.pid), Some(own_parent_pid()));
-        assert_eq!(parent_pid(u32::MAX - 1), None);
-    }
-
-    #[test]
-    fn ac_2a_14_a_good_hello_gets_the_tool_with_no_alias_enum() {
-        let w = wired();
-        let (mut s, v) = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["tool"]["name"], "ask_genie");
-        assert!(!v["tool"].to_string().contains("enum"));
-        write_frame(
-            &mut s,
-            &json!({"id": 1, "op": "call",
-            "args": {"workspace": "finance", "question": Q}}),
-        )
-        .unwrap();
-        let r = read_frame(&mut s).unwrap().unwrap();
-        assert_eq!(r["id"], 1);
-        assert_eq!(r["isError"], false);
-        assert!(!r["text"].as_str().unwrap().contains("FINANCE-CANARY"));
-    }
-
-    #[test]
-    fn ac_2a_14_a_wrong_secret_is_refused_with_no_reply() {
-        let w = wired();
-        let mut bad = w.secret.0;
-        bad[0] ^= 1;
-        assert!(connect(&w, &hello_frame(S, &bad)).is_err());
-        assert!(connect(&w, &hello_frame(S, &w.secret.0[..31])).is_err());
-        assert!(connect(&w, &json!({"hello": {"sessionId": S, "secret": "zz"}})).is_err());
-        assert!(connect(&w, &hello_frame("other-session", &w.secret.0)).is_err());
-        assert!(connect(&w, &json!({"nothello": 1})).is_err());
-        assert!(connect(&w, &json!("hello")).is_err());
-        // The right secret still works: the failures took no connection.
-        assert!(connect(&w, &hello_frame(S, &w.secret.0)).is_ok());
-    }
-
-    #[test]
-    fn ac_2a_14_a_peer_with_another_uid_is_refused() {
-        let w = wired_with(Some(own_uid() + 1), own_parent_pid(), rig());
-        assert!(connect(&w, &hello_frame(S, &w.secret.0)).is_err());
-    }
-
-    #[test]
-    fn ac_2a_14_a_peer_whose_parent_is_not_the_server_pid_is_refused() {
-        // The server PID of the session is this process itself, not its parent.
-        let w = wired_with(None, std::process::id(), rig());
-        assert!(connect(&w, &hello_frame(S, &w.secret.0)).is_err());
-        // No server PID bound at all.
-        let w2 = wired_with(None, 1, rig());
-        assert!(connect(&w2, &hello_frame(S, &w2.secret.0)).is_err());
-    }
-
-    #[test]
-    fn ac_2a_14_only_one_connection_per_session() {
-        let w = wired();
-        let first = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        assert!(connect(&w, &hello_frame(S, &w.secret.0)).is_err());
-        drop(first);
-        // After the first closes, the session may connect again.
-        eventually("the first connection is released", || {
-            connect(&w, &hello_frame(S, &w.secret.0)).is_ok()
-        });
-    }
-
-    #[test]
-    fn ac_2a_14_the_secret_is_valid_only_while_the_session_is_open() {
-        let w = wired();
-        let (mut s, _) = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        w.r.guard.end_turn("t1");
-        w.r.guard.close_session(S, false);
-        // The open connection is closed, and a new hello is refused.
-        let mut b = [0u8; 1];
-        assert_eq!(s.read(&mut b).unwrap_or(0), 0);
-        assert!(connect(&w, &hello_frame(S, &w.secret.0)).is_err());
-    }
-
-    #[test]
-    fn oversize_frames_close_the_connection() {
-        let w = wired();
-        let (mut s, _) = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        // A length over the cap, in the header alone.
-        s.write_all(&((MAX_FRAME as u32 + 1).to_be_bytes()))
-            .unwrap();
-        let mut b = [0u8; 1];
-        assert_eq!(s.read(&mut b).unwrap_or(0), 0);
-        // The writer refuses too.
-        let big = json!({"x": "y".repeat(MAX_FRAME)});
-        assert!(write_frame(&mut Vec::new(), &big).is_err());
-        // A first frame over the cap is refused with no reply.
-        let mut s2 = UnixStream::connect(&w.path).unwrap();
-        s2.write_all(&((MAX_FRAME as u32 + 1).to_be_bytes()))
-            .unwrap();
-        let mut b = [0u8; 1];
-        assert_eq!(s2.read(&mut b).unwrap_or(0), 0);
-    }
-
-    #[test]
-    fn an_unknown_op_closes_the_connection() {
-        let w = wired();
-        let (mut s, _) = connect(&w, &hello_frame(S, &w.secret.0)).unwrap();
-        write_frame(&mut s, &json!({"id": 1, "op": "shell"})).unwrap();
-        let mut b = [0u8; 1];
-        assert_eq!(s.read(&mut b).unwrap_or(0), 0);
-    }
-
-    #[test]
-    fn the_socket_is_private_and_a_stale_one_is_replaced() {
-        let dir = tmp();
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.sock"), b"stale").unwrap();
-        let r = rig();
-        let path = r.guard.listen(&dir).unwrap();
-        assert_eq!(path, dir.join("a.sock"));
-        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(&dir), 0o700);
-        r.guard.shutdown();
-        assert!(!path.exists(), "unlinked at stop");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_long_path_moves_under_the_temp_dir() {
-        let long = PathBuf::from(format!("/tmp/{}", "d".repeat(120)));
-        let p = socket_path(&long);
-        assert!(p.as_os_str().len() <= 100, "{p:?}");
-        assert!(p.starts_with(std::env::temp_dir()));
-        assert!(p
-            .to_string_lossy()
-            .contains(&format!("bottle-{}", own_uid())));
-        assert_eq!(
-            socket_path(&PathBuf::from("/tmp/x")),
-            PathBuf::from("/tmp/x/a.sock")
-        );
-    }
-
-    #[test]
-    fn hex_round_trips_and_refuses_bad_input() {
-        assert_eq!(hex_decode(&hex_of(&[0, 15, 255])), Some(vec![0, 15, 255]));
-        assert_eq!(hex_decode("abc"), None);
-        assert_eq!(hex_decode("zz"), None);
-        assert_eq!(hex_decode("é1"), None);
-    }
-
-    // ---- the shim, in this process, on the real socket ----
-
-    #[derive(Clone, Default)]
-    struct Out(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Out {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn run_shim(w: &Wired, input: &str) -> Vec<Value> {
-        let s = UnixStream::connect(&w.path).unwrap();
-        let out = Out::default();
-        let code = shim::run_with(
-            s,
-            S,
-            &hex_of(&w.secret.0),
-            Cursor::new(input.as_bytes().to_vec()),
-            out.clone(),
-            ShimOpts {
-                exit_on_socket_eof: false,
-                drain: Duration::from_secs(10),
-            },
-        );
-        assert_eq!(code, 0);
-        let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
-        text.lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
-    }
-
-    fn rpc(id: u64, method: &str, params: Value) -> String {
-        format!(
-            "{}\n",
-            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-        )
-    }
-
-    #[test]
-    fn the_shim_speaks_mcp_and_forwards_ask_genie() {
-        let w = wired();
-        let mut input = String::new();
-        input += &rpc(1, "initialize", json!({"protocolVersion": "2025-06-18"}));
-        input += &format!(
-            "{}\n",
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        );
-        input += &rpc(2, "ping", json!({}));
-        input += &rpc(3, "tools/list", json!({}));
-        input += &rpc(
-            4,
-            "tools/call",
-            json!({"name": "ask_genie",
-            "arguments": {"workspace": "finance", "question": Q}}),
-        );
-        input += &rpc(
-            5,
-            "tools/call",
-            json!({"name": "ask_genie",
-            "arguments": {"workspace": "ops", "question": Q}}),
-        );
-        input += &rpc(6, "tools/call", json!({"name": "shell", "arguments": {}}));
-        input += &rpc(7, "resources/list", json!({}));
-        input += "not json\n";
-        let out = run_shim(&w, &input);
-        let by = |id: u64| {
-            out.iter()
-                .find(|v| v["id"] == id)
-                .unwrap_or_else(|| panic!("id {id}"))
-        };
-        assert_eq!(by(1)["result"]["protocolVersion"], "2025-06-18");
-        assert!(by(1)["result"]["capabilities"]["tools"].is_object());
-        assert_eq!(by(2)["result"], json!({}));
-        let tools = &by(3)["result"]["tools"];
-        assert_eq!(tools.as_array().unwrap().len(), 1);
-        assert_eq!(tools[0]["name"], "ask_genie");
-        assert!(!tools.to_string().contains("enum"));
-        for id in [4, 5] {
-            let r = &by(id)["result"];
-            assert_eq!(r["isError"], false, "{r}");
-            assert!(!r["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("FINANCE-CANARY"));
-        }
-        assert_eq!(by(6)["error"]["code"], -32602);
-        assert_eq!(by(7)["error"]["code"], -32601);
-        assert!(out.iter().any(|v| v["error"]["code"] == -32700));
-        assert_eq!(w.r.r8.count("genie_ask"), 2, "both calls ran");
-    }
-
-    #[test]
-    fn the_shim_caps_a_stdin_line_at_the_frame_cap() {
-        let w = wired();
-        let mut input = "x".repeat(MAX_FRAME + 10);
-        input.push('\n');
-        input += &rpc(1, "ping", json!({}));
-        let out = run_shim(&w, &input);
-        assert!(out.iter().any(|v| v["error"]["code"] == -32600));
-        // The line after the long one still works.
-        assert!(out.iter().any(|v| v["id"] == 1 && v["result"] == json!({})));
-    }
-
-    #[test]
-    fn the_shim_refuses_a_call_over_the_frame_cap() {
-        let w = wired();
-        let big = "q".repeat(MAX_FRAME);
-        let input = rpc(
-            1,
-            "tools/call",
-            json!({"name": "ask_genie",
-            "arguments": {"workspace": "finance", "question": big}}),
-        );
-        // The line is over the cap, so the shim refuses it before the socket.
-        let out = run_shim(&w, &input);
-        assert!(out.iter().any(|v| v["error"].is_object()), "{out:?}");
-        assert_eq!(w.r.r8.count("genie_ask"), 0);
-    }
-
-    #[test]
-    fn the_shim_exits_when_the_hello_is_refused() {
-        let w = wired();
-        let s = UnixStream::connect(&w.path).unwrap();
-        let code = shim::run_with(
-            s,
-            S,
-            &hex_of(&[9u8; 32]),
-            Cursor::new(Vec::new()),
-            Out::default(),
-            ShimOpts {
-                exit_on_socket_eof: false,
-                drain: Duration::ZERO,
-            },
-        );
-        assert_eq!(code, 1);
-    }
-
-    #[test]
-    fn a_cancelled_request_gets_no_response() {
-        let w = wired();
-        w.r.sleeper.hold.store(true, Ordering::SeqCst);
-        let mut input = rpc(
-            5,
-            "tools/call",
-            json!({"name": "ask_genie",
-            "arguments": {"workspace": "ops", "question": Q}}),
-        );
-        input += &format!(
-            "{}\n",
-            json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
-            "params": {"requestId": 5}})
-        );
-        input += &rpc(6, "ping", json!({}));
-        let out = run_shim(&w, &input);
-        assert!(out.iter().any(|v| v["id"] == 6));
-        assert!(!out.iter().any(|v| v["id"] == 5), "{out:?}");
-        // The turn stop, not the cancel notification, ends the Genie call.
-        w.r.guard.stop_turn("t1", StopWhy::User);
-        w.r.sleeper.hold.store(false, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn the_shim_env_has_the_socket_the_session_and_the_secret_in_hex() {
-        let secret = crate::agent_run::seam::RunSecret([0xab; 32]);
-        let env = shim::env_pairs(std::path::Path::new("/tmp/x/a.sock"), "s-9", &secret);
-        let get = |k: &str| env.iter().find(|(n, _)| *n == k).unwrap().1.clone();
-        assert_eq!(get(shim::ENV_SOCKET), "/tmp/x/a.sock");
-        assert_eq!(get(shim::ENV_SESSION), "s-9");
-        assert_eq!(hex_decode(&get(shim::ENV_SECRET)).unwrap(), vec![0xab; 32]);
-    }
-
-    #[test]
-    fn a_read_frame_of_clean_eof_is_none_and_a_cut_frame_is_an_error() {
-        assert!(read_frame(&mut Cursor::new(Vec::new())).unwrap().is_none());
-        assert!(read_frame(&mut Cursor::new(vec![0, 0, 0, 9, b'{'])).is_err());
-        assert!(read_frame(&mut Cursor::new(vec![0, 0, 0, 2, b'n', b'o'])).is_err());
-    }
 }

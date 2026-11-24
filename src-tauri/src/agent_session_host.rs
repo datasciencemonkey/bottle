@@ -1,58 +1,58 @@
-//! Slice 2a (the MOG agent on one live Genie Code session): the host side of the
-//! `genie_code_*`, `agent_turn_*` and `agent_session_*` commands.
+//! ADR 0122: the host side of the `orchestrator_*`, `agent_turn_*` and `agent_session_*`
+//! commands.
 //!
 //! [`AgentSessionHost`] is managed from the start, so `ipc::route_from` always finds it. [`install`]
-//! fills it with the one `mog_core::agent_run::session::SessionHost`: the Genie Code pin check, the
-//! one app-server process, the turn queue, the deadlines and the wipe hook. Before `install` runs,
-//! and when the app data folder is missing, every command answers `host_failed`.
+//! fills it with the one `mog_core::agent_run::orchestrator::OrchestratorHost`: the ask loop on
+//! the chat client of the home AI Gateway, the turn queue, the deadlines and the wipe hook. Before
+//! `install` runs, and when the guard is missing, every command answers `host_failed`.
 //!
-//! Two parts come from the guard lane (R2) and are taken from managed state when they exist:
-//! `Arc<dyn SessionGuard>` and `Arc<dyn ShimProvider>`. Without a guard, `open_session` fails and
-//! no session starts: the agent is closed, never open without its guard. There is no network
-//! source in Rust yet, so the network watch is always online; a real offline shows as the
-//! "waiting for network" error of the server, which interrupts the turn at once (AC-2a.10c).
+//! Two parts come from earlier steps and are taken from managed state: the `ask_genie` guard
+//! ([`install_guard`]) and the `GatewayChatClient` of [`crate::model_host`]. Without the guard no
+//! host is built: the agent is closed, never open without its guard. There is no network source in
+//! Rust yet, so the network watch is always online; a real offline shows as the `offline` error
+//! of the chat client.
 
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::Manager;
 
-use mog_core::agent_run::seam::{
-    AgentEvent, CallRecord, NetWatch, RunEvents, RunSecret, SessionGuard, SessionSpec, StopWhy,
-    TurnSpec, SHIM_ARG,
+use mog_core::agent_run::orchestrator::{
+    OrchConfig, OrchDeps, OrchEnv, OrchGuard, OrchStatus, OrchestratorHost,
 };
-use mog_core::agent_run::session::approval::{AskLatch, TicketApprovals};
-use mog_core::agent_run::session::genie_bin::GenieBin;
-use mog_core::agent_run::session::install::{self, Fetcher, INSTALL_SOURCE};
-use mog_core::agent_run::session::spawn::ProcessSpawner;
-use mog_core::agent_run::session::{
-    AgentEnv, Installer, PreflightFail, SessionConfig, SessionDeps, SessionHost, ShimLaunch,
-    ShimProvider,
-};
+use mog_core::agent_run::seam::{AgentEvent, NetWatch, RunEvents};
 use mog_core::clock::{SystemClock, SystemWallClock};
 use mog_core::error::{CoreError, CoreResult};
 use mog_core::ipc::events;
 use mog_core::ipc_gateway::GatewayComponents;
-use mog_core::types::{AgentProfileState, AgentTurnCall, TokenState};
+use mog_core::model_gateway::client::{CANCELLED, OFFLINE, SIGNED_OUT};
+use mog_core::model_gateway::invoke::{AbandonOnWipe, ModelInvokeComponent};
+use mog_core::model_gateway::models::{orchestrator_status, OrchestratorStatus};
+use mog_core::model_gateway::{ChatClient, ChatRequest};
+use mog_core::types::TokenState;
 use mog_core::wipe::AgentWipeSlot;
-use mog_core::workspaces::{ProfileSource, SignInSource};
+use mog_core::workspaces::SignInSource;
 
-use crate::cli_host::SharedCli;
 use crate::ipc::BrainChannel;
 use crate::mcp_host::McpHost;
-use crate::profiles_host::ProfilesHost;
+use crate::model_host::InstallFailure;
 use crate::workspaces_host::WorkspacesHost;
+
+/// How long the code of a failed chat call counts for the status. After this, the next ask tries
+/// the model again.
+const ERROR_TTL: Duration = Duration::from_secs(30);
 
 /// The managed agent component.
 #[derive(Debug, Default)]
 pub struct AgentSessionHost {
-    inner: OnceLock<Arc<SessionHost>>,
+    inner: OnceLock<Arc<OrchestratorHost>>,
 }
 
 impl AgentSessionHost {
-    /// The session host, once [`install`] has built it.
-    pub fn session(&self) -> Option<&Arc<SessionHost>> {
+    /// The orchestrator host, once [`install`] has built it.
+    pub fn session(&self) -> Option<&Arc<OrchestratorHost>> {
         self.inner.get()
     }
 }
@@ -64,77 +64,6 @@ impl GatewayComponents for AgentSessionHost {
             None => Err(CoreError::IpcRefused {
                 code: "host_failed",
             }),
-        }
-    }
-}
-
-/// The guard that is used when the guard lane is not wired: it never opens a session.
-struct UnwiredGuard;
-
-impl SessionGuard for UnwiredGuard {
-    fn open_session(&self, _: SessionSpec) -> CoreResult<RunSecret> {
-        Err(CoreError::Unavailable {
-            component: "agent_session",
-            reason: "guard_not_wired",
-        })
-    }
-    fn bind_pid(&self, _: &str, _: u32) {}
-    fn begin_turn(&self, _: &str, _: TurnSpec) -> CoreResult<()> {
-        Err(CoreError::Unavailable {
-            component: "agent_session",
-            reason: "guard_not_wired",
-        })
-    }
-    fn stop_turn(&self, _: &str, _: StopWhy) {}
-    fn end_turn(&self, _: &str) {}
-    fn tainted(&self, _: &str) -> bool {
-        false
-    }
-    fn calls(&self, _: &str) -> Vec<CallRecord> {
-        Vec::new()
-    }
-    fn call_detail(&self, _: &str, _: &str) -> Option<AgentTurnCall> {
-        None
-    }
-    fn close_session(&self, _: &str, _: bool) {}
-    fn wipe_all(&self) {}
-}
-
-/// The shim command when the guard lane gives none: this executable with the shim argument.
-struct DefaultShim;
-
-impl ShimProvider for DefaultShim {
-    fn launch(&self, session_id: &str, secret: &RunSecret) -> ShimLaunch {
-        let hex: String = secret.0.iter().map(|b| format!("{b:02x}")).collect();
-        ShimLaunch {
-            command: std::env::current_exe().unwrap_or_default(),
-            args: vec![SHIM_ARG.to_owned()],
-            env: vec![
-                ("BOTTLE_AGENT_SESSION".to_owned(), session_id.to_owned()),
-                ("BOTTLE_AGENT_SECRET".to_owned(), hex),
-                // The socket path comes from the guard (`shim::env_pairs`) in the real wiring.
-            ],
-        }
-    }
-}
-
-/// The shim command of the real guard: this executable with the shim argument, and the socket,
-/// the session and the secret in the environment (`guard::shim::env_pairs`).
-#[cfg(unix)]
-struct GuardShim {
-    socket: PathBuf,
-}
-
-#[cfg(unix)]
-impl ShimProvider for GuardShim {
-    fn launch(&self, session_id: &str, secret: &RunSecret) -> ShimLaunch {
-        ShimLaunch {
-            command: std::env::current_exe().unwrap_or_default(),
-            args: vec![SHIM_ARG.to_owned()],
-            env: mog_core::agent_run::guard::shim::env_pairs(&self.socket, session_id, secret)
-                .into_iter()
-                .map(|(k, v)| (k.to_owned(), v))
-                .collect(),
         }
     }
 }
@@ -167,119 +96,104 @@ impl RunEvents for BrainEvents {
     }
 }
 
-/// R5, R6 and T7 as the session host sees them.
+/// The code of the last failed chat call, with the model and the time, for the status. It holds
+/// no prompt, no reply and no profile.
+#[derive(Debug, Default)]
+struct LastError(Mutex<Option<(String, &'static str, Instant)>>);
+
+impl LastError {
+    fn record(&self, model: &str, result: &CoreResult<Value>, now: Instant) {
+        let next = match result {
+            Ok(_) => None,
+            // A stop or a wipe is not a failure of the gateway.
+            Err(e) if e.code() == CANCELLED => return,
+            Err(e) => Some((model.to_owned(), e.code(), now)),
+        };
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    }
+
+    /// The code of the last failure of `model`, if it is newer than [`ERROR_TTL`].
+    fn get(&self, model: &str, now: Instant) -> Option<&'static str> {
+        let g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let (m, code, at) = g.as_ref()?;
+        (m == model && now.saturating_duration_since(*at) < ERROR_TTL).then_some(*code)
+    }
+}
+
+/// The chat client of the ask loop, and a note of how each call ended (for the status).
+struct NotingChat {
+    inner: Arc<dyn ChatClient>,
+    last: Arc<LastError>,
+}
+
+impl ChatClient for NotingChat {
+    fn chat(&self, req: ChatRequest<'_>) -> CoreResult<Value> {
+        let model = req.model.to_owned();
+        let out = self.inner.chat(req);
+        self.last.record(&model, &out, Instant::now());
+        out
+    }
+}
+
+/// The chat client when [`crate::model_host::install`] failed: every call is `offline`.
+struct NoChat;
+
+impl ChatClient for NoChat {
+    fn chat(&self, _: ChatRequest<'_>) -> CoreResult<Value> {
+        Err(CoreError::Unavailable {
+            component: "agent_session",
+            reason: OFFLINE,
+        })
+    }
+}
+
+/// The status of the orchestrator: the sign-in state of the home profile and the code of the last
+/// chat call. It makes no model call.
 struct HostEnv {
-    cli: SharedCli,
-    profiles: Arc<dyn ProfileSource>,
     sign_in: Option<Arc<dyn SignInSource>>,
+    last: Arc<LastError>,
+    /// The chat client was not built, so no call can work.
+    no_client: bool,
 }
 
-impl AgentEnv for HostEnv {
-    fn cli_path(&self) -> Option<PathBuf> {
-        use mog_core::cli_runner::CliRunner;
-        self.cli.0.resolve().ok()
-    }
-
-    fn var(&self, name: &str) -> Option<String> {
-        std::env::var(name).ok()
-    }
-
-    fn preflight(&self, profile: &str) -> Result<(), PreflightFail> {
-        let p = self
-            .profiles
-            .profiles(false)
-            .ok()
-            .and_then(|l| l.into_iter().find(|p| p.name == profile))
-            .ok_or(PreflightFail::Missing)?;
-        // Only OAuth U2M through the Databricks CLI (plan A3.1).
-        if !p.supported || p.auth_type != "databricks-cli" {
-            return Err(PreflightFail::NotU2m);
-        }
-        let Some(source) = self.sign_in.clone() else {
-            return Err(PreflightFail::Offline);
+impl HostEnv {
+    fn check(&self, profile: &str, model: &str, now: Instant) -> OrchStatus {
+        let last = if self.no_client {
+            Some(OFFLINE)
+        } else if self.sign_in.as_ref().map(|s| s.state(profile)) == Some(TokenState::LoginRequired)
+        {
+            Some(SIGNED_OUT)
+        } else {
+            self.last.get(model, now)
         };
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (name, host) = (profile.to_owned(), p.host.clone());
-        std::thread::spawn(move || {
-            let _ = tx.send(source.probe(&name, &host));
-        });
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(CoreError::Unavailable {
-                reason: "login_required" | "auth_expired" | "token_unusable",
-                ..
-            })) => Err(PreflightFail::SignedOut),
-            Ok(Err(_)) | Err(_) => Err(PreflightFail::Offline),
-        }
-    }
-
-    fn profile_state(&self, profile: &str) -> AgentProfileState {
-        let Some(p) = self
-            .profiles
-            .profiles(false)
-            .ok()
-            .and_then(|l| l.into_iter().find(|p| p.name == profile))
-        else {
-            return AgentProfileState::Missing;
-        };
-        if !p.supported || p.auth_type != "databricks-cli" {
-            return AgentProfileState::NotU2m;
-        }
-        match self.sign_in.as_ref().map(|s| s.state(profile)) {
-            Some(TokenState::LoginRequired) => AgentProfileState::SignedOut,
-            _ => AgentProfileState::Ready,
+        match orchestrator_status(Some(profile), Some(model), last) {
+            OrchestratorStatus::Ready => OrchStatus::Ready,
+            OrchestratorStatus::NoHome => OrchStatus::NoHome,
+            OrchestratorStatus::SignedOut => OrchStatus::SignedOut,
+            OrchestratorStatus::NoModel => OrchStatus::NoModel,
+            OrchestratorStatus::Unreachable => OrchStatus::Unreachable,
         }
     }
 }
 
-/// The install is closed until the owner names the official source (`pin.rs` holds no URL).
-struct PinnedInstaller {
-    dir: PathBuf,
-}
-
-struct NoFetch;
-
-impl Fetcher for NoFetch {
-    fn fetch(&self, _: &str, _: usize) -> std::io::Result<Vec<u8>> {
-        Err(std::io::Error::other("no install source"))
+impl OrchEnv for HostEnv {
+    fn probe(&self, profile: &str, model: &str) -> OrchStatus {
+        self.check(profile, model, Instant::now())
     }
 }
 
-impl Installer for PinnedInstaller {
-    fn install(&self) -> Result<(), install::InstallError> {
-        let want = mog_core::agent_run::pin::pinned_digest(
-            mog_core::agent_run::session::genie_bin::current_target(),
-            "genie",
-        )
-        .ok_or(install::InstallError::Failed)?;
-        install::install(&NoFetch, INSTALL_SOURCE, want, &self.dir).map(|_| ())
-    }
-}
-
-/// The session config under `dir` (the app local data dir).
-pub fn config_in(dir: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        home: dir.join("genie-home"),
-        tmp_root: std::env::temp_dir(),
-        pid_file: dir.join("agent-session.pid"),
-        tick: std::time::Duration::from_secs(1),
-    }
-}
-
-/// Build the `ask_genie` guard (R2) on the one R8, the workspace gate and the brain events, start
-/// its socket under `dir`, and manage the guard and its [`ShimProvider`]. [`install`] takes them
-/// from managed state. If R8, the workspace host or the socket is missing, nothing is managed:
-/// the session host then has no guard and no session opens (the agent is closed, not open).
-#[cfg(unix)]
+/// Build the `ask_genie` guard (R2) on the one R8, the workspace gate and the brain events, and
+/// manage it. [`install`] takes it from managed state. If R8 or the workspace host is missing,
+/// nothing is managed: the host then has no guard and is not built (the agent is closed, not
+/// open).
 pub fn install_guard(handle: &tauri::AppHandle<tauri::Wry>) {
     use mog_core::agent_guard::AuditActionLog;
     use mog_core::agent_run::guard::session_log::SessionUuidLog;
     use mog_core::audit::{AuditLog, AuditRetention, MemoryAuditStore};
 
-    let (Some(mcp), Some(ws), Ok(dir)) = (
+    let (Some(mcp), Some(ws)) = (
         handle.try_state::<McpHost>(),
         handle.try_state::<WorkspacesHost>(),
-        handle.path().app_local_data_dir(),
     ) else {
         return;
     };
@@ -294,50 +208,34 @@ pub fn install_guard(handle: &tauri::AppHandle<tauri::Wry>) {
         Arc::new(BrainEvents(handle.clone())),
         Arc::new(SessionUuidLog(Arc::new(log))),
     );
-    let Ok(socket) = guard.listen(&dir.join("agent")) else {
-        return;
-    };
-    let session_guard: Arc<dyn SessionGuard> = guard.clone();
+    let orch_guard: Arc<dyn OrchGuard> = guard.clone();
     handle.manage(guard);
-    handle.manage(session_guard);
-    let shim: Arc<dyn ShimProvider> = Arc::new(GuardShim { socket });
-    handle.manage(shim);
+    handle.manage(orch_guard);
 }
 
-/// Build the session host and fill the managed [`AgentSessionHost`]. [`crate::cli_host::install`],
-/// [`crate::profiles_host::install`], [`crate::workspaces_host::install`] and
-/// [`crate::mcp_host::install`] run first. Without them, or without an app data folder, the host
+/// Build the orchestrator host and fill the managed [`AgentSessionHost`].
+/// [`crate::workspaces_host::install`], [`crate::mcp_host::install`] and
+/// [`crate::model_host::install`] run first. Without the workspace host or the guard the host
 /// stays empty and the commands answer `host_failed`.
 pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
-    let (Some(host), Some(ws), Some(cli), Some(t7), Ok(dir)) = (
+    let (Some(host), Some(ws), Some(guard)) = (
         handle.try_state::<AgentSessionHost>(),
         handle.try_state::<WorkspacesHost>(),
-        handle.try_state::<SharedCli>(),
-        handle.try_state::<ProfilesHost>(),
-        handle.path().app_local_data_dir(),
+        handle.try_state::<Arc<dyn OrchGuard>>(),
     ) else {
         return;
     };
-    let cfg = config_in(&dir);
-    let bin_dir = dir.join("bin");
-    let genie = Arc::new(GenieBin::system(
-        Some(bin_dir.clone()),
-        handle.path().home_dir().ok(),
-        &std::env::var("PATH").unwrap_or_default(),
-    ));
-    // At app start: kill a server that an earlier Bottle left, and delete GENIE_HOME.
-    let known = genie.check(false).path;
-    SessionHost::sweep_at_start(&cfg, known.as_deref());
-    let guard: Arc<dyn SessionGuard> = handle
-        .try_state::<Arc<dyn SessionGuard>>()
-        .map(|g| Arc::clone(g.inner()))
-        .unwrap_or_else(|| Arc::new(UnwiredGuard));
-    let shim: Arc<dyn ShimProvider> = handle
-        .try_state::<Arc<dyn ShimProvider>>()
-        .map(|s| Arc::clone(s.inner()))
-        .unwrap_or_else(|| Arc::new(DefaultShim));
+    let last = Arc::new(LastError::default());
+    let client: Option<Arc<dyn ChatClient>> = handle
+        .try_state::<Arc<mog_core::model_gateway::client::GatewayChatClient>>()
+        .map(|c| Arc::clone(c.inner()) as Arc<dyn ChatClient>);
+    let no_client = client.is_none() || handle.try_state::<InstallFailure>().is_some();
+    let chat: Arc<dyn ChatClient> = Arc::new(NotingChat {
+        inner: client.unwrap_or_else(|| Arc::new(NoChat)),
+        last: Arc::clone(&last),
+    });
     let latch = handle
-        .try_state::<Arc<AskLatch>>()
+        .try_state::<Arc<mog_core::agent_run::orchestrator::approval::AskLatch>>()
         .map(|l| Arc::clone(l.inner()))
         .unwrap_or_default();
     let tickets = handle
@@ -345,43 +243,54 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
         .map(|t| Arc::clone(t.inner()))
         .unwrap_or_default();
     let sign_in = handle.try_state::<McpHost>().map(|m| m.sign_in_source());
-    let deps = SessionDeps {
-        guard,
+    let deps = OrchDeps {
+        guard: Arc::clone(guard.inner()),
+        chat,
         net: Arc::new(AlwaysOnline),
         events: Arc::new(BrainEvents(handle.clone())),
         clock: Arc::new(SystemClock::new()),
         wall: Arc::new(SystemWallClock),
-        spawner: Arc::new(ProcessSpawner),
         workspaces: ws.view(),
-        approvals: Arc::new(TicketApprovals {
-            latch,
-            tickets,
-            now_ms: Arc::new(crate::memory_host::now_ms),
-        }),
+        approvals: Arc::new(
+            mog_core::agent_run::orchestrator::approval::TicketApprovals {
+                latch,
+                tickets,
+                now_ms: Arc::new(crate::memory_host::now_ms),
+            },
+        ),
         env: Arc::new(HostEnv {
-            cli: (*cli).clone(),
-            profiles: t7.0.clone(),
             sign_in,
+            last,
+            no_client,
         }),
-        shim,
-        binary: genie,
-        installer: Arc::new(PinnedInstaller { dir: bin_dir }),
     };
-    let session = SessionHost::new(deps, cfg);
-    // Wipe ends the session first (plan A3.7). The slot is managed by `consent_host`.
+    // `OrchestratorHost::new` sets the refusal hook of the guard: the third refusal of a turn
+    // interrupts it (ADR 0119).
+    let session = OrchestratorHost::new(
+        deps,
+        OrchConfig {
+            tick: Duration::from_secs(1),
+        },
+    );
+    // Wipe ends the session first, and it abandons the `model_invoke` calls in flight while it
+    // runs. The slot is managed by `consent_host`.
     if let Some(slot) = handle.try_state::<Arc<AgentWipeSlot>>() {
-        slot.bind(session.clone());
-    }
-    // The third refusal of a turn interrupts it (ADR 0119).
-    #[cfg(unix)]
-    if let Some(g) = handle.try_state::<Arc<mog_core::agent_run::guard::AgentGuard>>() {
-        g.set_refusal_hook(session.refusal_hook());
+        match handle.try_state::<Arc<ModelInvokeComponent>>() {
+            Some(model) => slot.bind(Arc::new(AbandonOnWipe::new(
+                session.clone(),
+                model.stop_flag(),
+            ))),
+            None => slot.bind(session.clone()),
+        }
     }
     let _ = host.inner.set(session);
 }
 
-/// On quit: end the session, kill the process group and delete GENIE_HOME.
+/// On quit: abandon the `model_invoke` calls in flight, and end the session.
 pub fn shutdown(app: &tauri::AppHandle<tauri::Wry>) {
+    if let Some(model) = app.try_state::<Arc<ModelInvokeComponent>>() {
+        model.stop_flag().store(true, Ordering::SeqCst);
+    }
     if let Some(h) = app.try_state::<AgentSessionHost>() {
         if let Some(s) = h.session() {
             s.shutdown();
@@ -392,12 +301,40 @@ pub fn shutdown(app: &tauri::AppHandle<tauri::Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mog_core::model_gateway::client::{MODEL_NOT_FOUND, TIMEOUT};
+
+    struct Tokens(TokenState);
+
+    impl SignInSource for Tokens {
+        fn state(&self, _: &str) -> TokenState {
+            self.0
+        }
+        fn probe(&self, _: &str, _: &str) -> CoreResult<()> {
+            Ok(())
+        }
+    }
+
+    fn env(state: TokenState, last: &Arc<LastError>) -> HostEnv {
+        HostEnv {
+            sign_in: Some(Arc::new(Tokens(state))),
+            last: Arc::clone(last),
+            no_client: false,
+        }
+    }
+
+    fn fail(code: &'static str) -> CoreResult<Value> {
+        Err(CoreError::Unavailable {
+            component: "t",
+            reason: code,
+        })
+    }
 
     #[test]
     fn an_empty_host_answers_host_failed_for_each_command() {
         let h = AgentSessionHost::default();
         for c in [
-            "genie_code_status",
+            "orchestrator_status",
+            "orchestrator_models",
             "agent_turn_submit",
             "agent_session_state",
         ] {
@@ -413,47 +350,58 @@ mod tests {
     }
 
     #[test]
-    fn with_no_guard_wired_no_session_can_open() {
-        let g = UnwiredGuard;
-        let spec = SessionSpec {
-            session_id: "s".into(),
-            catalog: vec![],
-            cross_workspace: false,
+    fn the_status_is_ready_with_no_failure_and_signed_out_from_the_token_state() {
+        let last = Arc::new(LastError::default());
+        let now = Instant::now();
+        let m = "system.ai.claude-haiku-5-5";
+        assert_eq!(
+            env(TokenState::Valid, &last).check("home", m, now),
+            OrchStatus::Ready
+        );
+        assert_eq!(
+            env(TokenState::Unknown, &last).check("home", m, now),
+            OrchStatus::Ready
+        );
+        assert_eq!(
+            env(TokenState::LoginRequired, &last).check("home", m, now),
+            OrchStatus::SignedOut
+        );
+    }
+
+    #[test]
+    fn the_status_follows_the_last_failure_of_that_model_and_it_expires() {
+        let last = Arc::new(LastError::default());
+        let e = env(TokenState::Valid, &last);
+        let (m, other) = ("system.ai.a", "system.ai.b");
+        let t0 = Instant::now();
+        last.record(m, &fail(MODEL_NOT_FOUND), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::NoModel);
+        // A model change does not inherit the failure of the old model.
+        assert_eq!(e.check("home", other, t0), OrchStatus::Ready);
+        // After the time to live, the next ask tries the model again.
+        assert_eq!(
+            e.check("home", m, t0 + ERROR_TTL + Duration::from_secs(1)),
+            OrchStatus::Ready
+        );
+        last.record(m, &fail(TIMEOUT), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Unreachable);
+        // A stop is not a failure and keeps the note. A good call clears it.
+        last.record(m, &fail(CANCELLED), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Unreachable);
+        last.record(m, &Ok(Value::Null), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Ready);
+    }
+
+    #[test]
+    fn with_no_chat_client_the_status_is_unreachable() {
+        let e = HostEnv {
+            sign_in: None,
+            last: Arc::new(LastError::default()),
+            no_client: true,
         };
-        assert!(g.open_session(spec).is_err());
-        assert!(g
-            .begin_turn(
-                "s",
-                TurnSpec {
-                    turn_id: "t".into(),
-                    budget: 5
-                }
-            )
-            .is_err());
-        assert!(!g.tainted("s"));
-    }
-
-    #[test]
-    fn the_default_shim_gives_the_shim_arg_and_a_hex_secret_for_the_environment_only() {
-        let secret = RunSecret([0xab; 32]);
-        let l = DefaultShim.launch("sess", &secret);
-        assert_eq!(l.args, vec![SHIM_ARG.to_owned()]);
-        let s = l
-            .env
-            .iter()
-            .find(|(k, _)| k == "BOTTLE_AGENT_SECRET")
-            .unwrap();
-        assert_eq!(s.1, "ab".repeat(32));
-        // `Debug` never shows a value of the environment.
-        assert!(!format!("{l:?}").contains(&"ab".repeat(32)));
-        assert!(format!("{l:?}").contains("BOTTLE_AGENT_SECRET"));
-    }
-
-    #[test]
-    fn the_session_config_keeps_genie_home_and_the_pid_file_apart() {
-        let c = config_in(std::path::Path::new("/data"));
-        assert_eq!(c.home, PathBuf::from("/data/genie-home"));
-        // The pid file is outside GENIE_HOME, so a delete of the home never removes the trace.
-        assert!(!c.pid_file.starts_with(&c.home));
+        assert_eq!(
+            e.check("home", "system.ai.a", Instant::now()),
+            OrchStatus::Unreachable
+        );
     }
 }

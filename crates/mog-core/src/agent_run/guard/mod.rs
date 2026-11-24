@@ -1,5 +1,5 @@
-//! The `ask_genie` guard (R2): the Rust guardrail behind the single MCP tool that the one Genie
-//! Code session may call, the stdio shim, and the channel between them.
+//! The `ask_genie` guard (R2): the Rust guardrail behind the one tool that the orchestrator model
+//! may call.
 //!
 //! - [`ledger`]: the session ledger and [`SessionGuard`] (`seam.rs`): sessions, turns, the
 //!   per-turn budget, the session call log, the session taint, the stop rules.
@@ -7,12 +7,6 @@
 //! - [`genie_poll`]: the Rust poll loop (G-POLL delays, 30 s cap).
 //! - [`receipt`]: receipts and text blocks (quarantine, D1 off).
 //! - [`session_log`]: the session id as a UUID, for the real audit log.
-//! - [`channel`], [`peer`] (unix): the app socket and its authentication.
-//! - [`shim`] (unix): the stdio MCP shim that Genie Code starts once per server process.
-//!
-//! One shim per server process. `hello{sessionId, secret}` binds it to the session. The parent of
-//! the peer process must be the app-server PID of that session (ADR in
-//! `docs/adr/*-bottle-mcp-shim-and-guardrail.md`).
 //!
 //! No type here puts a question, an answer, a secret or a token into `Debug` output, a log line
 //! or an error. The module writes no log line.
@@ -28,16 +22,10 @@ use super::seam::GuardDeps;
 use crate::mcp_transport::agent_asks::AgentAsks;
 
 pub mod ask;
-#[cfg(unix)]
-pub mod channel;
 pub mod genie_poll;
 mod ledger;
-#[cfg(unix)]
-pub mod peer;
 pub mod receipt;
 pub mod session_log;
-#[cfg(unix)]
-pub mod shim;
 #[cfg(test)]
 mod tests;
 
@@ -59,7 +47,7 @@ pub const NO_ACTIVE_TURN: &str = "no_active_turn";
 /// Model-facing code: the session or the turn stopped.
 pub const RUN_STOPPED: &str = "run_stopped";
 
-/// The `ask_genie` tool as the shim lists it. It has no enum of aliases: the catalog is in each
+/// The `ask_genie` tool as the model sees it. It has no enum of aliases: the catalog is in each
 /// turn's prompt, and Rust checks the alias.
 pub fn tool_schema() -> Value {
     json!({
@@ -131,12 +119,12 @@ impl Default for GuardOptions {
     }
 }
 
-/// Called with the turn id when the third refusal of a turn stops it. The session host (R1)
+/// Called with the turn id when the third refusal of a turn stops it. The orchestrator host
 /// interrupts the turn and ends it with the outcome `refusals`.
 pub type RefusalHook = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// The guard of the one session (R2). It implements [`super::seam::SessionGuard`] for the session
-/// host and serves `ask_genie` for the shim channel.
+/// The guard of the one session (R2). It implements [`super::seam::SessionGuard`] for the orchestrator
+/// host and serves `ask_genie` for the tool loop.
 pub struct AgentGuard {
     pub(crate) deps: GuardDeps,
     pub(crate) opts: GuardOptions,
@@ -144,8 +132,6 @@ pub struct AgentGuard {
     state: Mutex<ledger::State>,
     pub(crate) cv: Condvar,
     hook: Mutex<Option<RefusalHook>>,
-    #[cfg(unix)]
-    pub(crate) server: Mutex<Option<channel::Server>>,
 }
 
 impl fmt::Debug for AgentGuard {
@@ -174,8 +160,6 @@ impl AgentGuard {
             state: Mutex::new(ledger::State::default()),
             cv: Condvar::new(),
             hook: Mutex::new(None),
-            #[cfg(unix)]
-            server: Mutex::new(None),
         })
     }
 
@@ -214,20 +198,6 @@ impl AgentGuard {
     pub(crate) fn emit(&self, events: Vec<super::seam::AgentEvent>) {
         for e in events {
             self.deps.events.emit(e);
-        }
-    }
-}
-
-impl Drop for AgentGuard {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(s) = self
-            .server
-            .get_mut()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
-        {
-            s.stop();
         }
     }
 }

@@ -717,17 +717,17 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
             ("sales-prod-2", "sales-prod", false, false),
         ]
     );
-    assert_eq!(snap.agent_profile.as_deref(), Some("fin"));
-    assert_eq!(snap.agent_host.as_deref(), Some("https://fin.example.test"));
+    assert_eq!(snap.home_profile.as_deref(), Some("fin"));
+    assert_eq!(snap.model, crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL);
     assert_eq!((snap.cross_workspace, snap.budget), (false, 10));
-    // The agent runs on another profile: it keeps its place in the catalog and is marked.
+    // The model runs on the home profile, so a run profile does not move the agent workspace.
     w.call(
         "workspace_settings_write",
         json!({"runProfile": "sales-prod"}),
     )
     .unwrap();
     let snap = w.catalog_snapshot().unwrap();
-    assert_eq!(snap.agent_profile.as_deref(), Some("sales-prod"));
+    assert_eq!(snap.home_profile.as_deref(), Some("fin"));
     assert_eq!(
         snap.catalog.iter().filter(|c| c.is_agent_workspace).count(),
         1
@@ -735,7 +735,7 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
     // A workspace switched off leaves the catalog.
     w.set_available("Sales Prod", false, None).unwrap();
     assert_eq!(w.catalog_snapshot().unwrap().catalog.len(), 2);
-    // No home and no run profile: no agent profile.
+    // No home: no home profile and an empty catalog.
     let s2 = Scratch::new();
     let none = WorkspaceStore::new(
         &s2.0,
@@ -743,7 +743,7 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
         Arc::new(FakeT7(vec![profile("x", true)])),
     );
     let snap = none.catalog_snapshot().unwrap();
-    assert!(snap.agent_profile.is_none() && snap.agent_host.is_none() && snap.catalog.is_empty());
+    assert!(snap.home_profile.is_none() && snap.catalog.is_empty());
 }
 
 /// I1: the whole alias, `-N` suffix included, stays within the 32 chars of the `workspace` arg.

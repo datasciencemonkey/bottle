@@ -4,6 +4,9 @@
 - Date: 2026-11-23
 - Owner: slice 2a, guard lane
 - Changes: ADR 0117 (the pair gate and the fail-closed proxy gate)
+- Amended by ADR 0122: the stdio shim, its socket, the run secret and the peer-PID check are
+  removed. The guard stays. The orchestrator host calls `ask_genie` in process, and every check
+  of the guard applies.
 
 ## Context
 

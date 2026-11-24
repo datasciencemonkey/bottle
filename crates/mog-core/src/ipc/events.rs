@@ -77,7 +77,7 @@ pub const RECORDING_STATE: &str = "recording:state";
 /// ADR 0103: the status of one recording job changed. Payload: `types::RecordingSummary`.
 /// Not in 4.5.
 pub const RECORDING_JOB: &str = "recording:job";
-/// Slice 2a: the one Genie Code session started or ended. Payload: `types::AgentSessionEvent`,
+/// The one agent session started or ended. Payload: `types::AgentSessionEvent`,
 /// content-free. Core to brain only. Not in 4.5.
 pub const AGENT_SESSION: &str = "agent:session";
 /// Slice 2a: one agent turn moved. Payload: `types::AgentTurnEvent`, content-free. Core to

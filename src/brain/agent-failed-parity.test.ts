@@ -114,12 +114,6 @@ describe('Clear failed: in-memory turns', () => {
     session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
     waiting: [],
     earlier: turns,
-    genieCode: {
-      binary: 'not_installed',
-      pinned: '',
-      agentProfile: null,
-      agentProfileState: 'no_home',
-    },
     threads: turns.map((t) => ({ turnId: t.turnId, threadId: thread })),
   });
 

@@ -297,7 +297,7 @@ pub struct HostComponents<'a> {
     /// The `workspace_*` commands (ADR 0117): `workspaces_host::WorkspacesHost`. `None` when it
     /// is not managed: `host_failed`.
     pub workspaces: Option<&'a dyn GatewayComponents>,
-    /// The `genie_code_*`, `agent_turn_*` and `agent_session_*` commands (slice 2a):
+    /// The `orchestrator_*`, `agent_turn_*` and `agent_session_*` commands (ADR 0122):
     /// `agent_session_host::AgentSessionHost`. `None` when it is not managed: `host_failed`.
     pub agent_session: Option<&'a dyn GatewayComponents>,
     /// `model_invoke` (ADR 0122): `mog_core::model_gateway::invoke::ModelInvokeComponent` over
@@ -611,10 +611,10 @@ impl GatewayComponents for HostComponents<'_> {
                 .workspaces
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
-            // Slice 2a: the Genie Code binary and the one live agent session. Its codes cross as
-            // themselves (`ERROR_CODES`).
-            "genie_code_status"
-            | "genie_code_install"
+            // ADR 0122: the orchestrator model and the one live agent session. Its codes cross
+            // as themselves (`ERROR_CODES`).
+            "orchestrator_models"
+            | "orchestrator_status"
             | "agent_turn_submit"
             | "agent_turn_stop"
             | "agent_turn_call"
@@ -707,10 +707,10 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "workspace_list"
                 | "workspace_set_available"
                 | "workspace_make_home"
-                // Slice 2a: the status runs the binary, the install downloads it, a submit can
-                // start the server and a stop or an end waits up to 5 s for the process.
-                | "genie_code_status"
-                | "genie_code_install"
+                // ADR 0122: the status can check the sign-in of the home profile, and a stop or
+                // an end waits for the tool loop.
+                | "orchestrator_models"
+                | "orchestrator_status"
                 | "agent_turn_submit"
                 | "agent_turn_stop"
                 | "agent_turn_call"
@@ -836,7 +836,7 @@ fn route_from<R: Runtime>(
     let links = webview.try_state::<std::sync::Arc<mog_core::link_open::LinkOpenComponent>>();
     // `try_state`: `lib.rs` manages the workspace component (ADR 0117).
     let workspaces = webview.try_state::<crate::workspaces_host::WorkspacesHost>();
-    // `try_state`: `lib.rs` manages the agent session component (slice 2a).
+    // `try_state`: `lib.rs` manages the agent session component (ADR 0122).
     let agent_session = webview.try_state::<crate::agent_session_host::AgentSessionHost>();
     // `try_state`: `model_host::install` manages the `model_invoke` component (ADR 0122).
     let model = webview

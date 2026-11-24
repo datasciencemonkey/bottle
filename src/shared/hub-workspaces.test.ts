@@ -9,13 +9,6 @@ const row = {
   available: true,
   isHome: true,
 };
-const genieCode = {
-  binary: 'ready',
-  version: '0.5.0',
-  pinned: '0.5.0',
-  agentProfile: null,
-  agentProfileState: 'ready',
-};
 const list = {
   rows: [row],
   home: 'sales',
@@ -24,7 +17,6 @@ const list = {
     crossWorkspaceLocked: false,
     genieCallBudget: 10,
     runProfile: null,
-    genieCode,
   },
 };
 
@@ -73,20 +65,11 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       action: 'workspace.agent_profile',
       profile: null,
     });
-    expect(asWorkspaceAction({ action: 'genie_code.install', consent: true })).toEqual({
-      action: 'genie_code.install',
-      consent: true,
-    });
-    expect(asWorkspaceAction({ action: 'genie_code.recheck', y: 2 })).toEqual({
-      action: 'genie_code.recheck',
-    });
   });
 
   it('refuses a bad agent action', () => {
     expect(asWorkspaceAction({ action: 'workspace.agent_profile' })).toBeUndefined();
     expect(asWorkspaceAction({ action: 'workspace.agent_profile', profile: '' })).toBeUndefined();
-    expect(asWorkspaceAction({ action: 'genie_code.install' })).toBeUndefined();
-    expect(asWorkspaceAction({ action: 'genie_code.install', consent: false })).toBeUndefined();
   });
 
   it('refuses bad shapes', () => {
@@ -115,7 +98,7 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(asHubWorkspaceList(pick)?.homePick).toEqual(pick.homePick);
   });
 
-  it('accepts a list from before the agent state: runProfile and genieCode are optional', () => {
+  it('accepts a list from before the agent state: runProfile is optional', () => {
     const old = {
       crossWorkspaceData: false,
       crossWorkspaceLocked: false,
@@ -158,9 +141,6 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(asHubWorkspaceList({ ...list, home: 5 })).toBeUndefined();
     expect(
       asHubWorkspaceList({ ...list, agent: { ...list.agent, runProfile: 5 } }),
-    ).toBeUndefined();
-    expect(
-      asHubWorkspaceList({ ...list, agent: { ...list.agent, genieCode: { binary: 'ready' } } }),
     ).toBeUndefined();
   });
 });

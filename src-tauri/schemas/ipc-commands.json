@@ -809,36 +809,6 @@
       "title": "DbxHttpArgs",
       "type": "object"
     },
-    "genie_code_install": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "description": "`genie_code_install`. Must be `true`: the user gave consent. Rust downloads the pinned\nsource and checks the pinned SHA-256.",
-      "properties": {
-        "consent": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "consent"
-      ],
-      "title": "GenieCodeInstallArgs",
-      "type": "object"
-    },
-    "genie_code_status": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "description": "`genie_code_status`. `recheck` clears the `not_eligible` cache.",
-      "properties": {
-        "recheck": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "title": "GenieCodeStatusArgs",
-      "type": "object"
-    },
     "hotkeys_set": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -2847,20 +2817,6 @@
       ]
     },
     {
-      "name": "genie_code_status",
-      "phase": "MVP-D",
-      "windows": [
-        "brain"
-      ]
-    },
-    {
-      "name": "genie_code_install",
-      "phase": "MVP-D",
-      "windows": [
-        "brain"
-      ]
-    },
-    {
       "name": "orchestrator_models",
       "phase": "MVP-D",
       "windows": [
@@ -3002,8 +2958,6 @@
     "agent_turn_unknown",
     "agent_session_unavailable",
     "agent_rate_limited",
-    "genie_code_missing",
-    "genie_code_version",
     "agent_profile_unsupported",
     "agent_signed_out",
     "agent_not_eligible",
@@ -3011,9 +2965,7 @@
     "agent_timeout",
     "agent_failed",
     "agent_lockdown_violation",
-    "agent_refusals",
-    "install_failed",
-    "checksum_mismatch"
+    "agent_refusals"
   ],
   "events": [
     {

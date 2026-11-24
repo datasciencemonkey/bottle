@@ -36,11 +36,11 @@ impl WorkspaceGate for HostGate {
     }
 }
 
-/// The agent session host's view of the store.
+/// The orchestrator host's view of the store.
 struct HostView(Arc<OnceLock<Arc<WorkspaceStore>>>);
 
-impl mog_core::agent_run::session::WorkspaceView for HostView {
-    fn snapshot(&self) -> CoreResult<mog_core::agent_run::session::Snapshot> {
+impl mog_core::agent_run::orchestrator::WorkspaceView for HostView {
+    fn snapshot(&self) -> CoreResult<mog_core::agent_run::orchestrator::Snapshot> {
         match self.0.get() {
             Some(s) => s.catalog_snapshot(),
             None => Err(CoreError::IpcRefused {
@@ -68,9 +68,9 @@ impl WorkspacesHost {
         Arc::new(HostGate(self.store.clone()))
     }
 
-    /// The store as the agent session host's workspace view (slice 2a). It fails with
-    /// `host_failed` until a store is set.
-    pub fn view(&self) -> Arc<dyn mog_core::agent_run::session::WorkspaceView> {
+    /// The store as the orchestrator host's workspace view. It fails with `host_failed` until a
+    /// store is set.
+    pub fn view(&self) -> Arc<dyn mog_core::agent_run::orchestrator::WorkspaceView> {
         Arc::new(HostView(self.store.clone()))
     }
 
@@ -79,6 +79,13 @@ impl WorkspacesHost {
     pub fn home_source(&self) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
         let store = self.store.clone();
         Arc::new(move || store.get().and_then(|s| s.home()))
+    }
+
+    /// A read-only source of the user's orchestrator model (ADR 0122). It returns `None` until a
+    /// store is set, and then the caller uses the default model.
+    pub fn model_source(&self) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().and_then(|s| s.orchestrator_model()))
     }
 
     /// Bind R6 to the store, for the sign-in column and the probe.

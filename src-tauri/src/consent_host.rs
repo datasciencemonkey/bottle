@@ -45,8 +45,8 @@ pub fn install_with<R: Runtime>(
     let (store, records) =
         prepare_device_records(dir, vault, Arc::clone(&clock), ConsentRetention::default())?;
     let records = Arc::new(records);
-    // Slice 2a (plan A3.7): every Wipe scope first ends the agent session and deletes GENIE_HOME.
-    // The slot is empty until `agent_session_host::install` binds the session host.
+    // Plan A3.7: every Wipe scope first ends the agent session and drops its history.
+    // The slot is empty until `agent_session_host::install` binds the orchestrator host.
     let agent_slot = Arc::new(AgentWipeSlot::default());
     let wipe = Arc::new(
         LocalWipeService::new(Arc::clone(&store), clock)

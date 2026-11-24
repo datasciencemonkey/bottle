@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use mog_core::types::{
     AgentCallState, AgentSessionEndReason, AgentSessionEvent, AgentSessionState, AgentTurnAccepted,
     AgentTurnCall, AgentTurnEvent, AgentTurnResult, AgentTurnView, AppSetting, AppSettingKey,
-    CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, GenieCodeStatus,
-    Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus, OrchestratorModels,
-    OrchestratorState, OrchestratorStatus, OthersTrack, Profile, ProfileInfo, ProfileName,
-    RecordToggle, RecordingDetail, RecordingErrorKind, RecordingSettings, RecordingState,
-    RecordingStatus, RecordingSummary, RouterCommand, RouterDecision, SegmentRef, SessionPolicy,
-    StorageProbe, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
-    TokenStatus, Track, Transcript, TranscriptProvider, WorkspaceList,
+    CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, Intent, MicHealth,
+    MicLevelFrame, MogId, MogViewState, Mood, NetStatus, OrchestratorModels, OrchestratorState,
+    OrchestratorStatus, OthersTrack, Profile, ProfileInfo, ProfileName, RecordToggle,
+    RecordingDetail, RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus,
+    RecordingSummary, RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe,
+    TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus,
+    Track, Transcript, TranscriptProvider, WorkspaceList,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -101,8 +101,7 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "RecordingErrorKind" => round_trip::<Vec<RecordingErrorKind>>(json),
         "StorageProbe" => round_trip::<StorageProbe>(json),
         "RecordToggle" => round_trip::<RecordToggle>(json),
-        // Slice 2a: the MOG agent on one live Genie Code session, and the workspace list (ADR 0117).
-        "GenieCodeStatus" => round_trip::<GenieCodeStatus>(json),
+        // The ask loop (ADR 0122), and the workspace list (ADR 0117).
         "AgentTurnAccepted" => round_trip::<AgentTurnAccepted>(json),
         "AgentTurnCall" => round_trip::<AgentTurnCall>(json),
         "AgentTurnResult" => round_trip::<AgentTurnResult>(json),
@@ -144,7 +143,6 @@ const STRUCTS: &[&str] = &[
     "RecordingDetail",
     "StorageProbe",
     "RecordToggle",
-    "GenieCodeStatus",
     "AgentTurnAccepted",
     "AgentTurnCall",
     "AgentTurnResult",
@@ -205,7 +203,6 @@ fn every_ipc_type_has_a_fixture() {
         "RecordingErrorKind",
         "StorageProbe",
         "RecordToggle",
-        "GenieCodeStatus",
         "AgentTurnAccepted",
         "AgentTurnCall",
         "AgentTurnResult",

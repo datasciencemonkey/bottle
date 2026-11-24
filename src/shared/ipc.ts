@@ -137,11 +137,8 @@ export const COMMANDS = {
   workspace_set_available: B,
   workspace_make_home: B,
   workspace_settings_write: B,
-  // Slice 2a (the MOG agent on one live Genie Code session). All brain-only: the hub uses
+  // ADR 0122: the orchestrator model and the ask loop. All brain-only: the hub uses
   // `view_emit` only (ARC-4).
-  genie_code_status: B,
-  genie_code_install: B,
-  // ADR 0122: the orchestrator model replaces Genie Code. Brain only.
   orchestrator_models: B,
   orchestrator_status: B,
   agent_turn_submit: B,
@@ -213,7 +210,7 @@ export const EVENTS = {
   'recording.state': { name: 'recording:state', direction: 'core_to_brain' },
   /** Not in 4.5 (ADR 0103): one job status changed. Payload: `RecordingSummary`. */
   'recording.job': { name: 'recording:job', direction: 'core_to_brain' },
-  /** Slice 2a: the one Genie Code session started or ended. Payload: `AgentSessionEvent`, content-free. */
+  /** The one agent session started or ended. Payload: `AgentSessionEvent`, content-free. */
   'agent.session': { name: 'agent:session', direction: 'core_to_brain' },
   /** Slice 2a: one agent turn moved. Payload: `AgentTurnEvent`, content-free. */
   'agent.turn': { name: 'agent:turn', direction: 'core_to_brain' },
@@ -480,20 +477,16 @@ export interface CommandArgs {
     /** Slice 2a: the profile the agent runs on. `null` means home. Absent changes nothing. */
     runProfile?: ProfileName | null;
   };
-  /** `recheck` clears the `not_eligible` cache. */
-  genie_code_status: { recheck?: boolean };
   /** ADR 0122: always the home profile. Bottle never picks one. */
   orchestrator_models: NoArgs;
   /** ADR 0122: `recheck` clears the cached state. */
   orchestrator_status: { recheck?: boolean };
-  /** Pinned source plus SHA-256. */
-  genie_code_install: { consent: true };
   /**
    * Needs the talk-key latch or an Ask ticket. Starts a session if none is open. `question` is
    * 1 to 1,000 Unicode code points (the minimum is checked after trimming white space), `opId`
    * 1 to 64 and `actionTicket` 1 to 36. Refusals: invalid_args, ask_not_approved,
-   * agent_queue_full, agent_rate_limited, agent_session_unavailable, genie_code_missing,
-   * genie_code_version, agent_profile_unsupported, agent_signed_out, agent_not_eligible.
+   * agent_queue_full, agent_rate_limited, agent_session_unavailable,
+   * agent_profile_unsupported, agent_signed_out, agent_not_eligible.
    */
   agent_turn_submit: {
     mogId: MogId;
@@ -569,21 +562,7 @@ export interface OrchestratorStatus {
   model: string;
 }
 
-// ---------- the MOG agent on one live Genie Code session (slice 2a; Rust mirror in `mog_core::types`) ----------
-
-export type GenieCodeBinary =
-  'ready' | 'not_installed' | 'wrong_version' | 'installing' | 'unsupported_os';
-export type AgentProfileState =
-  'ready' | 'not_u2m' | 'signed_out' | 'missing' | 'not_eligible' | 'no_home';
-/** The state of the Genie Code binary and of the profile the agent runs on. Content-free. */
-export interface GenieCodeStatus {
-  binary: GenieCodeBinary;
-  version?: string;
-  /** The pinned Genie Code version. */
-  pinned: string;
-  agentProfile: ProfileName | null;
-  agentProfileState: AgentProfileState;
-}
+// ---------- the ask loop (ADR 0122; Rust mirror in `mog_core::types`) ----------
 
 /** One workspace in the catalog of a session. */
 export interface AgentWorkspace {
@@ -872,7 +851,7 @@ export const IPC_ERROR_CODES = [
   /** `stt_model_install`: no `local-stt` feature in this build (#534, #414). */
   'stt_setup_unavailable',
   /**
-   * `agent_turn_*`, `agent_session_*` and `genie_code_*` (slice 2a). Model-facing only, never an
+   * `agent_turn_*` and `agent_session_*` (ADR 0122). Model-facing only, never an
    * IPC code: budget_reached, cross_workspace_off, no_active_turn, run_stopped.
    */
   'ask_not_approved',
@@ -880,8 +859,6 @@ export const IPC_ERROR_CODES = [
   'agent_turn_unknown',
   'agent_session_unavailable',
   'agent_rate_limited',
-  'genie_code_missing',
-  'genie_code_version',
   'agent_profile_unsupported',
   'agent_signed_out',
   'agent_not_eligible',
@@ -890,9 +867,6 @@ export const IPC_ERROR_CODES = [
   'agent_failed',
   'agent_lockdown_violation',
   'agent_refusals',
-  /** `genie_code_install`: the download or the SHA-256 check failed. */
-  'install_failed',
-  'checksum_mismatch',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -1326,8 +1300,6 @@ export interface CommandReturns {
   workspace_set_available: WorkspaceList;
   workspace_make_home: WorkspaceList;
   workspace_settings_write: WorkspaceList;
-  genie_code_status: GenieCodeStatus;
-  genie_code_install: GenieCodeStatus;
   orchestrator_models: OrchestratorModels;
   orchestrator_status: OrchestratorStatus;
   agent_turn_submit: AgentTurnAccepted;

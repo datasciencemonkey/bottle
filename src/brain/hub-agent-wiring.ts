@@ -72,18 +72,6 @@ export function clearingAgentPanel(
   };
 }
 
-/**
- * COMPAT (ADR 0122): the shared `HubAgentView` still holds a status field of the old session
- * host, and its validator refuses a view without it. The hub no longer reads it: the orchestrator
- * state comes on `hub:orchestrator`. Delete this constant when the shared view drops the field.
- */
-const COMPAT_STATUS: HubAgentView['genieCode'] = {
-  binary: 'ready',
-  pinned: 'orchestrator',
-  agentProfile: null,
-  agentProfileState: 'ready',
-};
-
 export interface HubAgentWiringDeps {
   client: Pick<AgentClient, 'panel' | 'stop' | 'newSession' | 'refreshSession'>;
   /** Send the panel to the hub window only. */
@@ -98,9 +86,7 @@ export interface HubAgentWiring {
 }
 
 export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentWiring {
-  const build = (): HubAgentView => {
-    return { ...deps.client.panel(), genieCode: COMPAT_STATUS };
-  };
+  const build = (): HubAgentView => deps.client.panel();
   const push = async (): Promise<void> => {
     try {
       await deps.send(build());

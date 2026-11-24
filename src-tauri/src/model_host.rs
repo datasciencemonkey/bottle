@@ -4,7 +4,8 @@
 //! [`crate::mcp_host::install`] and [`crate::profiles_host::install`] run first. Without them
 //! nothing is managed and `model_invoke` answers `host_failed`.
 //!
-//! The ask loop (`agent_run::orchestrator`) takes the `Arc<GatewayChatClient>` from managed state.
+//! The ask loop (`agent_run::orchestrator`) takes the `Arc<GatewayChatClient>` from managed state
+//! (see `agent_session_host::install`).
 
 use std::sync::Arc;
 
@@ -18,6 +19,8 @@ use crate::mcp_host::McpHost;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
 use crate::workspaces_host::WorkspacesHost;
+
+type HomeSource = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 const ID: &str = "model_host";
 /// The MOG ID of the request tags for a call that no MOG made (the ask loop).
@@ -53,18 +56,14 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
         .token_broker();
     let transport = Arc::new(ReqwestHttpTransport::new(hosts, tokens, bucket)?);
     let client = Arc::new(GatewayChatClient::new(transport, ORCHESTRATOR_TAG));
-    // The model is the default until the integration step reads the user's orchestrator setting.
-    // The home profile comes from the workspace store (read only). Without the host, no home:
+    // The model is the user's orchestrator model and the home profile comes from the workspace
+    // store (read only). Without the host, the model is the default and there is no home:
     // `model_invoke` refuses every call.
-    let home = match handle.try_state::<WorkspacesHost>() {
-        Some(w) => w.home_source(),
-        None => Arc::new(|| None),
+    let (home, model): (HomeSource, HomeSource) = match handle.try_state::<WorkspacesHost>() {
+        Some(w) => (w.home_source(), w.model_source()),
+        None => (Arc::new(|| None), Arc::new(|| None)),
     };
-    let component = Arc::new(ModelInvokeComponent::new(
-        client.clone(),
-        Arc::new(|| None),
-        home,
-    ));
+    let component = Arc::new(ModelInvokeComponent::new(client.clone(), model, home));
     handle.manage(client);
     handle.manage(component);
     Ok(())

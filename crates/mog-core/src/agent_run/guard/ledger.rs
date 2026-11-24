@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::seam::{CallRecord, RunSecret, SessionGuard, SessionSpec, StopWhy, TurnSpec};
+use super::super::seam::{CallRecord, SessionGuard, SessionSpec, StopWhy, TurnSpec};
 use super::AgentGuard;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
@@ -70,11 +70,6 @@ pub(crate) struct TurnRec {
 
 pub(crate) struct SessionRec {
     pub spec: SessionSpec,
-    /// `None` once the session ended: the secret is dropped (zeroed) then.
-    pub secret: Option<RunSecret>,
-    pub server_pid: Option<u32>,
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub connected: bool,
     pub tainted: bool,
     pub live: Option<String>,
     pub turns: HashMap<String, TurnRec>,
@@ -186,54 +181,10 @@ impl AgentGuard {
                 }
             });
     }
-
-    // ---- the checks of the socket (A4) ----
-
-    /// True if the parent PID `ppid` is the app-server PID of an open session.
-    #[cfg(unix)]
-    pub(crate) fn pid_is_bound(&self, ppid: u32) -> bool {
-        self.lock()
-            .sessions
-            .values()
-            .any(|s| s.is_open() && s.server_pid == Some(ppid))
-    }
-
-    /// The `hello` check: the session is open, the secret matches (constant time), the parent PID
-    /// of the peer is the app-server PID, and no other connection is open. On success the
-    /// connection is taken.
-    #[cfg(unix)]
-    pub(crate) fn accept_hello(&self, session_id: &str, secret: &[u8], peer_parent: u32) -> bool {
-        let mut st = self.lock();
-        let zero = RunSecret([0; 32]);
-        let sess = st.sessions.get_mut(session_id).filter(|s| s.is_open());
-        // The compare runs for an unknown session too, so the time does not tell.
-        let secret_ok = match sess.as_ref().and_then(|s| s.secret.as_ref()) {
-            Some(s) => s.matches(secret),
-            None => {
-                let _ = zero.matches(secret);
-                false
-            }
-        };
-        let Some(sess) = sess else {
-            return false;
-        };
-        if !secret_ok || sess.server_pid != Some(peer_parent) || sess.connected {
-            return false;
-        }
-        sess.connected = true;
-        true
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn release_connection(&self, session_id: &str) {
-        if let Some(s) = self.lock().sessions.get_mut(session_id) {
-            s.connected = false;
-        }
-    }
 }
 
 impl SessionGuard for AgentGuard {
-    fn open_session(&self, spec: SessionSpec) -> CoreResult<RunSecret> {
+    fn open_session(&self, spec: SessionSpec) -> CoreResult<()> {
         if !valid_id(&spec.session_id) {
             return Err(unavailable("session_id_invalid"));
         }
@@ -245,18 +196,11 @@ impl SessionGuard for AgentGuard {
         if st.sessions.values().any(SessionRec::is_open) {
             return Err(unavailable("session_open"));
         }
-        let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|_| unavailable("random_unavailable"))?;
-        let secret = RunSecret(bytes);
-        let out = secret.clone();
         let id = spec.session_id.clone();
         st.sessions.insert(
             id,
             SessionRec {
                 spec,
-                secret: Some(secret),
-                server_pid: None,
-                connected: false,
                 tainted: false,
                 live: None,
                 turns: HashMap::new(),
@@ -264,13 +208,7 @@ impl SessionGuard for AgentGuard {
                 closed_at: None,
             },
         );
-        Ok(out)
-    }
-
-    fn bind_pid(&self, session_id: &str, server_pid: u32) {
-        if let Some(s) = self.lock().sessions.get_mut(session_id) {
-            s.server_pid = Some(server_pid);
-        }
+        Ok(())
     }
 
     fn begin_turn(&self, session_id: &str, turn: TurnSpec) -> CoreResult<()> {
@@ -410,7 +348,6 @@ impl SessionGuard for AgentGuard {
                     }
                 }
                 sess.live = None;
-                sess.secret = None;
                 sess.closed_at = Some(now);
             }
             if wipe {
@@ -419,7 +356,5 @@ impl SessionGuard for AgentGuard {
         }
         self.cv.notify_all();
         self.spawn_cancels(session_id, cancels);
-        #[cfg(unix)]
-        self.close_connection(session_id);
     }
 }

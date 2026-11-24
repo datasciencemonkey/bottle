@@ -962,45 +962,7 @@ pub struct WorkspaceList {
     pub agent: AgentSettings,
 }
 
-// ---------- the MOG agent on one live Genie Code session (slice 2a) ----------
-
-/// The state of the Genie Code binary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum GenieCodeBinary {
-    Ready,
-    NotInstalled,
-    WrongVersion,
-    Installing,
-    UnsupportedOs,
-}
-
-/// The state of the profile the agent runs on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentProfileState {
-    Ready,
-    NotU2m,
-    SignedOut,
-    Missing,
-    NotEligible,
-    NoHome,
-}
-
-/// `genie_code_status` and `genie_code_install`. Content-free.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GenieCodeStatus {
-    pub binary: GenieCodeBinary,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// The pinned Genie Code version.
-    pub pinned: String,
-    /// Required and nullable.
-    #[serde(deserialize_with = "nullable")]
-    pub agent_profile: Option<ProfileName>,
-    pub agent_profile_state: AgentProfileState,
-}
+// ---------- the ask loop (ADR 0122) ----------
 
 /// One workspace in the catalog of a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1168,7 +1130,7 @@ impl std::fmt::Debug for AgentTurnResult {
     }
 }
 
-/// Why the one Genie Code session ended.
+/// Why the one agent session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionEndReason {
@@ -1185,7 +1147,7 @@ pub enum AgentSessionEndReason {
     HardTimeout,
 }
 
-/// The phase of the one Genie Code session.
+/// The phase of the one agent session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionPhase {

@@ -1,6 +1,6 @@
 /**
- * The hub Agent panel: the view the brain sends and the actions the panel sends back (slice 2a,
- * the MOG agent on one live Genie Code session).
+ * The hub Agent panel: the view the brain sends and the actions the panel sends back (the ask
+ * loop of ADR 0122).
  *
  * The brain (`src/brain/hub-agent-wiring.ts`) and the hub view (`AgentPanel.tsx`) both read this
  * file. It holds names and shape checks only, no state. It is not a contract file, but it is
@@ -15,7 +15,6 @@ import type {
   AgentSessionState,
   AgentTurnView,
   AgentWsChip,
-  GenieCodeStatus,
 } from './ipc';
 
 /** The brain-to-view event that carries the Agent panel to the hub. */
@@ -33,7 +32,6 @@ export interface HubAgentView {
   waiting: AgentTurnView[];
   /** Newest first. */
   earlier: AgentTurnView[];
-  genieCode: GenieCodeStatus;
   /** The thread of each turn in the panel, so Conversations can show it ("Open in Conversations"). */
   threads: { turnId: string; threadId: string }[];
   /**
@@ -68,15 +66,6 @@ function oneOf<T extends string>(list: readonly T[]): (v: unknown) => v is T {
   return (v): v is T => list.includes(v as T);
 }
 
-const isBinary = oneOf(['ready', 'not_installed', 'wrong_version', 'installing', 'unsupported_os']);
-const isProfileState = oneOf([
-  'ready',
-  'not_u2m',
-  'signed_out',
-  'missing',
-  'not_eligible',
-  'no_home',
-]);
 const isSessionState = oneOf(['none', 'starting', 'idle', 'busy', 'ending']);
 const isTurnState = oneOf([
   'queued',
@@ -115,22 +104,6 @@ export function asAgentAction(p: unknown): AgentAction | undefined {
     default:
       return undefined;
   }
-}
-
-/** The Genie Code status of a `hub:agent` or `hub:workspaces` payload, or undefined. */
-export function asGenieCodeStatus(v: unknown): GenieCodeStatus | undefined {
-  if (!isObj(v)) return undefined;
-  const { binary, version, pinned, agentProfile, agentProfileState } = v;
-  if (!isBinary(binary) || !isStr(pinned) || !isProfileState(agentProfileState)) return undefined;
-  if (agentProfile !== null && !isProfile(agentProfile)) return undefined;
-  if (version !== undefined && !isStr(version)) return undefined;
-  return {
-    binary,
-    ...(version !== undefined ? { version } : {}),
-    pinned,
-    agentProfile,
-    agentProfileState,
-  };
 }
 
 function asSession(v: unknown): AgentSessionState | undefined {
@@ -305,14 +278,13 @@ function asTurnList(v: unknown): AgentTurnView[] | undefined {
 export function asHubAgentView(p: unknown): HubAgentView | undefined {
   if (!isObj(p)) return undefined;
   const session = asSession(p['session']);
-  const genieCode = asGenieCodeStatus(p['genieCode']);
   const waiting = asTurnList(p['waiting']);
   const earlier = asTurnList(p['earlier']);
   const threads = asThreadLinks(p['threads']);
-  if (!session || !genieCode || !waiting || !earlier || !threads) return undefined;
+  if (!session || !waiting || !earlier || !threads) return undefined;
   // The queue holds at most 3 waiting turns.
   if (waiting.length > 3) return undefined;
-  const out: HubAgentView = { session, waiting, earlier, genieCode, threads };
+  const out: HubAgentView = { session, waiting, earlier, threads };
   if (p['live'] !== undefined) {
     const live = asAgentTurnView(p['live']);
     if (!live) return undefined;
