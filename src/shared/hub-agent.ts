@@ -10,6 +10,7 @@
  */
 import type {
   AgentCallView,
+  AgentCitation,
   AgentPartView,
   AgentSessionState,
   AgentTurnView,
@@ -261,6 +262,24 @@ export function asAgentTurnView(v: unknown): AgentTurnView | undefined {
       workspaces.push(chip);
     }
     out.summary = { md: s['md'], kind: s['kind'], workspaces };
+    const rawCitations = s['citations'];
+    if (rawCitations !== undefined) {
+      if (!Array.isArray(rawCitations)) return undefined;
+      const citations: AgentCitation[] = [];
+      for (const c of rawCitations) {
+        if (!isObj(c) || !isNum(c['n']) || !isStr(c['callId'])) return undefined;
+        const chip = asChip(c['workspace']);
+        if (!chip) return undefined;
+        const deepLink = c['deepLink'];
+        if (deepLink !== undefined && !isStr(deepLink)) return undefined;
+        citations.push(
+          deepLink === undefined
+            ? { n: c['n'], callId: c['callId'], workspace: chip }
+            : { n: c['n'], callId: c['callId'], workspace: chip, deepLink },
+        );
+      }
+      out.summary.citations = citations;
+    }
   }
   return out;
 }

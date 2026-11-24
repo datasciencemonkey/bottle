@@ -1223,6 +1223,28 @@
       "title": "MogArgs",
       "type": "object"
     },
+    "orchestrator_models": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "No arguments.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "orchestrator_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`orchestrator_status` (ADR 0122). `recheck` clears the cached state.",
+      "properties": {
+        "recheck": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "title": "OrchestratorStatusArgs",
+      "type": "object"
+    },
     "permission_request": {
       "$defs": {
         "PermissionKind": {
@@ -2214,10 +2236,6 @@
     },
     "workspace_settings_write": {
       "$defs": {
-        "EndpointName": {
-          "pattern": "^[A-Za-z0-9_-]{1,128}$",
-          "type": "string"
-        },
         "GenieCallBudget": {
           "enum": [
             5,
@@ -2225,20 +2243,31 @@
             20
           ],
           "type": "integer"
+        },
+        "OrchestratorModel": {
+          "pattern": "^system\\.ai\\.[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and\nthe D9 agent endpoint name.",
+      "description": "`workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and\nthe D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and \"Clean up dictation\".",
       "properties": {
         "agentEndpoint": {
           "anyOf": [
             {
-              "$ref": "#/$defs/EndpointName"
+              "$ref": "#/$defs/OrchestratorModel"
             },
             {
               "type": "null"
             }
+          ]
+        },
+        "cleanDictation": {
+          "description": "ADR 0122: \"Clean up dictation\".",
+          "type": [
+            "boolean",
+            "null"
           ]
         },
         "crossWorkspaceData": {
@@ -2829,6 +2858,20 @@
     },
     {
       "name": "genie_code_install",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "orchestrator_models",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "orchestrator_status",
       "phase": "MVP-D",
       "windows": [
         "brain"

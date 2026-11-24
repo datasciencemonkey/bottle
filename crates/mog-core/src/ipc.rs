@@ -194,6 +194,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     // `view_emit` only (ARC-4).
     row("genie_code_status", B),
     row("genie_code_install", B),
+    // ADR 0122: the orchestrator model replaces Genie Code. Brain only; contract only until
+    // the gateway lane gives them a host.
+    row("orchestrator_models", B),
+    row("orchestrator_status", B),
     row("agent_turn_submit", B),
     row("agent_turn_stop", B),
     row("agent_turn_call", B),
@@ -1052,14 +1056,21 @@ args!(
 );
 args!(
     /// `workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and
-    /// the D9 agent endpoint name.
+    /// the D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and "Clean up dictation".
     WorkspaceSettingsWriteArgs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cross_workspace_data: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_endpoint: Option<crate::types::EndpointName>,
+        agent_endpoint: Option<crate::types::OrchestratorModel>,
+        /// ADR 0122: "Clean up dictation".
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        clean_dictation: Option<bool>,
         /// Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.
         #[serde(
             default,
@@ -1069,6 +1080,14 @@ args!(
         run_profile: Option<Option<ProfileName>>,
     }
 );
+
+/// A field that may be absent (no change) or a bool. `null` and every other type are refused.
+fn present_bool<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(d).map(Some)
+}
 
 /// A field that may be absent (no change), `null` (clear) or a value (set).
 fn present_or_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
@@ -1617,6 +1636,13 @@ args!(
     }
 );
 args!(
+    /// `orchestrator_status` (ADR 0122). `recheck` clears the cached state.
+    OrchestratorStatusArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recheck: Option<bool>,
+    }
+);
+args!(
     /// `genie_code_install`. Must be `true`: the user gave consent. Rust downloads the pinned
     /// source and checks the pinned SHA-256.
     GenieCodeInstallArgs { consent: bool }
@@ -1740,6 +1766,8 @@ macro_rules! for_command {
             "workspace_settings_write" => Some($f::<WorkspaceSettingsWriteArgs>()),
             "genie_code_status" => Some($f::<GenieCodeStatusArgs>()),
             "genie_code_install" => Some($f::<GenieCodeInstallArgs>()),
+            "orchestrator_models" => Some($f::<NoArgs>()),
+            "orchestrator_status" => Some($f::<OrchestratorStatusArgs>()),
             "agent_turn_submit" => Some($f::<AgentTurnSubmitArgs>()),
             "agent_turn_stop" => Some($f::<AgentTurnStopArgs>()),
             "agent_turn_call" => Some($f::<AgentTurnCallArgs>()),
