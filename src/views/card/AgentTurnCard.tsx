@@ -310,7 +310,12 @@ export function TurnParts({
                 ? plural(folded.length, 'workspace answer', 'workspace answers')
                 : plural(folded.length, 'more answer', 'more answers')}
           </button>
-          <ul id={foldId} className="agent-parts" aria-label="More answers" hidden={!open}>
+          <ul
+            id={foldId}
+            className="agent-parts"
+            aria-label={combined ? 'Workspace answers' : 'More answers'}
+            hidden={!open}
+          >
             {folded.map((p) => (
               <Part key={p.callId} part={p} onOpenLink={onOpenLink} />
             ))}
@@ -413,11 +418,16 @@ export function TurnBody({
     <div className={answersFirst ? 'agent-note agent-note--after' : 'agent-note'} data-agent-note>
       <p className="agent-note-label">{combined ? COMBINED_LABEL : NOTE_LABEL}</p>
       {combined && turn.summary.workspaces.length > 0 && (
-        <p className="agent-note-chips" aria-label="Combined from" data-agent-note-chips>
+        <div
+          className="agent-note-chips"
+          role="group"
+          aria-label="Combined from"
+          data-agent-note-chips
+        >
           {turn.summary.workspaces.map((c) => (
             <WsChip key={c.name} chip={c} />
           ))}
-        </p>
+        </div>
       )}
       <div className="agent-note-body">
         <SafeMarkdown

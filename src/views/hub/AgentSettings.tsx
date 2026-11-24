@@ -13,7 +13,7 @@
  *   admin locks it, it is off, disabled, and says "Set by your admin".
  * - The disclosure line: where a cross-workspace question goes, and what it costs.
  */
-import { ChevronDownIcon, Loader2Icon } from 'lucide-react';
+import { ChevronDownIcon, Loader2Icon, LockIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   HUB_SCOPE,
@@ -48,7 +48,7 @@ export const COMBINE_OFF_HELP =
   "When off, each workspace's answer is shown to you, and the agent sees only a receipt.";
 /** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
 export const combineHelp = (agentName: string): string =>
-  `When on, Genie Code in ${agentName} can see the answers from your other workspaces and combine them. It can also put an answer from one workspace into a question to another workspace.`;
+  `Answers from your other workspaces go to Genie Code in ${agentName}, which runs on that workspace's AI model. With the switch on, Genie Code can see them and combine them. Genie Code can put an answer from one workspace into a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 
@@ -101,6 +101,7 @@ export const disclosureLines = (agentName: string): string[] => [
   `When a question needs more than one workspace, Bottle sends it to Genie Code in ${agentName}.`,
   "Genie Code uses that workspace's AI model.",
   "It bills about 30,000 to 50,000 tokens per question to that workspace's Genie budget.",
+  'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
 ];
 
 function AgentWorkspaceMenu({
@@ -308,7 +309,7 @@ export function AgentSettings({
         />
         <SettingsRow
           label={<span id={`${combineId}-label`}>{COMBINE_LABEL}</span>}
-          htmlFor={combineId}
+          htmlFor={locked ? undefined : combineId}
           description={
             <span
               id={`${combineId}-help`}
@@ -336,20 +337,20 @@ export function AgentSettings({
                 <span
                   id={`${combineId}-locked`}
                   data-agent-combine-locked
-                  className="text-[var(--mog-text-xs)] text-foreground"
+                  className="flex items-center gap-[var(--mog-space-1)] text-[var(--mog-text-xs)] text-foreground"
                 >
+                  <LockIcon className="size-3" aria-hidden="true" />
                   {COMBINE_LOCKED}
                 </span>
               )}
-              {busy && !locked && (
-                <span
-                  role="status"
-                  data-agent-combine-applies
-                  className="text-[var(--mog-text-xs)] text-muted-foreground"
-                >
-                  {COMBINE_APPLIES}
-                </span>
-              )}
+              {/* The live region is always there, so a screen reader hears the text when it fills. */}
+              <span
+                role="status"
+                data-agent-combine-applies
+                className="text-[var(--mog-text-xs)] text-muted-foreground"
+              >
+                {busy && !locked ? COMBINE_APPLIES : ''}
+              </span>
             </span>
           }
         />

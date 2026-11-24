@@ -66,6 +66,12 @@ describe('Table SEC-DISC disclosures', () => {
     for (const d of SEC_DISC) expect(d.v1).toBe(d.item.startsWith('(v1)'));
   });
 
+  it('[SEC-17] the agent disclosure says other answers stay out unless D1 is on', () => {
+    expect(text('agent-harness')).toContain(
+      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+    );
+  });
+
   it('[SEC-17] [AT-24] the hub data panel shows every SEC-DISC disclosure', async () => {
     // ui-1 (#97, #103): the data panel lives in the Settings area, not shown by default.
     const { el } = await render(<Hub />);

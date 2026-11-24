@@ -78,6 +78,9 @@ Slice 2b rules, with D1 on:
   escape `"`. No tag and no pre-escaped entity can close the block.
 - The quarantine check must treat a tag-like `genie_answer` as an injection signal. Full-width and small
   forms of `<` fold to `<` by NFKC. The guard withholds such a text.
+- The check also folds the look-alikes that NFKC keeps apart (U+2039, U+3008, U+276C, U+276E, U+2770,
+  U+27E8, U+29FC, U+300A, U+02C2 and U+1438, but not the guillemet U+00AB, which is plain quotation). It decodes
+  numeric entities once, and it matches the named entities `&lt;`, `&lsaquo;` and `&lang;` with an optional `;`.
 - A text block with D1 on must not taint the session. The agent can read text from many workspaces.
 - A change of D1 after the session starts must not cut the live turn. The session ends after that turn with
   the reason `D1Changed`. The next session reads the new value.

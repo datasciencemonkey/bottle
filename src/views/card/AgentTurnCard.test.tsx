@@ -174,6 +174,8 @@ describe('AgentTurnCard', () => {
       summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
       parts: [
         partOf('c-00000001'),
+        // The brain swaps a withheld answer for this fixed text (agent-card.test.ts checks that
+        // the raw text never reaches the part).
         partOf('c-00000002', {
           workspace: sales,
           notShownToAgent: true,
@@ -188,10 +190,41 @@ describe('AgentTurnCard', () => {
     expect(withheld.closest('[hidden]')).toBeNull();
     expect(withheld.textContent).toContain(NOT_SHOWN_COPY);
     expect(withheld.textContent).toContain('This answer was held back.');
-    expect(withheld.textContent).not.toContain('IGNORE');
     const folded = el.querySelector('[data-agent-part="c-00000001"]') as HTMLElement;
     expect(folded.closest('[hidden]')).not.toBeNull();
     expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('1 workspace answer');
+  });
+
+  it('a combined note whose parts were all withheld has no fold, and the parts stay in view', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
+      parts: [
+        partOf('c-00000001', { notShownToAgent: true }),
+        partOf('c-00000002', { workspace: sales, notShownToAgent: true }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-action="fold"]')).toBeNull();
+    for (const id of ['c-00000001', 'c-00000002']) {
+      const p = el.querySelector(`[data-agent-part="${id}"]`) as HTMLElement;
+      expect(p.closest('[hidden]')).toBeNull();
+      expect(p.textContent).toContain(NOT_SHOWN_COPY);
+    }
+    expect(el.querySelector('[data-agent-note]')?.className).not.toContain('agent-note--after');
+  });
+
+  it('names the list of a combined fold "Workspace answers"', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
+      parts: [partOf('c-00000001')],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-note-chips]')?.getAttribute('role')).toBe('group');
+    const fold = el.querySelector('[data-action="fold"]');
+    const list = document.getElementById(fold?.getAttribute('aria-controls') ?? '');
+    expect(list?.getAttribute('aria-label')).toBe('Workspace answers');
   });
 
   it('[AC-2b.6] a note with D1 off says "Note from your MOG" and has no fold of its own', async () => {

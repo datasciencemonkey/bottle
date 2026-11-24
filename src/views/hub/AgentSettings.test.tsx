@@ -126,9 +126,13 @@ describe('AgentSettings', () => {
     const label = document.getElementById(sw?.getAttribute('aria-labelledby') ?? '');
     expect(label?.textContent).toBe('Combine across workspaces');
     const help = document.getElementById(sw?.getAttribute('aria-describedby') ?? '');
-    expect(help?.textContent).toContain(
-      'Genie Code in Sales can see the answers from your other workspaces and combine them.',
-    );
+    // The help starts with the plan sentence.
+    expect(
+      help?.textContent?.startsWith(
+        "Answers from your other workspaces go to Genie Code in Sales, which runs on that workspace's AI model.",
+      ),
+    ).toBe(true);
+    expect(help?.textContent).toContain('Genie Code can see them and combine them.');
     expect(help?.textContent).toContain(
       'put an answer from one workspace into a question to another workspace',
     );
@@ -136,7 +140,17 @@ describe('AgentSettings', () => {
       "When off, each workspace's answer is shown to you, and the agent sees only a receipt.",
     );
     expect(el.querySelector('[data-agent-combine-locked]')).toBeNull();
-    expect(el.querySelector('[data-agent-combine-applies]')).toBeNull();
+    // The live region is there, and empty.
+    expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
+    // The label toggles the switch only when it is not locked.
+    expect(el.querySelector('label[for]')).not.toBeNull();
+  });
+
+  it('[D1] the disclosure line says that other answers stay out unless the switch is on', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    expect(el.querySelector('[data-agent-disclosure]')?.textContent).toContain(
+      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+    );
   });
 
   it('[D1] the switch writes the setting through workspace.cross, on and off', async () => {
@@ -159,6 +173,9 @@ describe('AgentSettings', () => {
     expect(sw?.hasAttribute('disabled')).toBe(true);
     const locked = el.querySelector('[data-agent-combine-locked]');
     expect(locked?.textContent).toBe(COMBINE_LOCKED);
+    expect(locked?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    // A locked row has no label link, so no pointer cursor and no click-through.
+    expect(el.querySelector('label[for]')).toBeNull();
     expect(sw?.getAttribute('aria-describedby')).toContain(locked?.id ?? 'none');
     await click(sw);
     expect(clicks()).toEqual([]);
@@ -168,7 +185,7 @@ describe('AgentSettings', () => {
     const { el } = await render(<AgentSettings list={list()} busy />);
     expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe(COMBINE_APPLIES);
     const l = await render(<AgentSettings list={withAgent({ crossWorkspaceLocked: true })} busy />);
-    expect(l.el.querySelector('[data-agent-combine-applies]')).toBeNull();
+    expect(l.el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
   });
 
   it('[D2] the budget is a labelled radio group; a click sends the value', async () => {

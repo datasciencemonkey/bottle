@@ -659,11 +659,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (r.parts.has(s.callId) || !CALL_ID.test(s.callId)) continue;
       try {
         const d = await deps.api.callDetail(s.turnId, s.callId);
-        const ws = recs.get(s.turnId)?.catalog.get(d.workspaceId);
+        // The D1 value of the turn that made the call, not of this turn.
+        const src = recs.get(s.turnId) ?? r;
+        const ws = src.catalog.get(d.workspaceId);
         const part = partOf(d, {
           chip: deps.chipOf(d.profile),
           fromEarlier: s.turnId !== r.view.turnId,
-          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !r.crossWorkspace,
+          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !src.crossWorkspace,
         });
         if (part) r.parts.set(s.callId, part);
       } catch {

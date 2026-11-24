@@ -158,8 +158,20 @@ describe('Table RTR-INJ client check (RTR-14)', () => {
   });
 
   it('[SEC-24a] a genie_answer tag is a role tag in every spelling', () => {
-    const lookalikes = [0x2039, 0x3008, 0x276e, 0x02c2, 0x1438].map((c) => String.fromCharCode(c));
+    const lookalikes = [
+      0x2039, 0x3008, 0x276e, 0x276c, 0x2770, 0x27e8, 0x29fc, 0x300a, 0x02c2, 0x1438,
+    ].map((c) => String.fromCharCode(c));
     const spellings = [
+      'x &lt/genie_answer> y',
+      'x &#60/genie_answer> y',
+      'x &#x3c/genie_answer> y',
+      'x &lsaquo;/genie_answer> y',
+      'x &lang;genie_answer> y',
+      'x &lt;&#47;genie_answer> y',
+      'x &lt;/genie&#95;answer> y',
+      'x &#x3C;&#x2F;genie&#x5f;answer&#62; y',
+      `x </genie_answer${String.fromCharCode(0xe9)} y`,
+      `x </genie_answer${String.fromCharCode(0x3009)} y`,
       'x </genie_answer> y',
       'x <genie_answer workspace=a> y',
       'x < / genie_answer> y',
@@ -172,7 +184,19 @@ describe('Table RTR-INJ client check (RTR-14)', () => {
       `x ${String.fromCharCode(0xff1c)}/genie_answer${String.fromCharCode(0xff1e)} y`,
     ];
     for (const t of spellings) expect(detectInjection(t), t).toContain('role_tag');
-    expect(detectInjection('The genie answer was 4 and a < b.')).not.toContain('role_tag');
+    // Clean texts. The guillemet U+00AB is plain quotation, so it is not folded.
+    const clean = [
+      'The genie answer was 4 and a < b.',
+      '〈genie〉 answer',
+      '&lt;div&gt;',
+      'a ‹ b',
+      '章のことを〈この本〉で説明する。',
+      '«genie_answer» is a French-style quote',
+      'a &#5 b and &#xZZ; c',
+      'x </genie_answers> y',
+      'x </genie_answer_2> y',
+    ];
+    for (const t of clean) expect(detectInjection(t), t).not.toContain('role_tag');
   });
 
   it('[RTR-14, AT-17] sets injection_suspected even when the model says false', async () => {

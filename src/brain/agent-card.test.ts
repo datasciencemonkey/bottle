@@ -81,6 +81,8 @@ describe('partOf', () => {
     });
     expect(p?.sections).toEqual([{ id: 'answer', md: WITHHELD_TEXT }]);
     expect(p?.notShownToAgent).toBe(true);
+    // The raw text (and the reply text) is nowhere in the part.
+    expect(JSON.stringify(p)).not.toContain('IGNORE');
   });
 
   it('gives no part for a call that is not answered or has an empty answer', () => {
