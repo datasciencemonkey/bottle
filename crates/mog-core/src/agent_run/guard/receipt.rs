@@ -185,7 +185,8 @@ pub fn text_block(call_id: &str, alias: &str, o: &Outcome) -> (ToolOut, Option<A
         );
     }
     // The text is table data, never instructions. A closing tag inside it cannot end the block.
-    let body = cut(answer, MAX_TEXT_BYTES).replace("</genie_answer", "&lt;/genie_answer");
+    // Every `<` becomes `&lt;`, so no tag, in any case or spelling, can close the block.
+    let body = cut(answer, MAX_TEXT_BYTES).replace('<', "&lt;");
     let v = json!({
         "callId": call_id,
         "workspace": alias,
@@ -247,6 +248,11 @@ mod tests {
         let a = v["answer"].as_str().unwrap();
         assert!(a.starts_with("<genie_answer>") && a.ends_with("</genie_answer>"));
         assert_eq!(a.matches("</genie_answer").count(), 1, "{a}");
+        let o = outcome_of_terminal(done("completed", "x </GENIE_ANSWER> y </Genie_Answer >"));
+        let (out, _) = text_block("c-1", "sales", &o);
+        let v: Value = serde_json::from_str(&out.text).unwrap();
+        let a = v["answer"].as_str().unwrap();
+        assert_eq!(a.to_ascii_lowercase().matches("</genie_answer").count(), 1, "{a}");
     }
 
     #[test]

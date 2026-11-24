@@ -291,7 +291,11 @@ pub trait AuditStore: Send + Sync {
     fn delete_before(&self, cutoff_ms: u64) -> CoreResult<usize>;
 }
 
-/// The in-memory store: the test double, and the store until the table of #442 lands.
+/// The most entries that [`MemoryAuditStore`] keeps. The oldest entry goes first (a ring).
+pub const MEMORY_STORE_CAP: usize = 10_000;
+
+/// The in-memory store: the test double, and the store until the table of #442 lands. It keeps
+/// at most [`MEMORY_STORE_CAP`] entries.
 /// TODO(#442): the SQLCipher store on the `audit_log` table.
 #[derive(Debug, Default)]
 pub struct MemoryAuditStore {
@@ -306,7 +310,12 @@ impl MemoryAuditStore {
 
 impl AuditStore for MemoryAuditStore {
     fn append(&self, entry: AuditEntry) -> CoreResult<()> {
-        self.lock().push(entry);
+        let mut g = self.lock();
+        if g.len() >= MEMORY_STORE_CAP {
+            let extra = g.len() + 1 - MEMORY_STORE_CAP;
+            g.drain(..extra);
+        }
+        g.push(entry);
         Ok(())
     }
 

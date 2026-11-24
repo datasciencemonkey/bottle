@@ -35,7 +35,11 @@ app socket), `shim.rs` (the stdio shim). The channel, peer and shim are `cfg(uni
   prompt, and Rust checks the alias.
 - A `cancel` frame (MCP `notifications/cancelled`) removes the response only. The Genie calls end through
   `stop_turn`, because a timeout keeps them polling.
-- When the socket ends, the shim sends SIGTERM to its parent and exits, so a Bottle crash leaves no orphan.
+- Genie Code starts the shim in its OWN process group, so the group kill of the session host
+  (`killpg`) does not reach it. The shim ends by itself: on stdin EOF, on socket EOF (it also sends
+  SIGTERM to its parent), and when `getppid()` changes (a thread checks every 250 ms). A test
+  (`src-tauri/tests/agent_shim_orphan.rs`) checks that no `--agent-mcp-shim` process is left after
+  `terminate()`. The shim removes `BOTTLE_AGENT_SECRET` from its environment right after it reads it.
 
 ### The ten checks, in order
 
