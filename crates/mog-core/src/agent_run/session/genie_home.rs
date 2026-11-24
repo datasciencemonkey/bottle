@@ -323,12 +323,21 @@ pub fn expected_cli_version() -> &'static str {
 mod tests {
     use super::*;
 
+    /// A fixture path that is absolute on the current OS: Windows needs a drive letter.
+    fn abs(unix: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:{unix}"))
+        } else {
+            PathBuf::from(unix)
+        }
+    }
+
     fn spec() -> HomeSpec {
         HomeSpec {
             host: "https://Example-WS.cloud.databricks.com/".into(),
-            cli_path: PathBuf::from("/opt/bottle/bin/databricks"),
+            cli_path: abs("/opt/bottle/bin/databricks"),
             profile: "sales".into(),
-            shim_command: PathBuf::from("/Applications/Bottle.app/Contents/MacOS/bottle"),
+            shim_command: abs("/Applications/Bottle.app/Contents/MacOS/bottle"),
             shim_args: vec!["--agent-mcp-shim".into()],
             shim_env_names: vec![
                 "BOTTLE_AGENT_SOCK".into(),
@@ -341,7 +350,17 @@ mod tests {
     #[test]
     fn config_toml_matches_the_golden_file() {
         let got = config_toml(&spec()).unwrap();
-        assert_eq!(got, include_str!("golden_config.toml"));
+        // The golden file holds the unix fixture paths; Windows swaps in its drive-letter form.
+        let golden = include_str!("golden_config.toml")
+            .replace(
+                "/opt/bottle/bin/databricks",
+                &spec().cli_path.to_string_lossy(),
+            )
+            .replace(
+                "/Applications/Bottle.app/Contents/MacOS/bottle",
+                &spec().shim_command.to_string_lossy(),
+            );
+        assert_eq!(got, golden);
     }
 
     #[test]

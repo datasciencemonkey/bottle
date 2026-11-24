@@ -502,13 +502,22 @@ impl Approvals for Approve {
     }
 }
 
+/// A fixture path that is absolute on the current OS: Windows needs a drive letter.
+fn abs(unix: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{unix}"))
+    } else {
+        PathBuf::from(unix)
+    }
+}
+
 struct Env {
     preflight: Mutex<Result<(), PreflightFail>>,
 }
 
 impl AgentEnv for Env {
     fn cli_path(&self) -> Option<PathBuf> {
-        Some(PathBuf::from("/opt/bottle/bin/databricks"))
+        Some(abs("/opt/bottle/bin/databricks"))
     }
     fn var(&self, n: &str) -> Option<String> {
         match n {
@@ -530,7 +539,7 @@ struct Shim;
 impl ShimProvider for Shim {
     fn launch(&self, session_id: &str, _: &RunSecret) -> ShimLaunch {
         ShimLaunch {
-            command: PathBuf::from("/Applications/Bottle.app/bottle"),
+            command: abs("/Applications/Bottle.app/bottle"),
             args: vec!["--agent-mcp-shim".into()],
             env: vec![("BOTTLE_AGENT_SESSION".into(), session_id.into())],
         }
@@ -784,7 +793,8 @@ fn the_start_rewrites_genie_home_and_spawns_with_a_clean_argv_and_env() {
         .spec
         .env
         .iter()
-        .any(|(k, v)| k == "PATH" && v == "/usr/bin:/bin:/opt/bottle/bin"));
+        .any(|(k, v)| k == "PATH"
+            && *v == format!("/usr/bin:/bin:{}", abs("/opt/bottle/bin").display())));
     assert!(r.guard.log().iter().any(|l| l.starts_with("bind:4000")));
     assert!(std::fs::read_to_string(&r.cfg.pid_file).unwrap() == "4000");
 }
