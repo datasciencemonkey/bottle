@@ -31,13 +31,20 @@ import {
 import type { Profile, ProfileService } from '../shared/interfaces';
 import { onViewInput, type BrainBus } from './bus';
 
-/** The Databricks domain list of 4.6 rule 2 (`mog_core::http_transport::host_policy`). */
+/**
+ * The Databricks domain list of 4.6 rule 2 (`mog_core::http_transport::host_policy`).
+ * `staging.databricks.com` and `dev.databricks.com` cover internal staging/dev workspaces (e.g.
+ * `dogfood.staging.databricks.com`), owner review 2026-11-24: Connect refused those hosts before
+ * this list named them.
+ */
 export const DATABRICKS_DOMAINS = [
   'cloud.databricks.com',
   'gcp.databricks.com',
   'azuredatabricks.net',
   'cloud.databricks.us',
   'databricks.azure.us',
+  'staging.databricks.com',
+  'dev.databricks.com',
 ] as const;
 
 /** The fixed texts of the form. Upstream text never shows (W-14). */

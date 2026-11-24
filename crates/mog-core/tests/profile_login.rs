@@ -45,6 +45,35 @@ fn w_07g_a_pasted_browser_url_keeps_only_the_host() {
     );
 }
 
+/// [owner review 2026-11-24] a staging, dev, Azure or GCP workspace host is accepted
+#[test]
+fn w_07b_staging_dev_azure_and_gcp_hosts_are_accepted() {
+    for (pasted, host) in [
+        (
+            "https://dogfood.staging.databricks.com",
+            "https://dogfood.staging.databricks.com",
+        ),
+        (
+            "https://fevm-serverless-9cefok.cloud.databricks.com",
+            "https://fevm-serverless-9cefok.cloud.databricks.com",
+        ),
+        (
+            "https://acme.dev.databricks.com/browse",
+            "https://acme.dev.databricks.com",
+        ),
+        (
+            "https://acme.gcp.databricks.com",
+            "https://acme.gcp.databricks.com",
+        ),
+        (
+            "https://acme.azuredatabricks.net",
+            "https://acme.azuredatabricks.net",
+        ),
+    ] {
+        assert_eq!(workspace_host(pasted).as_deref(), Some(host), "{pasted}");
+    }
+}
+
 /// [W-07b] a URL outside the Databricks domain list is refused
 #[test]
 fn w_07b_a_non_databricks_domain_is_refused() {
@@ -57,6 +86,13 @@ fn w_07b_a_non_databricks_domain_is_refused() {
         "https://user@acme-prod.cloud.databricks.com",
         "https://acme-prod.cloud.databricks.com:8443",
         "https://10.0.0.1",
+        // Marketing and bare second-level domains, and tricks with the new staging/dev suffixes.
+        "https://www.databricks.com",
+        "https://databricks.com",
+        "https://staging.databricks.com",
+        "https://dev.databricks.com",
+        "https://acme.staging.databricks.com.evil.example",
+        "https://accounts.staging.databricks.com",
         "",
         "not a url",
     ] {
@@ -777,6 +813,27 @@ fn adr_0117_reauth_runs_auth_login_for_a_u2m_profile_and_the_check() {
     );
     assert_eq!(calls[0].1, LOGIN_TIMEOUT);
     assert_eq!(*verifier.checked.lock().unwrap(), vec!["work"]);
+}
+
+/// [owner review 2026-11-24] a U2M profile on a staging host signs in again: before the host
+/// allowlist named `staging.databricks.com`, this refused `host_refused` and ran no CLI, which
+/// showed as "Sign in…" doing nothing.
+#[test]
+fn adr_0117_reauth_runs_auth_login_for_a_staging_host() {
+    const STAGING_HOST: &str = "https://dogfood.staging.databricks.com";
+    let cli = FakeCli::new(Cli::Ok);
+    let verifier = FakeVerifier::new(Ok(()));
+    let t7 = login(
+        vec![profile("dogfood", STAGING_HOST, "databricks-cli")],
+        cli.clone(),
+        verifier.clone(),
+    );
+    assert_eq!(
+        t7.call("profile_reauth", reauth_args("dogfood")).unwrap(),
+        json!({})
+    );
+    assert_eq!(cli.calls().len(), 1);
+    assert_eq!(*verifier.checked.lock().unwrap(), vec!["dogfood"]);
 }
 
 /// [ADR 0117] a PAT, service-principal or unknown profile is `profile_invalid` and starts no CLI

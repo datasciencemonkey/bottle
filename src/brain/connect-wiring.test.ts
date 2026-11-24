@@ -71,6 +71,21 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
     );
   });
 
+  it('[owner review 2026-11-24] a staging, dev, Azure or GCP workspace host is accepted', () => {
+    expect(workspaceHost('https://dogfood.staging.databricks.com')).toBe(
+      'https://dogfood.staging.databricks.com',
+    );
+    expect(workspaceHost('https://fevm-serverless-9cefok.cloud.databricks.com')).toBe(
+      'https://fevm-serverless-9cefok.cloud.databricks.com',
+    );
+    expect(workspaceHost('https://acme.dev.databricks.com/browse')).toBe(
+      'https://acme.dev.databricks.com',
+    );
+    expect(workspaceHost('https://acme.gcp.databricks.com')).toBe(
+      'https://acme.gcp.databricks.com',
+    );
+  });
+
   it('[W-07b] a non-Databricks domain is refused', () => {
     for (const bad of [
       'https://example.com/?o=1',
@@ -80,6 +95,13 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
       'http://acme-prod.cloud.databricks.com',
       'https://u@acme-prod.cloud.databricks.com',
       'https://acme-prod.cloud.databricks.com:8443',
+      // Marketing and bare second-level domains, and tricks with the new staging/dev suffixes.
+      'https://www.databricks.com',
+      'https://databricks.com',
+      'https://staging.databricks.com',
+      'https://dev.databricks.com',
+      'https://acme.staging.databricks.com.evil.example',
+      'https://accounts.staging.databricks.com',
       '',
     ]) {
       expect(workspaceHost(bad), bad).toBeUndefined();

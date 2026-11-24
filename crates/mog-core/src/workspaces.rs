@@ -8,6 +8,11 @@
 //!   entry per `binding.home`, all available. The home is set only when exactly one profile
 //!   exists. Bottle never picks a home for the user (ADR 0117, FLAG 5).
 //! - A file that cannot be read or parsed is an error. It is never deleted or rewritten.
+//! - `workspace_list` drops a stored entry whose profile no longer answers in the CLI config
+//!   (owner review 2026-11-24: `databricks auth logout --delete` left a dead row behind). The
+//!   row just disappears; its MOG config, and so its local conversations, is never touched. A
+//!   vanished home instead clears `home`, so the hub falls back to its normal "Choose a home
+//!   workspace" flow rather than a dead home row.
 //! - [`WorkspaceGate`] is the allow-list of R8 (FLAG 7): `genie_ask` goes only to the home
 //!   profile and to an available profile.
 //!
@@ -244,6 +249,26 @@ impl Data {
 
     fn allows(&self, profile: &str) -> bool {
         self.home.as_deref() == Some(profile) || self.entry(profile).is_some_and(|e| e.available)
+    }
+
+    /// Drop every entry whose profile does not answer in `t7` (owner review 2026-11-24): the row
+    /// disappears from the next list, with no "Not in your CLI config" dead row. A vanished home
+    /// clears `home` instead, so the hub asks the user to choose a new one. Returns whether
+    /// anything changed, so the caller only writes the file when it must. Never touches a MOG
+    /// config: the entry's `mog_ids` (and so its local conversations) are simply forgotten here,
+    /// not deleted.
+    fn drop_vanished(&mut self, t7: &[Profile]) -> bool {
+        let known = |name: &str| t7.iter().any(|p| p.name == name);
+        let before = self.workspaces.len();
+        self.workspaces.retain(|e| known(&e.profile));
+        let mut changed = self.workspaces.len() != before;
+        if let Some(home) = self.home.clone() {
+            if !known(&home) {
+                self.home = None;
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -545,7 +570,15 @@ impl WorkspaceStore {
     pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
         let data = {
             let _g = self.guard();
-            self.load()?
+            let mut data = self.load()?;
+            let t7 = self
+                .profiles
+                .profiles(refresh)
+                .map_err(|_| refused("host_failed"))?;
+            if data.drop_vanished(&t7) {
+                self.save(&data)?;
+            }
+            data
         };
         self.render(&data, refresh)
     }

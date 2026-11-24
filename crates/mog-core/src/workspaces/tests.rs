@@ -240,13 +240,7 @@ fn ac_1_5_a_new_supported_profile_shows_with_the_switch_off() {
 fn sign_in_comes_from_the_cached_r6_state_and_t7() {
     let s = Scratch::new();
     let cfg = s.configs();
-    for (id, p) in [
-        ("a", "ok"),
-        ("b", "old"),
-        ("c", "unk"),
-        ("d", "pat"),
-        ("e", "gone"),
-    ] {
+    for (id, p) in [("a", "ok"), ("b", "old"), ("c", "unk"), ("d", "pat")] {
         put_config(&cfg, id, id, p);
     }
     let w = store(
@@ -271,11 +265,46 @@ fn sign_in_comes_from_the_cached_r6_state_and_t7() {
     assert_eq!(row(&l, "old").sign_in, WorkspaceSignIn::Expired);
     assert_eq!(row(&l, "unk").sign_in, WorkspaceSignIn::Unknown);
     assert_eq!(row(&l, "pat").sign_in, WorkspaceSignIn::Unsupported);
-    let gone = row(&l, "gone");
-    assert_eq!(
-        (gone.sign_in, gone.host.as_str()),
-        (WorkspaceSignIn::Missing, "")
-    );
+}
+
+// ---------- a vanished CLI profile (owner review 2026-11-24) ----------
+
+/// A profile the user removed from the CLI config (`databricks auth logout --delete`) drops its
+/// row on the next list, but its MOG config (and so its local conversations) is left alone.
+#[test]
+fn a_vanished_profile_drops_its_row_but_keeps_its_mog_config() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    put_config(&cfg, "b", "B", "gone");
+    // The first list migrates both configs into the file, "gone" included.
+    store(&s, vec![profile("p1", true), profile("gone", true)])
+        .list(false)
+        .unwrap();
+    // The CLI profile is deleted: T7 no longer lists "gone" at all.
+    let w = store(&s, vec![profile("p1", true)]);
+    let l = w.list(false).unwrap();
+    assert!(l.workspaces.iter().all(|r| r.profile != "gone"));
+    assert!(row(&l, "p1").available);
+    // The vanished profile's own MOG config is untouched: no conversation is deleted.
+    assert!(cfg.read("b").is_ok());
+}
+
+/// A vanished home profile clears `home` (so the hub falls back to "Choose a home workspace")
+/// instead of leaving a dead home row that nothing can act on.
+#[test]
+fn a_vanished_home_profile_clears_home_instead_of_a_dead_row() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    // Exactly one profile: migration makes it home.
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert_eq!(l.home.as_deref(), Some("p1"));
+    // The user deletes the CLI profile that is the home workspace.
+    let l = store(&s, vec![]).list(false).unwrap();
+    assert_eq!(l.home, None);
+    assert!(l.workspaces.is_empty());
+    assert!(cfg.read("a").is_ok());
 }
 
 #[test]
