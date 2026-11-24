@@ -7,7 +7,6 @@ import { NotImplementedError } from '../errors';
 import { BRAIN_COMPONENTS, startBrain } from './index';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
-import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
@@ -62,13 +61,12 @@ async function expectStub(fn: () => unknown, issue: number): Promise<void> {
 }
 
 describe('brain component registry (4.3)', () => {
-  it('[MOG-08b] lists T1..T15 in table order with the 4.3 names', () => {
+  it('[MOG-08b] lists T1..T15 (no T5) in table order with the 4.3 names', () => {
     expect(BRAIN_COMPONENTS.map((c) => [c.id, c.name])).toEqual([
       ['T1', 'MogManager'],
       ['T2', 'OperationTracker'],
       ['T3', 'CapturePolicy'],
       ['T4', 'SttProvider'],
-      ['T5', 'CleanupProvider'],
       ['T6', 'RouterContextGate'],
       ['T7', 'ProfileService'],
       ['T8', 'GenieBridge'],
@@ -176,11 +174,6 @@ describe('brain component stubs', () => {
     });
   });
 
-  it('[T5] CleanupProvider cleans (#55): a short utterance keeps its pre-pass text', async () => {
-    const out = await createCleanupProvider().clean('um send it', { ...tags, op: 'cleanup' });
-    expect(out).toEqual({ text: 'Send it', usedRaw: false, notCleaned: false, outcome: 'short' });
-  });
-
   it('[T6] RouterContextGate routes (#57) and stubs approve and verify (#152)', async () => {
     const double = createRouterModelDouble([{ decision: {} }]);
     const t = createRouterContextGate({ invoke: double.invoke });
@@ -261,7 +254,7 @@ describe('brain component stubs', () => {
   });
 
   it('[T11] the registry factory returns the MoodMapper function', () => {
-    const t11 = BRAIN_COMPONENTS[10].factory();
+    const t11 = BRAIN_COMPONENTS.find((c) => c.id === 'T11')?.factory();
     expect(typeof t11).toBe('function');
   });
 

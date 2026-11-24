@@ -20,7 +20,6 @@
 import type { LeaseId, MogId, RouterDecision } from '../shared/interfaces';
 import { call, type CommandArgs, type CommandReturns } from '../shared/ipc';
 import { createRouterContextGate } from './components/router-context-gate';
-import { DEFAULT_ROUTER_MODEL } from './components/router-model';
 import type { RouterInput } from './components/router-step';
 import { DICTATION_CLEANUP_DEADLINE_MS } from './dictation-cleanup';
 
@@ -104,19 +103,15 @@ export interface UtteranceRouteDeps {
 }
 
 /** The production deps: the router step over `model_invoke` and the `insert_text` command. */
-export function ipcUtteranceDeps(
-  opts: { model?: string; deadlineMs?: number } = {},
-): UtteranceRouteDeps {
-  // ADR 0122: the orchestrator model (Haiku by default; the setting replaces it later) and the
-  // dictation deadline (CAP-67a). Only a dictation call has the deadline and no retry; an ask, a
-  // session capture and a command keep the plain router step. `withDictationCleanup` falls back
-  // to the pre-pass text at once when the deadline passes.
-  const model = opts.model ?? DEFAULT_ROUTER_MODEL;
+export function ipcUtteranceDeps(opts: { deadlineMs?: number } = {}): UtteranceRouteDeps {
+  // ADR 0122: Rust runs the router step on the orchestrator model of the user's setting, so the
+  // brain sends no model id. The dictation deadline is CAP-67a. Only a dictation call has the
+  // deadline and no retry. `withDictationCleanup` falls back to the pre-pass text at once when
+  // the deadline passes.
   const dictationGate = createRouterContextGate({
-    model,
     deadlineMs: opts.deadlineMs ?? DICTATION_CLEANUP_DEADLINE_MS,
   });
-  const plainGate = createRouterContextGate({ model });
+  const plainGate = createRouterContextGate();
   return {
     route: (text, mogId, input, o) =>
       (o.dictation ? dictationGate : plainGate).route(text, mogId, input),

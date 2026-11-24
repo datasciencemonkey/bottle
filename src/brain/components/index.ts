@@ -101,7 +101,6 @@ import { ipcUtteranceDeps } from '../utterance-route';
 import { createUtteranceHandler } from '../utterance-wiring';
 import { createAgentBridge } from './agent-bridge';
 import { createCapturePolicy } from './capture-policy';
-import { createCleanupProvider } from './cleanup-provider';
 import { createConsentService } from './consent-service';
 import { createConversationManager } from './conversation-manager';
 import { createGenieBridge } from './genie-bridge';
@@ -127,13 +126,12 @@ export interface BrainComponentEntry {
   readonly factory: () => unknown;
 }
 
-/** T1..T15 in 4.3 table order. */
+/** T1..T15 in 4.3 table order. T5 (CleanupProvider) is removed: `withDictationCleanup` runs. */
 export const BRAIN_COMPONENTS = [
   { id: 'T1', name: 'MogManager', factory: () => createMogManager() },
   { id: 'T2', name: 'OperationTracker', factory: () => createOperationTracker() },
   { id: 'T3', name: 'CapturePolicy', factory: () => createCapturePolicy() },
   { id: 'T4', name: 'SttProvider', factory: () => createSttProvider() },
-  { id: 'T5', name: 'CleanupProvider', factory: () => createCleanupProvider() },
   { id: 'T6', name: 'RouterContextGate', factory: () => createRouterContextGate() },
   { id: 'T7', name: 'ProfileService', factory: () => createProfileService() },
   { id: 'T8', name: 'GenieBridge', factory: () => createGenieBridge() },
