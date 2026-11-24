@@ -557,6 +557,9 @@ export function WorkspaceSettings({
   }
   const noHome = list !== undefined && list.home === null && list.rows.length > 0;
   const refreshing = list?.refreshing === true;
+  // A row sign-in or switch change is already writing: a refresh race with it could show a list
+  // that is about to change again, so the button waits for that work to clear too.
+  const rowBusy = list?.busyProfile !== undefined;
   return (
     <section
       data-view="workspace-settings"
@@ -575,7 +578,7 @@ export function WorkspaceSettings({
               size="icon"
               className="size-8"
               aria-label="Refresh workspaces"
-              disabled={list === undefined || refreshing}
+              disabled={list === undefined || refreshing || rowBusy}
               data-refresh-workspaces
               onClick={() => send({ action: 'workspace.refresh' })}
             >
