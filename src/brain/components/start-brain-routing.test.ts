@@ -69,7 +69,7 @@ describe('startBrain utterance routing (#163)', () => {
     );
     const d = handlerDeps();
     const input = await d.routerInput(MOG);
-    const decision = await d.route.route(SENTENCE, MOG, input);
+    const decision = await d.route.route(SENTENCE, MOG, input, { dictation: true });
     expect(decision.intent).toBe('dictation');
     expect(callsTo(core.invoke.mock.calls, [...NO_CLOUD])).toEqual([]);
   });
@@ -110,7 +110,7 @@ describe('startBrain utterance routing (#163)', () => {
       route: 'chip',
       dictated: { route: 'insert_failed', reason: 'host_failed', text: SENTENCE },
     });
-    const q = await d.route.route('What was revenue?', MOG, input);
+    const q = await d.route.route('What was revenue?', MOG, input, { dictation: true });
     expect(q.intent).toBe('question');
     expect(callsTo(core.invoke.mock.calls, ['agent_start', 'agent_send', 'mcp_call'])).toEqual([]);
   });
@@ -137,7 +137,9 @@ describe('startBrain utterance routing (#163)', () => {
       {
         route: 'chip',
         decision: {
-          ...(await d.route.route('What was revenue?', MOG, await d.routerInput(MOG))),
+          ...(await d.route.route('What was revenue?', MOG, await d.routerInput(MOG), {
+            dictation: true,
+          })),
         },
         warning: undefined,
       },
@@ -187,7 +189,7 @@ describe('startBrain utterance routing (#163)', () => {
     brain?.talkTarget.viewReady(MOG);
     const d = handlerDeps();
     const input = await d.routerInput(MOG);
-    const decision = await d.route.route('What was revenue?', MOG, input);
+    const decision = await d.route.route('What was revenue?', MOG, input, { dictation: true });
     d.onAsk(
       { route: 'chip', decision, warning: undefined },
       { utteranceId: 'utt-ask-1', mogId: MOG },

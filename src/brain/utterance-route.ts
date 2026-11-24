@@ -20,7 +20,9 @@
 import type { LeaseId, MogId, RouterDecision } from '../shared/interfaces';
 import { call, type CommandArgs, type CommandReturns } from '../shared/ipc';
 import { createRouterContextGate } from './components/router-context-gate';
+import { DEFAULT_ROUTER_MODEL } from './components/router-model';
 import type { RouterInput } from './components/router-step';
+import { DICTATION_CLEANUP_DEADLINE_MS } from './dictation-cleanup';
 
 /** A router confidence mark (D30). The offline heuristic stays below it (RTR-15c). */
 export const ASK_CONFIDENCE = 0.7;
@@ -78,18 +80,46 @@ export type DictationRoute = Extract<
   { route: 'inserted' | 'insert_failed' | 'copy' }
 >;
 
+/** Per-call options of the router step. */
+export interface RouteOptions {
+  /** A dictation paste: not a ⌥G ask and not a session capture. Only it gets the cleanup deadline. */
+  dictation: boolean;
+}
+
 export interface UtteranceRouteDeps {
   /** The router step (`RouterContextGate.route`). */
-  route(text: string, mogId: MogId, input: RouterInput): Promise<RouterDecision>;
+  route(
+    text: string,
+    mogId: MogId,
+    input: RouterInput,
+    opts: RouteOptions,
+  ): Promise<RouterDecision>;
+  /**
+   * The exact text that a ⌥G ask sends (RTR-17a, ADR 0122): the deterministic pre-pass text,
+   * never the model `cleaned_text`. Without it the ask sends the decision `cleaned_text`.
+   */
+  askText?(text: string): string;
   /** `insert_text` (R11, #58). */
   insertText(args: CommandArgs['insert_text']): Promise<CommandReturns['insert_text']>;
 }
 
 /** The production deps: the router step over `model_invoke` and the `insert_text` command. */
-export function ipcUtteranceDeps(): UtteranceRouteDeps {
-  const gate = createRouterContextGate();
+export function ipcUtteranceDeps(
+  opts: { model?: string; deadlineMs?: number } = {},
+): UtteranceRouteDeps {
+  // ADR 0122: the orchestrator model (Haiku by default; the setting replaces it later) and the
+  // dictation deadline (CAP-67a). Only a dictation call has the deadline and no retry; an ask, a
+  // session capture and a command keep the plain router step. `withDictationCleanup` falls back
+  // to the pre-pass text at once when the deadline passes.
+  const model = opts.model ?? DEFAULT_ROUTER_MODEL;
+  const dictationGate = createRouterContextGate({
+    model,
+    deadlineMs: opts.deadlineMs ?? DICTATION_CLEANUP_DEADLINE_MS,
+  });
+  const plainGate = createRouterContextGate({ model });
   return {
-    route: (text, mogId, input) => gate.route(text, mogId, input),
+    route: (text, mogId, input, o) =>
+      (o.dictation ? dictationGate : plainGate).route(text, mogId, input),
     insertText: (args) => call('insert_text', args),
   };
 }
@@ -104,22 +134,29 @@ export async function routeUtterance(
   // ADR 0113: Rust decides. A remember order is saved, never pasted, and its text never goes to
   // the router model. The brain has no "remember this" grammar of its own.
   if (u.remember) return { route: 'remember', ticket: u.remember.ticket, text: u.remember.text };
-  const decision = await deps.route(u.text, u.mogId, u.input);
+  const dictation = !u.forceAsk && u.input.captureMode !== 'session';
+  const decision = await deps.route(u.text, u.mogId, u.input, { dictation });
   const warning = decision.injection_suspected ? ('injection_suspected' as const) : undefined;
   // The exact text: what a dictation inserts, and what ⌥G or the fallback chip sends.
   const exact = firstNonEmpty(decision.cleaned_text, u.text);
   // RTR-07, B1: in a session nothing sends without a click, so an ask is a chip. A session is
   // never dictated into the focused app.
   if (u.input.captureMode === 'session') {
+    // ADR 0122: no ask path sends model text. The chip holds the pre-pass text.
+    const asked = deps.askText ? deps.askText(u.text) : undefined;
+    const chipDecision =
+      asked === undefined ? decision : { ...decision, cleaned_text: asked, genie_question: asked };
     return u.forceAsk || decision.intent === 'question'
-      ? { route: 'chip', decision, warning }
+      ? { route: 'chip', decision: chipDecision, warning }
       : { route: 'other', decision };
   }
   if (u.forceAsk) {
     // RTR-17a: an ask with no text sends nothing. RTR-14: a flagged one is the warning chip.
-    if (exact === '') return { route: 'other', decision };
+    // ADR 0122: the ask sends the pre-pass text, never the model `cleaned_text`.
+    const asked = deps.askText ? deps.askText(u.text) : exact;
+    if (asked === '') return { route: 'other', decision };
     if (warning) return { route: 'chip', decision, warning };
-    return { route: 'ask', question: exact, decision };
+    return { route: 'ask', question: asked, decision };
   }
   // ADR 0098: no intent gate. The utterance is dictated, then gets the chip of the same text.
   let dictated: DictationRoute;

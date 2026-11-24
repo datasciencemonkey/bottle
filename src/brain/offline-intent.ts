@@ -14,7 +14,7 @@
  */
 import type { Intent, MogId, ProfileName, RouterDecision } from '../shared/interfaces';
 import type { RouterInput } from './components/router-step';
-import type { UtteranceRouteDeps } from './utterance-route';
+import type { RouteOptions, UtteranceRouteDeps } from './utterance-route';
 
 /** The router input profile of a MOG with no usable home profile. Bottle never picks one. */
 export const NO_HOME: ProfileName = '';
@@ -62,10 +62,10 @@ export function offlineDecision(text: string): RouterDecision {
 export function withOfflineFallback(deps: UtteranceRouteDeps): UtteranceRouteDeps {
   return {
     ...deps,
-    async route(text: string, mogId: MogId, input: RouterInput) {
+    async route(text: string, mogId: MogId, input: RouterInput, opts: RouteOptions) {
       if (input.profile === NO_HOME) return offlineDecision(text);
       try {
-        return await deps.route(text, mogId, input);
+        return await deps.route(text, mogId, input, opts);
       } catch {
         return offlineDecision(text);
       }

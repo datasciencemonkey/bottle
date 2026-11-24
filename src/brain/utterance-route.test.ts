@@ -267,6 +267,24 @@ describe('utterance route (#59)', () => {
     expect((await routeUtterance(utterance(), ipcUtteranceDeps())).route).toBe('chip');
   });
 
+  it('[CAP-67a] ipcUtteranceDeps gives only a dictation call the deadline', async () => {
+    core.reset();
+    core.invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'model_invoke' ? chatCompletion(JSON.stringify(routerDecision())) : {},
+    );
+    const d = ipcUtteranceDeps();
+    await d.route(SENTENCE, MOG, input, { dictation: true });
+    await d.route(SENTENCE, MOG, input, { dictation: false });
+    const sent = core.invoke.mock.calls
+      .filter(([cmd]) => cmd === 'model_invoke')
+      .map(([, a]) => (a as { args: { deadlineMs?: number; request: { model?: string } } }).args);
+    expect(sent.map((a) => a.deadlineMs)).toEqual([1500, undefined]);
+    expect(sent.map((a) => a.request.model)).toEqual([
+      'system.ai.claude-haiku-5-5',
+      'system.ai.claude-haiku-5-5',
+    ]);
+  });
+
   it('[ADR 0113] a remember order is not pasted, not routed and not sent to the model', async () => {
     const { d, calls, inserted } = deps(dictation());
     const r = await routeUtterance(

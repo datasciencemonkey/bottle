@@ -88,6 +88,7 @@ import { storeGate } from '../store-gate';
 import { isTauriMac, wireStoreGate } from '../store-wiring';
 import { STORE_EVENT } from '../../shared/store-view';
 import { wirePermissions } from '../permission-wiring';
+import { withDictationCleanup } from '../dictation-cleanup';
 import { offlineDecision, withOfflineFallback } from '../offline-intent';
 import { createProfilePick } from '../profile-pick';
 import { createRequestOwner, sendOwnedCard } from '../request-owner';
@@ -793,7 +794,9 @@ export function startBrain(): Brain {
     // home profile opens the profile picker. The user picks; Bottle never picks.
     const homes = createHomeProfiles(ipcHomeProfileDeps(() => workspaces.home()));
     const insertionOn = () => true;
-    const route = withOfflineFallback(ipcUtteranceDeps());
+    // ADR 0122: the pre-pass, the 1500 ms deadline and the grounding check wrap the router step.
+    // TODO(integration): pass `cleanDictation: () => <the "Clean up dictation" setting>` here.
+    const route = withDictationCleanup(withOfflineFallback(ipcUtteranceDeps()));
     const pick = createProfilePick({
       stackFor,
       showCard: (mogId) => call('window_card_show', { mogId }),

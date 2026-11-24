@@ -9,7 +9,18 @@
 export const LLAMA_3_1_8B = 'system.ai.meta-llama-3-1-8b-instruct';
 export const GPT_OSS_20B = 'system.ai.gpt-oss-20b';
 
-export type RouterModel = typeof LLAMA_3_1_8B | typeof GPT_OSS_20B;
+export const CLAUDE_HAIKU_5_5 = 'system.ai.claude-haiku-5-5';
+
+export type RouterModel = typeof LLAMA_3_1_8B | typeof GPT_OSS_20B | typeof CLAUDE_HAIKU_5_5;
+
+/**
+ * The orchestrator model default (ADR 0122): Haiku 5.5, with `gpt-oss-20b` as the fallback. The
+ * owner picked Haiku. It is used by default even while its eval record is missing: it counts as
+ * tested only when `evals[haiku] === true` (NFR-22a), and that gate does not block the default.
+ * The setting from the contract lane replaces it later.
+ */
+export const DEFAULT_ROUTER_MODEL: RouterModel = CLAUDE_HAIKU_5_5;
+export const FALLBACK_ROUTER_MODEL: RouterModel = GPT_OSS_20B;
 
 /** The strict-schema eval result per model. A missing entry means the eval has not passed. */
 export type RouterEvalRecord = Readonly<Partial<Record<RouterModel, boolean>>>;
@@ -36,5 +47,7 @@ export function servesLlama318b(region: string): boolean {
 
 /** The router model for `region` (RTR-10a, RTR-10b). */
 export function routerModelFor(region: string, evals: RouterEvalRecord): RouterModel {
-  return servesLlama318b(region) && evals[LLAMA_3_1_8B] === true ? LLAMA_3_1_8B : GPT_OSS_20B;
+  return servesLlama318b(region) && evals[LLAMA_3_1_8B] === true
+    ? LLAMA_3_1_8B
+    : FALLBACK_ROUTER_MODEL;
 }
