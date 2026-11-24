@@ -15,7 +15,7 @@ pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub const STDERR_RING_BYTES: usize = 8 * 1024;
 
 /// One message from the server.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Incoming {
     /// The answer to a request of Bottle. `ok` is false for a JSON-RPC error. The error text is
     /// dropped.
@@ -25,6 +25,27 @@ pub enum Incoming {
     /// A request of the server to the client (an approval, an elicitation, ...). Always a
     /// lockdown violation (AC-2a.23).
     ServerRequest { id: Value, method: String },
+}
+
+impl std::fmt::Debug for Incoming {
+    /// The params and the result hold the answer of the model: `Debug` shows the shape only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Incoming::Response { id, ok, .. } => f
+                .debug_struct("Response")
+                .field("id", id)
+                .field("ok", ok)
+                .finish_non_exhaustive(),
+            Incoming::Notification { method, .. } => f
+                .debug_struct("Notification")
+                .field("method", method)
+                .finish_non_exhaustive(),
+            Incoming::ServerRequest { method, .. } => f
+                .debug_struct("ServerRequest")
+                .field("method", method)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// Parse one stdout line. `None` for a line that is not JSON-RPC.
@@ -213,13 +234,28 @@ impl StderrWatcher {
 // ---------- the process seam ----------
 
 /// What to start.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SpawnSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     /// The whole environment. The child gets nothing else.
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for SpawnSpec {
+    /// The environment holds the shim secret: `Debug` shows the names only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnSpec")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field(
+                "env",
+                &self.env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            )
+            .field("cwd", &self.cwd)
+            .finish()
+    }
 }
 
 /// The pipes of the child.
@@ -265,6 +301,28 @@ pub fn argv_forbidden(args: &[String]) -> bool {
             || a == "-c"
             || a == "--config"
     })
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn debug_of_the_spawn_spec_and_the_incoming_message_shows_no_value() {
+        let spec = SpawnSpec {
+            program: "/g".into(),
+            args: vec!["app-server".into()],
+            env: vec![("BOTTLE_AGENT_SECRET".into(), "SECRET-CANARY".into())],
+            cwd: None,
+        };
+        let shown = format!("{spec:?}");
+        assert!(shown.contains("BOTTLE_AGENT_SECRET") && !shown.contains("SECRET-CANARY"));
+        let m = parse_line(br#"{"method":"item/completed","params":{"text":"ANSWER-CANARY"}}"#)
+            .unwrap();
+        assert!(!format!("{m:?}").contains("ANSWER-CANARY"));
+        let r = parse_line(br#"{"id":1,"result":{"text":"ANSWER-CANARY"}}"#).unwrap();
+        assert!(!format!("{r:?}").contains("ANSWER-CANARY"));
+    }
 }
 
 #[cfg(test)]
