@@ -24,12 +24,19 @@ import {
   asConnectModel,
   CONNECT_EVENT,
   CONNECT_VIEW_ID,
+  isValidProfileName,
   type ConnectModel,
   type ConnectTarget,
 } from '../../shared/connect-view';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { emitView, sendViewReady } from '../view-ipc';
+
+/** The same copy the brain shows after the `connect_start` round trip (W-07g, Table W-ERR), so
+ * an instant client-side check and a server refusal never disagree in wording. */
+const PROFILE_NAME_INVALID =
+  'Use only letters, digits, dots, dashes and underscores, up to 64 characters.';
+const PROFILE_NAME_TAKEN = 'A profile with this name exists. Type a different name.';
 
 function send(target: ConnectTarget, fields: Record<string, string> = {}) {
   void emitView(CONNECT_VIEW_ID, 'click', { target, ...fields }).catch(() => undefined);
@@ -89,11 +96,16 @@ function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
 function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
   const [name, setName] = useState(model.proposedName);
   const [clientId, setClientId] = useState('');
+  const trimmed = name.trim();
+  const taken = model.taken ?? [];
+  const duplicate = trimmed !== '' && taken.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+  const valid = isValidProfileName(trimmed) && !duplicate;
   return (
     <form
       data-connect-step="name"
       onSubmit={(e) => {
         e.preventDefault();
+        if (!valid) return;
         send(
           'connect_start',
           clientId.trim() === '' ? { profile: name } : { profile: name, clientId },
@@ -115,9 +127,18 @@ function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
           data-autofocus
           name="profile-name"
           value={name}
+          aria-invalid={!valid}
           onChange={(e) => setName(e.target.value)}
         />
       </label>
+      {!valid && trimmed !== '' && (
+        <p role="alert" data-profile-name-error>
+          {duplicate ? PROFILE_NAME_TAKEN : PROFILE_NAME_INVALID}
+        </p>
+      )}
+      <p className="hub-muted" data-profile-name-help>
+        {`Saved as a Databricks CLI profile in ~/.databrickscfg. You can use it from the terminal with --profile ${trimmed === '' ? model.proposedName : trimmed}.`}
+      </p>
       <details>
         <summary>Use a custom OAuth app (optional)</summary>
         <label>
@@ -126,7 +147,7 @@ function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
         </label>
       </details>
       {model.error !== undefined && <p role="alert">{model.error}</p>}
-      <Button type="submit" size="sm" data-connect-start>
+      <Button type="submit" size="sm" data-connect-start disabled={!valid}>
         Sign in
       </Button>
       {model.inline === true && <CloseButton label="Cancel" />}

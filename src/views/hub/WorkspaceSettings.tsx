@@ -10,7 +10,7 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { EllipsisIcon, Loader2Icon } from 'lucide-react';
+import { EllipsisIcon, Loader2Icon, RefreshCwIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../ui/utils';
 import { DomainPicker } from '../DomainPicker';
 import { askBrain, emitView, type MogViewState } from '../view-ipc';
@@ -555,15 +556,38 @@ export function WorkspaceSettings({
     if (noticeKey !== '') setSeq((n) => n + 1);
   }
   const noHome = list !== undefined && list.home === null && list.rows.length > 0;
+  const refreshing = list?.refreshing === true;
   return (
     <section
       data-view="workspace-settings"
       aria-labelledby="workspace-settings-title"
       className="hub-section"
     >
-      <h2 id="workspace-settings-title" tabIndex={-1}>
-        Workspace
-      </h2>
+      <div className="flex items-center justify-between gap-[var(--mog-space-3)]">
+        <h2 id="workspace-settings-title" tabIndex={-1}>
+          Workspace
+        </h2>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label="Refresh workspaces"
+              disabled={list === undefined || refreshing}
+              data-refresh-workspaces
+              onClick={() => send({ action: 'workspace.refresh' })}
+            >
+              <RefreshCwIcon
+                className={cn('size-4', refreshing && 'animate-spin motion-reduce:animate-none')}
+                aria-hidden="true"
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh workspaces</TooltipContent>
+        </Tooltip>
+      </div>
       {/* A polite live region, always in the page, so a new info notice is read when it shows. */}
       <p
         role="status"

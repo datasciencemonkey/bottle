@@ -413,6 +413,24 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.failed });
   });
 
+  it('workspace.refresh sets refreshing while it re-reads the list, then clears it', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    r.sent.length = 0;
+    const done = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(r.last()?.refreshing).toBe(true);
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await done;
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.calls.at(-1)).toEqual(['list', true]);
+  });
+
   it('a sign-in click for a row that is no longer expired runs nothing; a cancel for an unknown row says so', async () => {
     const r = rig(
       workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]),

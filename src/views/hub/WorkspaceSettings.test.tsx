@@ -521,6 +521,33 @@ describe('Settings → Workspace', () => {
     expect(li(el, 'ops').querySelector('[data-row-panel]')).toBeNull();
   });
 
+  it('Refresh workspaces: an accessible icon button that sends workspace.refresh', async () => {
+    const { el } = await mount();
+    const btn = el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]');
+    expect(btn?.getAttribute('aria-label')).toBe('Refresh workspaces');
+    expect(btn?.disabled).toBe(false);
+    await click(btn);
+    expect(hubClicks()).toEqual([{ action: 'workspace.refresh' }]);
+  });
+
+  it('Refresh workspaces spins and disables while the brain re-reads the list, undisabled once it ends', async () => {
+    const { el } = await mount();
+    const btn = () => el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]');
+    const icon = () => btn()?.querySelector('svg');
+    expect(icon()?.getAttribute('class')).not.toContain('animate-spin');
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, { ...LIST, refreshing: true });
+    expect(btn()?.disabled).toBe(true);
+    expect(icon()?.getAttribute('class')).toContain('animate-spin');
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(btn()?.disabled).toBe(false);
+    expect(icon()?.getAttribute('class')).not.toContain('animate-spin');
+  });
+
+  it('Refresh workspaces is disabled before the first list arrives', async () => {
+    const { el } = await render(<Host />);
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(true);
+  });
+
   it('keeps the Connect another workspace… row at the bottom, with the hint line', async () => {
     const { el } = await mount();
     const section = el.querySelector('[data-view="workspace-settings"]') as HTMLElement;

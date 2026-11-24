@@ -179,12 +179,16 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
   let otherAuthNotice = false;
   let running = false;
   let reopen = false;
+  /** The other profile names of the last `profiles_list` read (W-07g): the view refuses a
+   * duplicate at once, without a round trip. */
+  let taken: string[] = [];
 
   const nameStep = (error?: string): ConnectModel => ({
     step: 'name',
     host: host ?? '',
     proposedName: profile,
     otherAuthNotice,
+    taken,
     ...(error === undefined ? {} : { error }),
   });
 
@@ -262,10 +266,8 @@ export function wireConnectWorkspace(bus: BrainBus, deps: ConnectDeps): () => vo
     const list = await profiles();
     host = h;
     otherAuthNotice = list.some((p) => p.host === h && p.authType !== U2M);
-    profile = freeName(
-      proposedProfileName(h),
-      list.map((p) => p.name),
-    );
+    taken = list.map((p) => p.name);
+    profile = freeName(proposedProfileName(h), taken);
     show(nameStep());
   }
 
