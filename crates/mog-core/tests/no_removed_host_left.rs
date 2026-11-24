@@ -16,13 +16,15 @@ const OWN: [&str; 2] = [
 ];
 
 /// The paths, relative to the repo root, that the scan skips with everything below them.
-const SKIP: [&str; 6] = [
+const SKIP: [&str; 7] = [
     "docs/adr",
     "research/director-decisions.md",
     "research/kimi-snapshot",
     "target",
     "node_modules",
     ".git",
+    // Generated test reports (git-ignored); they echo test names.
+    "reports",
 ];
 
 /// The lower-case words that must not occur. A match is case-insensitive.

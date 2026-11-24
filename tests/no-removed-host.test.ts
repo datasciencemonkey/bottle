@@ -7,12 +7,12 @@ import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 /** The old name, in any spelling: words, snake_case, kebab-case or camelCase. */
-const OLD_NAME = /genie[ _-]?code/i;
+const OLD_NAME = new RegExp(['gen', 'ie'].join('') + '[ _-]?' + ['co', 'de'].join(''), 'i');
 
 /** Folders that this rule covers. */
 const FOLDERS = ['src/shared', 'src/brain', 'src/views', 'src/test-support', 'tests'];
-/** This file holds the pattern, so it is left out. */
-const SKIP = ['tests/no-genie-code.test.ts'];
+/** No file is left out: the pattern above is built from pieces. */
+const SKIP: string[] = [];
 
 function files(dir: string): string[] {
   return readdirSync(join(root, dir)).flatMap((name) => {
