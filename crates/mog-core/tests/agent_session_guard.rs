@@ -824,10 +824,18 @@ fn the_third_refusal_stops_the_turn_through_the_host_hook() {
     let r = Rig::new(10);
     let (s, turn) = r.first_turn();
     let mut shim = ShimRun::start(&s);
-    for _ in 0..3 {
+    for i in 0..3 {
         let (err, code) = shim.ask("nowhere");
         assert!(err);
-        assert_eq!(code, "workspace_not_available");
+        // The third refusal stops the turn, so it reads as a stop.
+        assert_eq!(
+            code,
+            if i < 2 {
+                "workspace_not_available"
+            } else {
+                "run_stopped"
+            }
+        );
     }
     // The host hook interrupts the turn; the server answers the interrupt and ends the turn.
     let (id, _) = s.recv_req("turn/interrupt");

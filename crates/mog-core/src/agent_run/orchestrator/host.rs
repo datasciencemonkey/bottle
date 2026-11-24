@@ -683,7 +683,13 @@ impl Engine {
             }
             LoopStop::Failed(o) => self.finish_stopping(o),
             LoopStop::Timeout => self.stop_live(StopWhy::Timeout),
-            LoopStop::Cancelled => {}
+            LoopStop::Cancelled => {
+                // A stop from outside has already ended the turn (or set the flag). A worker
+                // that gave up on its own, for example after a panic of a tool thread, failed.
+                if !l.cancel.load(Ordering::SeqCst) {
+                    self.finish_stopping(AgentTurnOutcome::Failed);
+                }
+            }
         }
     }
 
@@ -1075,9 +1081,11 @@ fn output_item(call_id: &str, text: &str) -> Value {
 /// The `function_call_output` item for a call. A call that is not `ask_genie` with a JSON object
 /// as arguments is never run: `Value::Null` goes to the guard, which refuses it as `invalid_args`
 /// and counts the refusal (the third one stops the turn). A stopped turn runs nothing.
-fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> Value {
+/// The second value is true when the guard accepted the call (it used budget), whatever came
+/// back; a refusal is a bare code, not JSON.
+fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
     if ctx.cancel.load(Ordering::SeqCst) {
-        return output_item(&call.call_id, guard::RUN_STOPPED);
+        return (output_item(&call.call_id, guard::RUN_STOPPED), false);
     }
     let args = serde_json::from_str::<Value>(&call.arguments)
         .ok()
@@ -1087,12 +1095,17 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> Value {
         _ => Value::Null,
     };
     let out = ctx.guard.ask_genie(&ctx.session_id, &ctx.turn_id, &run);
-    output_item(&call.call_id, &out.text)
+    let accepted = !(out.is_error && !out.text.starts_with('{'));
+    (output_item(&call.call_id, &out.text), accepted)
 }
 
 /// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
 /// others run one at a time on this thread, so the guard still checks them all.
 fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
+    // `store: false` is in the request body. A live probe (claude-haiku-5-5, default profile)
+    // showed that the two-step loop works with it: the echoed `function_call` item and its
+    // output are accepted, and the model reads the callId from the `call` attribute of the
+    // `<genie_answer>` block. No `include` field is sent.
     let cap = usize::from(ctx.budget)
         .saturating_sub(ctx.asked)
         .min(MAX_CALLS_PER_STEP);
@@ -1102,29 +1115,35 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
             go.push(i);
         }
     }
-    ctx.asked += go.len();
-    let ctx: &LoopCtx = ctx;
-    thread::scope(|sc| {
+    let done: &LoopCtx = ctx;
+    let (out, accepted) = thread::scope(|sc| {
         let hs: Vec<(usize, _)> = go
             .iter()
-            .map(|&i| (i, sc.spawn(move || run_tool_call(ctx, &calls[i]))))
+            .map(|&i| (i, sc.spawn(move || run_tool_call(done, &calls[i]))))
             .collect();
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
+        let mut accepted = 0;
         for (i, c) in calls.iter().enumerate() {
             if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
-                out[i] = Some(run_tool_call(ctx, c));
+                let (o, ok) = run_tool_call(done, c);
+                accepted += usize::from(ok && c.name == guard::TOOL_NAME);
+                out[i] = Some(o);
             }
         }
         for (i, h) in hs {
-            out[i] = Some(
-                h.join()
-                    .unwrap_or_else(|_| output_item(&calls[i].call_id, guard::RUN_STOPPED)),
-            );
+            let (o, ok) = h
+                .join()
+                .unwrap_or_else(|_| (output_item(&calls[i].call_id, guard::RUN_STOPPED), false));
+            accepted += usize::from(ok);
+            out[i] = Some(o);
         }
-        out.into_iter().flatten().collect()
-    })
+        (out.into_iter().flatten().collect::<Vec<_>>(), accepted)
+    });
+    // Only the calls that the guard accepted use up the budget of the cap.
+    ctx.asked += accepted;
+    out
 }
 
 fn run_loop(mut ctx: LoopCtx) -> LoopOut {
@@ -1296,6 +1315,7 @@ fn build_result(
             turn_id: c.turn_id.clone(),
         });
     }
+    let answer = strip_bad_markers(answer, out.len());
     AgentTurnResult {
         answer: Some(answer.chars().take(ANSWER_MAX_CHARS).collect()),
         answer_kind: if d1 && cites_many_workspaces(&out) {
@@ -1306,6 +1326,19 @@ fn build_result(
         sources: out,
         usage,
     }
+}
+
+/// Remove each `[n]` marker where n is not in `1..=n_sources`. With no source, all go.
+pub(super) fn strip_bad_markers(answer: &str, n_sources: usize) -> String {
+    static MARK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = MARK.get_or_init(|| regex::Regex::new(r"\[(\d+)\]").expect("a fixed pattern"));
+    re.replace_all(answer, |c: &regex::Captures<'_>| {
+        match c[1].parse::<usize>() {
+            Ok(n) if (1..=n_sources).contains(&n) => c[0].to_owned(),
+            _ => String::new(),
+        }
+    })
+    .into_owned()
 }
 
 /// More than one workspace among the sources.

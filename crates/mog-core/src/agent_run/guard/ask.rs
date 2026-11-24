@@ -157,6 +157,8 @@ impl AgentGuard {
         if trip {
             self.cv.notify_all();
             self.fire_refusal_hook(turn_id);
+            // The refusal that stops the turn reads as a stop, so the caller stops at once.
+            return ToolOut::refusal(RUN_STOPPED);
         }
         ToolOut::refusal(refusal_code(code))
     }

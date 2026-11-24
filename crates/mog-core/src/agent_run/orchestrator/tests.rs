@@ -734,8 +734,7 @@ fn a_tool_other_than_ask_genie_is_never_run_and_three_of_them_stop_the_turn() {
     assert_eq!(r.events.refusals().len(), 3);
     assert_eq!(r.r8.calls.lock().unwrap().len(), 0);
     assert!(r.host.turn_result(&tid).is_none());
-    // The stop reaches the worker as `run_stopped` at the next step: at most one more call.
-    assert!((3..=4).contains(&r.chat.calls()));
+    assert_eq!(r.chat.calls(), 3);
 }
 
 #[test]
@@ -1620,4 +1619,66 @@ fn stop_during_a_blocking_model_call_lets_the_queued_turn_run() {
     release(&g);
     assert_eq!(r.wait_outcome(&b.turn_id), AgentTurnOutcome::Answered);
     assert!(r.host.turn_result(&a.turn_id).is_none());
+}
+
+#[test]
+fn markers_outside_the_sources_are_removed_from_the_answer() {
+    assert_eq!(
+        host::strip_bad_markers("a [1] b [2] c [3] [0] [x]", 2),
+        "a [1] b [2] c   [x]"
+    );
+    assert_eq!(host::strip_bad_markers("a [1] b", 0), "a  b");
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| {
+            reply_of(vec![final_item(
+                json!({"answer": "fact [1] and [2]", "sources": []}),
+            )])
+        }),
+    );
+    let (tid, _) = r.run("q");
+    assert_eq!(
+        r.host.turn_result(&tid).unwrap().answer.as_deref(),
+        Some("fact  and ")
+    );
+}
+
+#[test]
+fn a_panic_in_a_tool_thread_fails_the_turn() {
+    let r8 = Arc::new(FakeR8 {
+        calls: Mutex::default(),
+        handler: Box::new(|_, _| panic!("a broken transport")),
+    });
+    let r = rig(
+        false,
+        10,
+        r8,
+        Box::new(|_, _| reply_of(vec![ask_item("fc0", "sales")])),
+    );
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Failed);
+}
+
+#[test]
+fn refused_calls_do_not_shrink_the_cap_of_the_next_step() {
+    // Budget 5. Step 0: two refused calls (no such workspace). Step 1: five good calls in one
+    // step must all be sent, because the refusals used no budget.
+    let r = rig(
+        false,
+        5,
+        FakeR8::answering(by_profile),
+        Box::new(|_, n| match n {
+            0 => reply_of(vec![ask_item("r0", "ghost"), ask_item("r1", "ghost")]),
+            1 => reply_of(
+                (0..5)
+                    .map(|i| ask_item(&format!("g{i}"), "sales"))
+                    .collect(),
+            ),
+            _ => no_source_final(),
+        }),
+    );
+    let (_, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.r8.count("genie_ask"), 5);
 }
