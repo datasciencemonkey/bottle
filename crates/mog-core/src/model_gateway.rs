@@ -19,6 +19,11 @@ use serde_json::Value;
 
 use crate::error::CoreResult;
 
+pub mod client;
+pub mod invoke;
+pub mod models;
+pub mod responses;
+
 /// One chat-completions request to the orchestrator model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatRequest<'a> {

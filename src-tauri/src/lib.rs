@@ -16,6 +16,7 @@ pub mod link_host;
 pub mod macos_panel;
 pub mod mcp_host;
 pub mod memory_host;
+pub mod model_host;
 pub mod mog_config_host;
 pub mod mog_drag;
 pub mod mog_look_host;
@@ -456,6 +457,8 @@ pub fn run() {
             let _ = mcp_host::install(handle);
             // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
             let _ = recording_cloud_host::install(handle);
+            // ADR 0122: `model_invoke` and the orchestrator chat client, on the same R6.
+            let _ = model_host::install(handle);
             // #523: `link_open`, over T7 and the OS opener.
             link_host::install(handle);
             // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.

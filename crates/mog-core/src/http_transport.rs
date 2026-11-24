@@ -44,6 +44,8 @@ pub const ROUTES: &[(&str, CallKind)] = &[
     ("knowledge.request_publish", CallKind::Workspace),
     ("postgres.credentials", CallKind::Workspace),
     ("mlflow.chat_completions", CallKind::UnityGateway),
+    // ADR 0122: the orchestrator model's Responses call.
+    ("mlflow.responses", CallKind::UnityGateway),
     ("mlflow.embeddings", CallKind::UnityGateway),
 ];
 
