@@ -44,7 +44,7 @@ import {
   whyOfOutcome,
   whyOfRefusal,
 } from './agent-card';
-import { citationsOf, type AgentSummaryWithCitations } from './agent-citations';
+import { citationsOf } from './agent-citations';
 import type { FollowUpWindow } from './agent-route';
 import { keyNumbersOf, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
@@ -727,7 +727,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       .filter((c): c is AgentWsChip => c !== undefined);
     const workspaces = chips.filter((c, i) => chips.findIndex((x) => x.name === c.name) === i);
     const citations = citationsOf(res.answer, res.sources, r.parts);
-    const summary: AgentSummaryWithCitations = {
+    const summary: NonNullable<AgentTurnView['summary']> = {
       md: res.answer,
       // Only D1 on can combine: with D1 off the label stays "Note from your MOG" (AC-2b.6).
       kind: r.crossWorkspace ? res.answerKind : 'note',

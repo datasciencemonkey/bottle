@@ -3,29 +3,10 @@
  * 1-based index into the `sources` of the turn result. The brain maps each valid marker to a
  * citation (the workspace chip, the call and the Open in Databricks link). The view draws the
  * list and never parses or resolves anything itself (ARC-2).
- *
- * `AgentCitation` is local to the brain until the contract change in
- * `bottle-tools/orch/cite-contract.md` moves it to `src/shared/ipc.ts`.
  */
+import { CITATION_MARKER } from '../shared/citation-marker';
 import { openInDatabricksUrl } from '../shared/link-trust';
-import type { AgentPartView, AgentTurnView, AgentWsChip } from '../shared/ipc';
-
-export interface AgentCitation {
-  /** The number in the text, 1-based. */
-  n: number;
-  callId: string;
-  workspace: AgentWsChip;
-  /** The checked Open in Databricks link of the part, when it has one. */
-  deepLink?: string;
-}
-
-/** The summary of a turn with its citations (the shape of the contract change). */
-export type AgentSummaryWithCitations = NonNullable<AgentTurnView['summary']> & {
-  citations?: AgentCitation[];
-};
-
-/** A marker is `[n]` that is not the label of a link `[n](url)`. */
-const MARKER = /\[(\d{1,3})\](?!\()/g;
+import type { AgentCitation, AgentPartView } from '../shared/ipc';
 
 /**
  * The citations of `md`, one for each distinct valid `n`, sorted by `n`. A marker is dropped (and
@@ -38,7 +19,7 @@ export function citationsOf(
   parts: ReadonlyMap<string, AgentPartView>,
 ): AgentCitation[] {
   const seen = new Set<number>();
-  for (const m of md.matchAll(MARKER)) seen.add(Number(m[1]));
+  for (const m of md.matchAll(CITATION_MARKER)) seen.add(Number(m[1]));
   const out: AgentCitation[] = [];
   for (const n of [...seen].sort((a, b) => a - b)) {
     const source = sources[n - 1];

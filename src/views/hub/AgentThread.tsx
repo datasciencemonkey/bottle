@@ -488,7 +488,9 @@ function StoredTurn({
   );
   const openNoteLink = (url: string) => {
     const host = displayHost(url)?.toLowerCase();
-    const part = turn.parts.find((p) => bareHost(p.workspaceHost) === host);
+    // Two parts may share a host: the first one that did not fail speaks for it.
+    const same = turn.parts.filter((p) => bareHost(p.workspaceHost) === host);
+    const part = same.find((p) => p.status !== 'failed') ?? same[0];
     if (part) openPartLink(url, part.requestId);
   };
   const listId = `agent-parts-${turn.turnUuid}`;

@@ -515,7 +515,8 @@
   justify-content: center;
   min-width: 1.5em;
   height: 1.5em;
-  margin: 0 1px;
+  /* 2 x 4px between two chips: their 24px hit areas (7.5px beyond each chip) do not overlap. */
+  margin: 0 4px;
   padding: 0 var(--mog-space-1);
   border: 1px solid var(--agent-ws-stripe, var(--mog-edge));
   border-radius: var(--mog-radius-pill);
@@ -564,11 +565,30 @@
 }
 
 /* The part that a citation reached: a short highlight that fades out. */
-.agent-part[data-flash] {
-  animation: agent-part-flash 1.6s ease-out;
+/* The value of data-flash is the parity of the click count: a repeat click changes the animation
+   name, so the highlight starts again. */
+.agent-part[data-flash='0'] {
+  animation: agent-part-flash-a 1.6s ease-out;
 }
 
-@keyframes agent-part-flash {
+.agent-part[data-flash='1'] {
+  animation: agent-part-flash-b 1.6s ease-out;
+}
+
+.agent-part:focus {
+  outline: none;
+}
+
+@keyframes agent-part-flash-a {
+  from {
+    background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@keyframes agent-part-flash-b {
   from {
     background: color-mix(in srgb, var(--agent-ws-color, var(--mog-focus)) 28%, transparent);
   }

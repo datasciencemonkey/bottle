@@ -18,13 +18,14 @@
  * - A queued turn shows the pill "Queued" and "Sends when the answer above lands".
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ChevronRight, EyeOff } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import type {
+  AgentCitation,
   AgentCallView,
   AgentPartView,
   AgentTurnView,
@@ -171,39 +172,6 @@ export function WsChip({ chip }: { chip: AgentWsChip }) {
   );
 }
 
-/** A citation of the summary (ADR 0122). The brain sends it; the view only draws it. */
-export interface AgentCitationView {
-  n: number;
-  callId: string;
-  workspace: AgentWsChip;
-  deepLink?: string;
-}
-
-/**
- * The citations that a summary carries. They are a field of the summary that is not in the shared
- * `AgentTurnView` type yet (`bottle-tools/orch/cite-contract.md`), so this reads it with a check.
- */
-export function citationsOfSummary(summary: AgentTurnView['summary']): AgentCitationView[] {
-  const raw = (summary as { citations?: unknown } | undefined)?.citations;
-  if (!Array.isArray(raw)) return [];
-  const out: AgentCitationView[] = [];
-  for (const c of raw as Partial<AgentCitationView>[]) {
-    if (
-      typeof c?.n === 'number' &&
-      typeof c.callId === 'string' &&
-      typeof c.workspace?.name === 'string' &&
-      typeof c.workspace.colorVariant === 'string'
-    )
-      out.push({
-        n: c.n,
-        callId: c.callId,
-        workspace: c.workspace,
-        ...(typeof c.deepLink === 'string' ? { deepLink: c.deepLink } : {}),
-      });
-  }
-  return out;
-}
-
 /** A part that the user asked to see: the turn scrolls to it and flashes it for a moment. */
 export interface PartReveal {
   callId: string;
@@ -212,6 +180,7 @@ export interface PartReveal {
 }
 export const FLASH_MS = 1600;
 export const citeLabel = (n: number, workspace: string): string => `Source ${n}: ${workspace}`;
+export const CITE_HINT = 'Shift-click or Shift+Enter opens it in Databricks.';
 
 /** The marker `[n]` of the summary: a small chip in the colour of its workspace. */
 function CiteChip({
@@ -219,29 +188,42 @@ function CiteChip({
   onReveal,
   onOpenLink,
 }: {
-  cite: AgentCitationView;
+  cite: AgentCitation;
   onReveal: (callId: string) => void;
   onOpenLink?: ((url: string) => void) | undefined;
 }) {
   const url = onOpenLink ? cite.deepLink : undefined;
+  const hintId = useId();
+  // The link goes through the same trusted path as every link: the brain checks it again.
   return (
-    <button
-      type="button"
-      className="agent-cite"
-      data-agent-cite={cite.n}
-      style={stripe(cite.workspace)}
-      aria-label={citeLabel(cite.n, cite.workspace.name)}
-      title={
-        url ? `${cite.workspace.name}. Shift-click opens it in Databricks.` : cite.workspace.name
-      }
-      onClick={(e) => {
-        // The link goes through the same trusted path as every link: the brain checks it again.
-        if (e.shiftKey && url) onOpenLink?.(url);
-        else onReveal(cite.callId);
-      }}
-    >
-      {cite.n}
-    </button>
+    <>
+      <button
+        type="button"
+        className="agent-cite"
+        data-agent-cite={cite.n}
+        style={stripe(cite.workspace)}
+        aria-label={citeLabel(cite.n, cite.workspace.name)}
+        {...(url ? { 'aria-describedby': hintId } : {})}
+        title={url ? `${cite.workspace.name}. ${CITE_HINT}` : cite.workspace.name}
+        onClick={(e) => {
+          if (e.shiftKey && url) onOpenLink?.(url);
+          else onReveal(cite.callId);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && e.shiftKey && url) {
+            e.preventDefault();
+            onOpenLink?.(url);
+          }
+        }}
+      >
+        {cite.n}
+      </button>
+      {url && (
+        <span id={hintId} hidden>
+          {CITE_HINT}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -278,14 +260,14 @@ function Part({
   part,
   onOpenLink,
   titled = false,
-  flash = false,
+  flash,
 }: {
   part: AgentPartView;
   onOpenLink?: ((url: string) => void) | undefined;
   /** The answer has its own heading "Answer from <workspace>" instead of the chip. */
   titled?: boolean;
   /** The part was just reached from a citation: it is highlighted for a moment. */
-  flash?: boolean;
+  flash?: 0 | 1 | undefined;
 }) {
   const answer = sectionOf(part.sections, 'answer');
   const keys = sectionOf(part.sections, 'keyNumbers');
@@ -299,7 +281,9 @@ function Part({
     <li
       className="agent-part"
       data-agent-part={part.callId}
-      {...(flash ? { 'data-flash': '' } : {})}
+      // The parity of the click count: a repeat click restarts the highlight (CSS).
+      {...(flash !== undefined ? { 'data-flash': flash } : {})}
+      tabIndex={-1}
       style={stripe(part.workspace)}
     >
       <div className="agent-part-head">
@@ -382,7 +366,9 @@ export function TurnParts({
     reveal.seq !== dismissed &&
     folded.some((p) => p.callId === reveal.callId);
   const foldOpen = open || forced;
-  const flash = reveal && !reveal.done ? reveal.callId : undefined;
+  const flashId = reveal && !reveal.done ? reveal.callId : undefined;
+  const flashOf = (id: string): 0 | 1 | undefined =>
+    reveal && id === flashId ? (reveal.seq % 2 === 0 ? 0 : 1) : undefined;
   if (turn.parts.length === 0) return null;
   return (
     <>
@@ -394,7 +380,7 @@ export function TurnParts({
               part={p}
               onOpenLink={onOpenLink}
               titled={answersFirst}
-              flash={p.callId === flash}
+              flash={flashOf(p.callId)}
             />
           ))}
         </ul>
@@ -425,7 +411,7 @@ export function TurnParts({
           </button>
           <ul id={foldId} className="agent-parts" aria-label="Workspace answers" hidden={!foldOpen}>
             {folded.map((p) => (
-              <Part key={p.callId} part={p} onOpenLink={onOpenLink} flash={p.callId === flash} />
+              <Part key={p.callId} part={p} onOpenLink={onOpenLink} flash={flashOf(p.callId)} />
             ))}
           </ul>
         </>
@@ -533,6 +519,8 @@ export function TurnBody({
     const calm =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     el?.scrollIntoView?.({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+    // The keyboard and the screen reader follow the user to the answer.
+    (el as HTMLElement | undefined)?.focus?.({ preventScroll: true });
     const t = setTimeout(
       () => setReveal((r) => (r?.seq === revealSeq ? { ...r, done: true } : r)),
       FLASH_MS,
@@ -540,7 +528,7 @@ export function TurnBody({
     return () => clearTimeout(t);
   }, [revealSeq, revealId]);
   const cites = useMemo(
-    () => new Map(citationsOfSummary(turn.summary).map((c) => [c.n, c])),
+    () => new Map((turn.summary?.citations ?? []).map((c) => [c.n, c])),
     [turn.summary],
   );
   const renderMarker = useCallback(

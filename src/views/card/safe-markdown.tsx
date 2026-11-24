@@ -20,6 +20,7 @@ import {
   trustedUrl,
   type LinkTrust,
 } from '../../shared/link-trust';
+import { CITATION_MARKER } from '../../shared/citation-marker';
 import { formatColumn } from './table-numbers';
 import './safe-markdown.css';
 
@@ -131,7 +132,7 @@ function plain(text: string, ctx: Ctx, key: string): ReactNode[] {
   if (!draw) return [text];
   const out: ReactNode[] = [];
   let last = 0;
-  for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
+  for (const m of text.matchAll(CITATION_MARKER)) {
     const node = draw(Number(m[1]));
     if (node === undefined) continue;
     if (m.index > last) out.push(text.slice(last, m.index));
