@@ -387,3 +387,42 @@ describe('#559 design tokens', () => {
     expect(css).toMatch(/appearance:\s*none/);
   });
 });
+
+describe('popup actions row layout (a clipped chip row, owner screenshot)', () => {
+  const css = readFileSync(join(__dirname, 'card.css'), 'utf8');
+  const rule = (sel: string) => {
+    const m = css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.[\]']/g, '\\$&')}\\s*\\{([^}]*)\\}`));
+    return m?.[1] ?? '';
+  };
+
+  it('[#559] the chips and the hint sit in one row that wraps and never clips', async () => {
+    const { el } = await mountCard();
+    await tauri.emit('card:update', {
+      ...asks,
+      chips: [...asks.chips, { id: 'ws:other', label: 'Ask other workspaces too' }],
+    });
+    const row = el.querySelector('[data-popup-actions]') as HTMLElement;
+    expect(row.querySelectorAll('[data-chip]').length).toBeGreaterThanOrEqual(2);
+    expect(row.querySelector('[data-popup-hint]')).not.toBeNull();
+    const actions = rule('.popup-actions');
+    expect(actions).toMatch(/flex-wrap:\s*wrap/);
+    expect(actions).toMatch(/gap:/);
+    expect(actions).not.toMatch(/nowrap/);
+    expect(actions).not.toMatch(/overflow:\s*hidden/);
+    expect(rule('.popup')).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule('.popup')).not.toMatch(/overflow:\s*hidden/);
+    // The chip wraps its own label rather than lose the end of it.
+    expect(rule('.popup-action')).not.toMatch(/white-space:\s*nowrap/);
+    expect(rule('.popup-action')).toMatch(/min-height:\s*28px/);
+  });
+
+  it('[#559] the hint is quiet, muted text that the user cannot select', () => {
+    const hint = rule('.popup-hint');
+    expect(hint).toMatch(/user-select:\s*none/);
+    expect(hint).toMatch(/-webkit-user-select:\s*none/);
+    expect(hint).toMatch(/color:\s*var\(--mog-text-muted\)/);
+    expect(hint).not.toMatch(/background/);
+    // Chips are controls, not text to select: the same rule covers them.
+    expect(css).toMatch(/\.popup-action,\s*\.popup-dismiss\s*\{[^}]*user-select:\s*none/);
+  });
+});
