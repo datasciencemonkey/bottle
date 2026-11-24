@@ -12,11 +12,11 @@ use mog_core::types::{
     AgentTurnCall, AgentTurnEvent, AgentTurnResult, AgentTurnView, AppSetting, AppSettingKey,
     CaptureMode, CaptureState, CardUpdate, ConsentRecordKind, ConsentRecordView, GenieCodeStatus,
     Intent, MicHealth, MicLevelFrame, MogId, MogViewState, Mood, NetStatus, OrchestratorModels,
-    OrchestratorStatus, OthersTrack, Profile, ProfileInfo, ProfileName, RecordToggle,
-    RecordingDetail, RecordingErrorKind, RecordingSettings, RecordingState, RecordingStatus,
-    RecordingSummary, RouterCommand, RouterDecision, SegmentRef, SessionPolicy, StorageProbe,
-    TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState, TokenStatus,
-    Track, Transcript, TranscriptProvider, WorkspaceList,
+    OrchestratorState, OrchestratorStatus, OthersTrack, Profile, ProfileInfo, ProfileName,
+    RecordToggle, RecordingDetail, RecordingErrorKind, RecordingSettings, RecordingState,
+    RecordingStatus, RecordingSummary, RouterCommand, RouterDecision, SegmentRef, SessionPolicy,
+    StorageProbe, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus, TokenState,
+    TokenStatus, Track, Transcript, TranscriptProvider, WorkspaceList,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -113,6 +113,7 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "WorkspaceList" => round_trip::<WorkspaceList>(json),
         "OrchestratorModels" => round_trip::<OrchestratorModels>(json),
         "OrchestratorStatus" => round_trip::<OrchestratorStatus>(json),
+        "OrchestratorState" => round_trip::<Vec<OrchestratorState>>(json),
         "AgentCallState" => round_trip::<Vec<AgentCallState>>(json),
         "AgentSessionEndReason" => round_trip::<Vec<AgentSessionEndReason>>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
@@ -215,6 +216,7 @@ fn every_ipc_type_has_a_fixture() {
         "WorkspaceList",
         "OrchestratorModels",
         "OrchestratorStatus",
+        "OrchestratorState",
         "AgentCallState",
         "AgentSessionEndReason",
     ] {

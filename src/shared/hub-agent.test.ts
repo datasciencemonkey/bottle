@@ -140,6 +140,13 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(withCites([{ ...cite, callId: 5 }])).toBeUndefined();
     expect(withCites([{ ...cite, workspace: { name: 5 } }])).toBeUndefined();
     expect(withCites([{ ...cite, deepLink: 5 }])).toBeUndefined();
+    expect(withCites([{ ...cite, workspaceHost: 5 }])).toBeUndefined();
+    expect(
+      withCites([{ ...cite, deepLink, workspaceHost: 'https://example.cloud.databricks.com' }])
+        ?.summary?.citations?.[0]?.workspaceHost,
+    ).toBe('https://example.cloud.databricks.com');
+    for (const n of [-1, 0, 1.5]) expect(withCites([{ ...cite, n }])).toBeUndefined();
+    expect(withCites([{ ...cite, callId: 'c-1' }])).toBeUndefined();
   });
 
   it('drops a bad notice instead of failing', () => {
