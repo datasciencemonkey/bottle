@@ -31,7 +31,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::http_transport::host_policy::is_workspace_host;
 use crate::ipc::{ProfileArgs, ProfileLoginArgs};
 use crate::ipc_gateway::GatewayComponents;
-use crate::profile_service::ConfigSource;
+use crate::profile_service::{ConfigSource, U2M_AUTH_TYPE};
 
 /// W-07c: `databricks auth login` times out after 5 min.
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -290,6 +290,56 @@ impl ProfileLogin {
         Ok(json!({ "loginId": format!("login-{id}") }))
     }
 
+    /// `profile_reauth` (ADR 0117): sign an existing U2M profile in again, on its own host.
+    /// The CLI keeps every other key of a U2M profile. A PAT or service-principal profile would
+    /// lose its keys and change its auth type, so any profile that is not `auth_type =
+    /// databricks-cli` is refused (`profile_invalid`) and the CLI never runs. It shares the
+    /// running registry, so `profile_login_cancel` works. It passes no `--client-id`: the CLI
+    /// reuses the `client_id` of the profile.
+    fn reauth(&self, a: ProfileArgs) -> CoreResult<Value> {
+        let profile = a.profile.as_str();
+        if !plain_value(profile) {
+            return Err(refused("invalid_args"));
+        }
+        let key = profile.to_ascii_lowercase();
+        let found = self
+            .config
+            .profiles()
+            .map_err(|_| refused("host_failed"))?
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(profile))
+            .filter(|p| p.auth_type == U2M_AUTH_TYPE)
+            .ok_or(refused("profile_invalid"))?;
+        let host = workspace_host(&found.host).ok_or(refused("host_refused"))?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut running = self.running();
+            if running.contains_key(&key) {
+                return Err(refused("profile_exists"));
+            }
+            if let Some(at) = lock(&self.pending_cancel).remove(&key) {
+                if at.elapsed() < PENDING_CANCEL {
+                    return Err(refused("login_cancelled"));
+                }
+            }
+            running.insert(key.clone(), cancel.clone());
+        }
+        let _running = Running {
+            map: &self.running,
+            key,
+        };
+        self.cli
+            .run_login(&login_args(&host, profile, None), LOGIN_TIMEOUT, &cancel)
+            .map_err(|e| refused(cli_code(&e)))?;
+        if cancel.load(Ordering::SeqCst) {
+            return Err(refused("login_cancelled"));
+        }
+        self.verifier
+            .verify(profile)
+            .map_err(|e| refused(verify_code(&e)))?;
+        Ok(json!({}))
+    }
+
     /// `profile_login_cancel`: set the cancel flag of the running sign-in, if any.
     /// A cancel for a name with no sign-in yet is kept for [`PENDING_CANCEL`], so a cancel that
     /// overtakes its `profile_login` on the way to the host still stops it.
@@ -313,6 +363,7 @@ impl GatewayComponents for ProfileLogin {
         match command {
             "profile_login" => self.login(args_of(args)?),
             "profile_login_cancel" => self.cancel(args_of(args)?),
+            "profile_reauth" => self.reauth(args_of(args)?),
             _ => Err(refused("not_implemented")),
         }
     }

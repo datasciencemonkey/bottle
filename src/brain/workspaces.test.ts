@@ -360,6 +360,15 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.calls.at(-1)).toEqual(['list', true]);
   });
 
+  it('profile_invalid from a sign-in tells the user to use the command below', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.reauth = async () => Promise.reject({ error: 'profile_invalid' });
+    await r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.not_browser });
+  });
+
   it.each([
     ['login_cancelled', WORKSPACE_TEXT.login_cancelled],
     ['timeout', WORKSPACE_TEXT.timeout],

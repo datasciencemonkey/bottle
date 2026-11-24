@@ -57,6 +57,7 @@ export const WORKSPACE_TEXT = {
   login_cancelled: 'The sign-in was cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
+  not_browser: 'This workspace does not use browser sign-in. Run the command below in Terminal.',
   auth_expired: 'Bottle could not use the new sign-in for this workspace.',
   no_grant: 'Your account has no access to this workspace. Ask your workspace admin for access.',
   offline: 'Bottle cannot reach this workspace. Check your network.',
@@ -389,6 +390,10 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             // quiet note. The hub row also has a Copy button. The next `workspaces.ready`
             // reads the new state.
             return publish(last, { notice: { kind: 'error', text: signInByHand(a.profile) } });
+          }
+          if (code === 'profile_invalid') {
+            // A PAT or service-principal profile: a CLI login would change it. The row has Copy.
+            return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_browser } });
           }
           const text = SIGN_IN_CODES.has(code)
             ? WORKSPACE_TEXT[code as keyof typeof WORKSPACE_TEXT]
