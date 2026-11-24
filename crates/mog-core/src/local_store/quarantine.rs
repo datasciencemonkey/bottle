@@ -47,6 +47,8 @@ fn sources() -> Vec<(&'static str, String)> {
         ("role_tag", r"</?\s*(?:system|assistant|developer|user|instructions?|utterance|router_input|prompt)\s*>".to_owned()),
         ("role_tag", r"\[/?\s*(?:inst|sys|system)\s*\]".to_owned()),
         ("role_tag", r"<</?sys>>".to_owned()),
+        // The guard's own answer block: a tag-like `genie_answer` in an answer is never data.
+        ("role_tag", r"</?\s*genie_answer\b".to_owned()),
         ("role_tag", r"#{2,}\s*(?:system|instruction|instructions)\b".to_owned()),
         // Memory: "ignore previous" at the end of a clause or before an instruction noun.
         ("ignore_previous", r"\b(?:ignore|disregard|forget)\s+(?:(?:all|any|everything)\s+)?(?:of\s+)?(?:(?:the|your|my)\s+)?(?:previous|prior|above|earlier|preceding|foregoing)(?:\s*(?:[.,;:!?)]|$)|\s+(?:and|then)\b|\s+(?:instructions?|guidance|messages?|context|prompts?|directions?|commands?|text|rules?|conversation|content|input|orders|steps)\b)".to_owned()),
