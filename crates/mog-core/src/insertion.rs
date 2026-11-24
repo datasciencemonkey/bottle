@@ -33,7 +33,8 @@ pub use macos::MacInsertHost;
 #[cfg(windows)]
 pub use windows::{WindowsClipboard, WindowsInsertHost};
 
-/// The reply of `insert_text` (section 4.5): `{result: inserted|no_permission|no_focus|secure_field}`.
+/// The reply of `insert_text` (section 4.5):
+/// `{result: inserted|no_permission|no_focus|secure_field|target_changed}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InsertOutcome {
@@ -45,6 +46,9 @@ pub enum InsertOutcome {
     NoFocus,
     /// The focused field is a secure (password) field.
     SecureField,
+    /// ADR 0118 (UX slice 2): the focused app is not the app that had the focus when the
+    /// capture lease was granted. No key event was sent; the clipboard is as ADR 0048 restores it.
+    TargetChanged,
 }
 
 /// What has the keyboard focus, as the host sees it.
@@ -690,7 +694,8 @@ mod tests {
     #[test]
     fn mog_06a_component_replies_with_the_result_code() {
         let c = InsertTextComponent::new(Fake::new("e"), Some(ClipboardPlatform::MacOs));
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi"});
+        let args =
+            json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi", "leaseId": "1"});
         assert_eq!(
             c.call("insert_text", args.clone()).unwrap(),
             json!({"result": "inserted"})
@@ -712,7 +717,8 @@ mod tests {
 
     #[test]
     fn mog_06a_component_refuses_other_commands_bad_args_and_no_platform() {
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi"});
+        let args =
+            json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "hi", "leaseId": "1"});
         let c = InsertTextComponent::new(Fake::new("e"), Some(ClipboardPlatform::MacOs));
         assert_eq!(
             c.call("config_list", json!({})).unwrap_err().code(),
@@ -737,7 +743,7 @@ mod tests {
         let mut f = Fake::new("e");
         f.fail_write = true;
         let c = InsertTextComponent::new(f, Some(ClipboardPlatform::MacOs));
-        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "secret words"});
+        let args = json!({"mogId": "00000000-0000-4000-8000-0000000000a1", "text": "secret words", "leaseId": "1"});
         let err = c.call("insert_text", args).unwrap_err();
         assert_eq!(err.code(), "host_failed");
         assert!(!err.to_string().contains("secret"));

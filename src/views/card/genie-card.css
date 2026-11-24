@@ -145,6 +145,49 @@
   animation: genie-stage-out 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+/* UX slice 1: "Answer ready". The gold spark dot of the lamp replaces the timer; the text is
+   solid, with no sweep, because nothing is working now. The card opens after the hold. */
+.genie-ready-dot {
+  flex: none;
+  animation: genie-ready-in 240ms var(--mog-ease-out) both;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mog-spark);
+  box-shadow: 0 0 6px 0 var(--mog-spark);
+}
+
+.genie-working[data-ready] .genie-ready-dot {
+  /* The dot sits in the slot of the timer, so the pill keeps its width. */
+  margin-left: auto;
+}
+
+.genie-working[data-ready] .genie-stage:not([data-leaving]) {
+  -webkit-mask-image: none;
+  mask-image: none;
+  animation: genie-stage-in 180ms var(--mog-ease-out) both;
+}
+
+.genie-working[data-ready] .genie-stage[data-leaving] {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* UX slice 1: a pop-up under the pill, in the same window. It never covers the pill. */
+.card-genie .popup {
+  margin-top: var(--mog-space-2);
+  padding-left: 16px;
+}
+
+/* One group with the pill above it: the pill already points at the MOG. */
+.card-genie .popup::before {
+  display: none;
+}
+
+html[data-side='left'] .card-genie .popup {
+  margin-left: auto;
+}
+
 .genie-timer {
   flex: none;
   margin-left: auto;
@@ -473,6 +516,13 @@
   }
 }
 
+@keyframes genie-ready-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
 @keyframes genie-stage-in {
   from {
     opacity: 0;
@@ -541,6 +591,15 @@
 
   .genie-stage[data-leaving] {
     display: none;
+  }
+
+  /* Ready is still: no breathing, no fade. */
+  .genie-working[data-ready] .genie-stage:not([data-leaving]) {
+    animation: none;
+  }
+
+  .genie-ready-dot {
+    animation: none;
   }
 
   .genie-body {

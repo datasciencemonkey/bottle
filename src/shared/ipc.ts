@@ -364,7 +364,7 @@ export interface CommandArgs {
     language?: string;
     tags: Tags;
   };
-  insert_text: { mogId: MogId; text: string };
+  insert_text: { mogId: MogId; text: string; leaseId: LeaseId };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
   agent_stop: MogArgs;
   agent_send: { mogId: MogId; turn: JsonObject };
@@ -1081,6 +1081,11 @@ export interface RecordingSettings {
   presetInstructions: string;
   /** The recording stops by itself after this many minutes: 5 to 120, default 60. */
   lengthMin: number;
+  /**
+   * ADR 0118: the one-time note "Your call can still hear you." was shown after the first
+   * talk-key hold during a recording. Default false.
+   */
+  heldNoteShown: boolean;
 }
 
 /** A partial `RecordingSettings`. An absent field keeps its value; no field clears to null. */
@@ -1194,7 +1199,9 @@ export interface CommandReturns {
   /** Oldest first. */
   consent_records_list: { records: ConsentRecordView[] };
   stt_transcribe: Transcript;
-  insert_text: { result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' };
+  insert_text: {
+    result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' | 'target_changed';
+  };
   agent_start: { agentSessionId: string };
   agent_stop: Empty;
   agent_send: Empty;

@@ -2,7 +2,9 @@
  * The registry of the hidden TS brain components T1-T15 of 4.3 (ARC-2, MOG-08b).
  * `startBrain()` constructs each component once; all domain state lives in these objects.
  */
-import type { MogId } from '../../shared/interfaces';
+import type { CaptureState, MogId, SegmentRef } from '../../shared/interfaces';
+import { createBrainLog } from '../log';
+import { createArrivalGate, noPasteOnEmpty } from '../arrival-gate';
 import { call } from '../../shared/ipc';
 import { createAskGate, wireAskGate } from '../ask-gate';
 import {
@@ -332,6 +334,32 @@ export function startBrain(): Brain {
     // #498: the card stack of each MOG, made on first use. TODO(#374): drop a stack when its MOG
     // closes.
     const cardClock = createSystemClock();
+    // UX slice 1: no Ask Genie arrival opens the card while the talk key is held (or hands-free
+    // listens); it applies 1.2 s after the paste of the hold.
+    const arrivalLog = createBrainLog();
+    const arrivalGate = createArrivalGate({
+      clock: cardClock,
+      schedule: timeoutScheduler(cardClock),
+      // A held arrival that throws: a fixed code, no content (SEC-16c).
+      onFault: () => void arrivalLog.event('card.render', { ok: 0 }),
+    });
+    bus.on(EVENTS['hotkey.ptt'].name, (p) => {
+      const e = asPttEvent(p, 0);
+      if (e) arrivalGate.onPtt(e);
+    });
+    bus.on(EVENTS['capture.state'].name, (p) => {
+      if (typeof p === 'object' && p !== null) arrivalGate.onCaptureState(p as CaptureState);
+    });
+    bus.on(EVENTS['capture.segment'].name, (p) => {
+      const seg = p as Partial<SegmentRef> | null;
+      if (seg?.final === true && typeof seg.segmentId === 'string')
+        arrivalGate.segmentFinal({ segmentId: seg.segmentId, leaseId: seg.leaseId });
+    });
+    // Esc in a card stops hands-free and drops its audio: no paste follows.
+    onViewInput(bus, (input) => {
+      if (input.kind === 'cancel' && input.from === `card-${input.mogId}`)
+        arrivalGate.handsFreeDiscarded();
+    });
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
@@ -378,6 +406,7 @@ export function startBrain(): Brain {
           captureMood.ask(mogId, phase);
         },
         showCard: (mogId) => call('window_card_show', { mogId }),
+        arrivals: arrivalGate,
         // The card's "Change workspace…": the same path as the right-click "Change home
         // workspace…": show the hub on that MOG's Edit form.
         changeWorkspace: () => {
@@ -545,7 +574,11 @@ export function startBrain(): Brain {
     const lifecycle = createCaptureLifecycle({
       control: ipcCaptureControl({ consent: components.T12 }),
       // MB-08a: a refused start is never silent. The consent gate also shows the hub notice.
-      onRefused: (e) => captureMood.refused(e.mogId, e.error),
+      onRefused: (e) => {
+        captureMood.refused(e.mogId, e.error);
+        // UX slice 1: a refused start has no paste, so held arrivals need not wait for one.
+        arrivalGate.refused();
+      },
       // ADR 0103: ⌥R in the hold starts or stops the call recording, after the PTT discard. A
       // refusal shows on the MOG of the press (none with no open MOG).
       onRecordToggle: ({ mogId }) =>
@@ -562,10 +595,9 @@ export function startBrain(): Brain {
         })(),
       // #52 (ADR 0088): T4 runs the 8.3 chain over `stt_transcribe` (host route TODO(#514)).
       // A failure shows its fixed text on the owner's card, and no text is routed.
-      transcribe: createLifecycleTranscriber(
-        components.T4,
-        sendOwnedCard,
-        createDictationCorrector(),
+      transcribe: noPasteOnEmpty(
+        createLifecycleTranscriber(components.T4, sendOwnedCard, createDictationCorrector()),
+        (seg) => arrivalGate.pasteResolved(false, seg),
       ),
       // #59 (ADR 0053, ADR 0098): the MOG of the key-down owns the utterance (MOG-13a); a
       // dictation ends at `insert_text`; an ⌥G ask or a chip goes to T3.
@@ -604,6 +636,8 @@ export function startBrain(): Brain {
             : memoryUnavailable(owned.mogId),
         // #498, MOG-05b, MOG-06d: a Copy or a failed insertion reaches the Copy card.
         onDone: (r, owned) => void dictation.onDone(r, owned).catch(() => undefined),
+        // UX slice 1: the paste ended (or none came): the held arrivals follow 1.2 s later.
+        onPasteResolved: (pasted, seg) => arrivalGate.pasteResolved(pasted, seg),
       }),
     });
     wireCaptureLifecycle(bus, lifecycle, createSystemClock().now);

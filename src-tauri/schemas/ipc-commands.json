@@ -890,9 +890,18 @@
       "type": "object"
     },
     "insert_text": {
+      "$defs": {
+        "LeaseRef": {
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "leaseId": {
+          "$ref": "#/$defs/LeaseRef"
+        },
         "mogId": {
           "type": "string"
         },
@@ -902,7 +911,8 @@
       },
       "required": [
         "mogId",
-        "text"
+        "text",
+        "leaseId"
       ],
       "title": "InsertTextArgs",
       "type": "object"
@@ -1552,6 +1562,12 @@
               ]
             },
             "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "heldNoteShown": {
               "type": [
                 "boolean",
                 "null"

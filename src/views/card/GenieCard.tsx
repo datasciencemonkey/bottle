@@ -35,6 +35,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
 import {
   AFTER_HOVER_MS,
+  ANSWER_READY,
   CARD_DISMISS_EVENT,
   CARD_DONE,
   CARD_MOG_HOVER_EVENT,
@@ -115,7 +116,7 @@ function useWindowEvent(name: string, fn: (payload: unknown) => void) {
 }
 
 /** The stage line with its change motion: the old line leaves while the new one comes in. */
-function Stage({ text }: { text: string }) {
+function Stage({ text, live }: { text: string; live?: string | undefined }) {
   const [shown, setShown] = useState({ text, leaving: undefined as string | undefined });
   if (text !== shown.text) setShown({ text, leaving: shown.text });
   useEffect(() => {
@@ -127,7 +128,7 @@ function Stage({ text }: { text: string }) {
     <span className="genie-stage-slot">
       {/* One stable live region, so a screen reader reads each new stage once. */}
       <span className="genie-sr" data-genie-live aria-live="polite">
-        {shown.text}
+        {live ?? shown.text}
       </span>
       {shown.leaving !== undefined && (
         <span className="genie-stage" data-leaving aria-hidden="true">
@@ -221,11 +222,15 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const changeWorkspace = card.chips.find((c) => c.id === `workspace:${blurbId}`);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
+  // UX slice 1: an answer is waiting for the talk-key hold to end. The pill says so, with no timer.
+  const ready = working && text.split('\n')[0] === ANSWER_READY;
   const showMs = kind === 'failure' ? FAILURE_SHOW_MS : answerShowMs(answer?.md ?? text);
 
   const [vis, setVis] = useState<Vis>('shown');
   const ref = useRef<HTMLDivElement>(null);
   const holds = useRef({ pointer: false, mog: false });
+  // UX slice 1: the width of the working pill, so the ready pill keeps it (the timer was in it).
+  const workWidth = useRef(0);
   // The point of the last `mousedown` on the card, so `openInBottle` can tell a click from a
   // press-drag-release (review round 2, finding "also fix if cheap"): a drag never opens the hub.
   const pressPos = useRef<{ x: number; y: number } | null>(null);
@@ -239,6 +244,20 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   const timer = useRef<{ handle?: ReturnType<typeof setTimeout>; due: number; left: number }>({
     due: 0,
     left: showMs,
+  });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || kind !== 'working') return;
+    if (!ready) workWidth.current = el.getBoundingClientRect().width;
+    el.style.minWidth = ready && workWidth.current > 0 ? `${workWidth.current}px` : '';
+    if (ready || typeof ResizeObserver === 'undefined') return;
+    // The timer comes in after 3 s and grows the pill without a render of this component.
+    const ro = new ResizeObserver(() => {
+      workWidth.current = el.getBoundingClientRect().width;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   });
 
   // The window fits the content's final size first, so the grow motion is never cut (used below,
@@ -566,6 +585,7 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
       ref={ref}
       className={`genie genie-${kind}`}
       data-genie={kind}
+      data-ready={ready ? '' : undefined}
       data-state={vis}
       style={accent ? ({ '--mog-id-color': accent } as CSSProperties) : undefined}
       onMouseEnter={() => hold('pointer', true)}
@@ -585,8 +605,11 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
       )}
       {kind === 'working' && (
         <>
-          <Stage text={line1} />
-          <Timer />
+          <Stage
+            text={line1}
+            live={ready && identity ? `${identity.name}: ${ANSWER_READY}` : undefined}
+          />
+          {ready ? <span className="genie-ready-dot" aria-hidden="true" /> : <Timer />}
         </>
       )}
       {kind !== 'working' && (

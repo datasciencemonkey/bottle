@@ -5,5 +5,6 @@
   "transcribeEndpoint": "databricks-gemini-3-8-flash",
   "notesEndpoint": "databricks-claude-sonnet-5-5",
   "presetInstructions": "Write short notes in Markdown.",
-  "lengthMin": 60
+  "lengthMin": 60,
+  "heldNoteShown": false
 }

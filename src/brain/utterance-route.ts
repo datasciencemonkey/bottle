@@ -17,8 +17,8 @@
  *
  * The capture lifecycle calls it through `createUtteranceHandler` (`utterance-wiring.ts`).
  */
-import type { MogId, RouterDecision } from '../shared/interfaces';
-import { call, type CommandReturns } from '../shared/ipc';
+import type { LeaseId, MogId, RouterDecision } from '../shared/interfaces';
+import { call, type CommandArgs, type CommandReturns } from '../shared/ipc';
 import { createRouterContextGate } from './components/router-context-gate';
 import type { RouterInput } from './components/router-step';
 
@@ -31,6 +31,8 @@ export interface Utterance {
   mogId: MogId;
   /** The STT text (pre-pass). */
   text: string;
+  /** ADR 0118: the capture lease of the segment. `insert_text` pastes only into its app. */
+  leaseId: LeaseId;
   /** ⌥G was tapped during the talk-key hold (`hotkey:ptt` up, `ask: true`, ADR 0098). */
   forceAsk: boolean;
   /** `app.dictation.insert` (Appendix F): on after the user grants Accessibility. */
@@ -80,7 +82,7 @@ export interface UtteranceRouteDeps {
   /** The router step (`RouterContextGate.route`). */
   route(text: string, mogId: MogId, input: RouterInput): Promise<RouterDecision>;
   /** `insert_text` (R11, #58). */
-  insertText(args: { mogId: MogId; text: string }): Promise<CommandReturns['insert_text']>;
+  insertText(args: CommandArgs['insert_text']): Promise<CommandReturns['insert_text']>;
 }
 
 /** The production deps: the router step over `model_invoke` and the `insert_text` command. */
@@ -125,7 +127,7 @@ export async function routeUtterance(
   else {
     let result: InsertResult | 'host_failed';
     try {
-      result = (await deps.insertText({ mogId: u.mogId, text: exact })).result;
+      result = (await deps.insertText({ mogId: u.mogId, text: exact, leaseId: u.leaseId })).result;
     } catch {
       result = 'host_failed';
     }

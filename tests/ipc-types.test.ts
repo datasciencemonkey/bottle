@@ -636,6 +636,7 @@ const typed: Record<string, unknown> = {
     notesEndpoint: 'databricks-claude-sonnet-5-5',
     presetInstructions: 'Write short notes in Markdown.',
     lengthMin: 45,
+    heldNoteShown: true,
   } satisfies RecordingSettings,
   'RecordingSettings.unset': {
     enabled: false,
@@ -645,6 +646,7 @@ const typed: Record<string, unknown> = {
     notesEndpoint: 'databricks-claude-sonnet-5-5',
     presetInstructions: 'Write short notes in Markdown.',
     lengthMin: 60,
+    heldNoteShown: false,
   } satisfies RecordingSettings,
   RecordingState: {
     state: 'recording',

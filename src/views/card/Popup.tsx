@@ -47,9 +47,14 @@ export interface PopupProps {
   card: CardUpdate;
   /** The user copied or dismissed the pop-up, or it faded. */
   onClose?: () => void;
+  /**
+   * UX slice 1: the pop-up shows under a pending Genie pill. Closing it must not hide the card
+   * window, because the pill still needs it.
+   */
+  stacked?: boolean;
 }
 
-export function Popup({ mogId, card, onClose, saved }: PopupProps) {
+export function Popup({ mogId, card, onClose, saved, stacked = false }: PopupProps) {
   const newest = card.blurbs[0];
   const [phase, setPhase] = useState<Phase>('shown');
   const [held, setHeld] = useState({ pointer: false, focus: false });
@@ -71,7 +76,7 @@ export function Popup({ mogId, card, onClose, saved }: PopupProps) {
   const close = () => {
     setPhase('gone');
     onClose?.();
-    void emitView(mogId, 'cancel');
+    if (!stacked) void emitView(mogId, 'cancel');
   };
 
   useEffect(() => {
