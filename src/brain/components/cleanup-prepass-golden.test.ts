@@ -6,7 +6,7 @@ const CLEANS: ReadonlyArray<readonly [string, string]> = [
   // fillers
   ['um I think we should ship', 'I think we should ship'],
   ['uh the report is ready', 'The report is ready'],
-  ['the report is, um, ready', 'The report is, ready'],
+  ['the report is, um, ready', 'The report is ready'],
   ['er the plan changed', 'The plan changed'],
   ['ah okay that works', 'Okay that works'],
   ['hmm let me check the deck', 'Let me check the deck'],
@@ -36,6 +36,14 @@ const CLEANS: ReadonlyArray<readonly [string, string]> = [
   ['it works. then we ship. and we rest', 'It works. Then we ship. And we rest'],
   ['the build passed , the tests passed', 'The build passed, the tests passed'],
   ['i think so', 'I think so'],
+  // M4: a filler next to a number or a yes/no word stays; L4 to L6
+  ['give me five, like, six apples', 'Give me five, like, six apples'],
+  ['give me 5, like, 6 apples', 'Give me 5, like, 6 apples'],
+  ['I said no, I mean, yes', 'I said no, I mean, yes'],
+  ['it is not, you know, done', 'It is not, you know, done'],
+  ['it was, like, um, huge', 'It was huge'],
+  ["i think i'm done and i will go", "I think I'm done and I will go"],
+  ['we ship, um.', 'We ship'],
   // combined
   ['um so uh the the report is, you know, ready', 'So the report is ready'],
   ['uh I mean, we should, like, ship it.', 'We should ship it.'],
@@ -78,6 +86,8 @@ const KEEPS: readonly string[] = [
   'Mail sam.um@example.com about it.',
   'He said "um the the like, you know" and left.',
   'Call main.finance.invoices today.',
+  // a huge text and a text with our mark character stay as they are
+  'a\uE001 b um',
   // abbreviations and mixed-case words stay
   'Use e.g. the iPhone app.',
   'Wait for the eBay order.',
@@ -103,6 +113,16 @@ describe('the dictation pre-pass golden set', () => {
       const once = prepass(input);
       expect(prepass(once), input).toBe(once);
     }
+  });
+
+  it('[CAP-66a] a text over 8000 characters stays as it is, fast', () => {
+    const big = 'um the the report '.repeat(600);
+    expect(big.length).toBeGreaterThan(8000);
+    expect(prepass(big)).toBe(big.trim());
+    const at = 'a@'.repeat(3000);
+    const t0 = Date.now();
+    prepass(at);
+    expect(Date.now() - t0).toBeLessThan(500);
   });
 
   it('[CAP-66a] gives no text from empty and blank input', () => {

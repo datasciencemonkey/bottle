@@ -429,13 +429,23 @@ function numberSignature(text: string): string {
 
 // ---------- protected spans (ADR 0122) ----------
 
-const SPAN_OPEN = '';
-const SPAN_CLOSE = '';
+const SPAN_OPEN = '\uE001';
+const SPAN_CLOSE = '\uE002';
 const SPAN_DIGIT_BASE = 0xe010;
 
 /** Code, quoted text, URLs and email addresses. The pre-pass never edits inside them. */
 const PROTECTED =
-  /`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|\b(?:https?:\/\/|www\.)[^\s]*[^\s.,;:!?)"'”]|[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
+  /`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|\b(?:https?:\/\/|www\.)[^\s]*[^\s.,;:!?)"'”]|[\p{L}\p{N}._%+-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/giu;
+
+/** The longest text the pre-pass edits. A longer text is no dictation: it stays as it is. */
+const MAX_PREPASS_CHARS = 8_000;
+
+/** The URLs, email addresses, code and quoted spans of `text`, in order. */
+export function protectedSpansOf(text: string): string[] {
+  return text.includes('@') || /[`"“]|https?:|www\./i.test(text)
+    ? (text.match(PROTECTED) ?? [])
+    : [];
+}
 
 /** Swaps each protected span for a mark with no letters and no digits, so no rule can match it. */
 function protectSpans(text: string): { masked: string; restore: (s: string) => string } {
@@ -448,7 +458,7 @@ function protectSpans(text: string): { masked: string; restore: (s: string) => s
     return `${SPAN_OPEN}${code}${SPAN_CLOSE}`;
   });
   const restore = (s: string) =>
-    s.replace(/([-]+)/g, (_m, code: string) => {
+    s.replace(/\uE001([\uE010-\uE019]+)\uE002/g, (_m, code: string) => {
       const i = Number([...code].map((c) => c.charCodeAt(0) - SPAN_DIGIT_BASE).join(''));
       return spans[i] ?? '';
     });
@@ -459,34 +469,68 @@ function protectSpans(text: string): { masked: string; restore: (s: string) => s
 
 const DISCOURSE = '(?:you know|I mean|like)';
 
+/** Negators and yes/no words. A filler next to one of them stays: it may carry the meaning. */
+export const POLARITY_WORDS: ReadonlySet<string> = new Set(
+  (
+    'no not never none nobody nothing neither nor nope cannot yes yeah yep yup ' +
+    "dont doesnt didnt wont cant isnt arent wasnt werent wouldnt couldnt shouldnt don't doesn't didn't won't can't isn't aren't wasn't weren't wouldn't couldn't shouldn't"
+  ).split(' '),
+);
+
+const bareWord = (w: string | undefined) =>
+  (w ?? '').toLowerCase().replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, '');
+
+/**
+ * Whether a removal between `start` and `end` of `whole` would touch a number (a digit or a
+ * spoken number word) or a yes/no or negator word next to it. Then the text stays as it is.
+ */
+function touchesMeaning(whole: string, start: number, end: number): boolean {
+  const prev = bareWord(/(\S+)\s*$/u.exec(whole.slice(0, start).replace(/[,.]\s*$/, ''))?.[1]);
+  const next = bareWord(/^\s*(\S+)/u.exec(whole.slice(end))?.[1]);
+  return [prev, next].some(
+    (w) => w !== '' && (/\p{N}/u.test(w) || isNumberish(w) || POLARITY_WORDS.has(w)),
+  );
+}
+
 /**
  * Removes "you know", "I mean" and "like" only when commas or the sentence edge set them off, as in
  * "It was, like, huge." or "You know, we ship." A bare "I like pizza" or "you know the answer" stays.
- * A mark between two digits stays too: "5, like, 6" is a list.
+ * A mark next to a number, a yes/no word or a negator stays too: "give me five, like, six apples",
+ * "I said no, I mean, yes". It loops until nothing changes.
  */
 export function removeDiscourseFillers(text: string): string {
-  const digitSide = (s: string, at: number, dir: -1 | 1) => {
-    for (let i = at; i >= 0 && i < s.length; i += dir) {
-      if (/\s/.test(s.charAt(i))) continue;
-      return /\p{N}/u.test(s.charAt(i));
-    }
-    return false;
+  const step = (t: string): string => {
+    let out = t.replace(
+      new RegExp(`,\\s*${DISCOURSE}\\s*,\\s*`, 'giu'),
+      (m: string, offset: number, whole: string) =>
+        touchesMeaning(whole, offset, offset + m.length) ? m : ' ',
+    );
+    out = out.replace(
+      new RegExp(`(^|[.!?]\\s+)${DISCOURSE}\\s*,\\s*`, 'giu'),
+      (m: string, lead: string, offset: number, whole: string) =>
+        touchesMeaning(whole, offset + lead.length, offset + m.length) ? m : lead,
+    );
+    out = out.replace(
+      new RegExp(`\\s*,\\s*${DISCOURSE}(?=\\s*\\.?\\s*$)`, 'giu'),
+      (m: string, offset: number, whole: string) =>
+        touchesMeaning(whole, offset, offset + m.length) ? m : '',
+    );
+    return tidy(out);
   };
-  let out = text.replace(
-    new RegExp(`,\\s*${DISCOURSE}\\s*,\\s*`, 'giu'),
-    (m: string, offset: number, whole: string) =>
-      digitSide(whole, offset - 1, -1) || digitSide(whole, offset + m.length, 1) ? m : ' ',
-  );
-  out = out.replace(new RegExp(`(^|[.!?]\\s+)${DISCOURSE}\\s*,\\s*`, 'giu'), '$1');
-  out = out.replace(new RegExp(`\\s*,\\s*${DISCOURSE}(?=\\s*\\.?\\s*$)`, 'giu'), '');
-  return tidy(out);
+  let cur = text;
+  for (let i = 0; i < 5; i++) {
+    const next = step(cur);
+    if (next === cur) break;
+    cur = next;
+  }
+  return cur;
 }
 
 /** Words that a speaker says twice by slip and that are never a real double word. */
 const STUTTER_WORDS: ReadonlySet<string> = new Set(
   (
     'i the a an to of in on at and but or so we you he she they it my your our their this for with ' +
-    'is are was be if as do'
+    'are was be if as'
   ).split(' '),
 );
 
@@ -558,6 +602,31 @@ export function capitalizeSentences(text: string): string {
   );
 }
 
+/** A comma pair around a filler: "is, um, ready" becomes "is ready". A number or yes/no word keeps it. */
+function collapseFillerCommas(text: string, language: string): string {
+  const alt = fillersFor(language).map(escapeRegExp).join('|');
+  const re = new RegExp(`,\\s*(?:${alt})\\s*,\\s*`, 'giu');
+  return text.replace(re, (m: string, offset: number, whole: string) =>
+    touchesMeaning(whole, offset, offset + m.length) ? m : ' ',
+  );
+}
+
+/** The pronoun "i" becomes "I", also in "i'm", "i'll", "i've" and "i'd". English only. */
+function capitalizePronounI(text: string): string {
+  return text.replace(
+    /(?<![\p{L}\p{N}_.'’/-])i(?=(?:['’](?:m|ll|ve|d))?(?![\p{L}\p{N}_.)'’/-]))/gu,
+    'I',
+  );
+}
+
+/** A comma left before the end of a sentence or next to another comma goes. */
+function dropDanglingCommas(text: string): string {
+  return text
+    .replace(/,(?:\s*,)+/g, ',')
+    .replace(/,\s*([.!?])/g, '$1')
+    .replace(/,\s*$/, '');
+}
+
 /**
  * The pre-pass: fillers, stutters, false starts, the user dictionary, numerals, then punctuation
  * spacing and sentence capitals (CAP-66a, ADR 0122). Code, quoted text, URLs and email addresses
@@ -568,11 +637,18 @@ export function capitalizeSentences(text: string): string {
  */
 export function prepass(raw: string, opts: PrepassOptions = {}): string {
   const language = opts.language ?? 'en';
+  // A huge text is no dictation. A text that holds a mark character of ours cannot be masked.
+  if (raw.length > MAX_PREPASS_CHARS || /[-]/.test(raw)) return raw.trim();
   const { masked, restore } = protectSpans(raw);
-  const noFillers = removeFillers(markNumberBreaks(masked, language), language);
-  const noDiscourse = language.toLowerCase().startsWith('en')
-    ? removeDiscourseFillers(noFillers)
-    : noFillers;
+  const english = language.toLowerCase().startsWith('en');
+  // The two filler passes feed each other ("like, um,"), so loop until nothing changes.
+  let noDiscourse = markNumberBreaks(masked, language);
+  for (let i = 0; i < 3; i++) {
+    const marked = english ? removeDiscourseFillers(noDiscourse) : noDiscourse;
+    const next = removeFillers(collapseFillerCommas(marked, language), language);
+    if (next === noDiscourse) break;
+    noDiscourse = next;
+  }
   const noStutters = collapseRepeats(collapseStutters(noDiscourse));
   const dictionary = applyDictionary(noStutters, opts.dictionary ?? []);
   if (numberSignature(dictionary) !== numberSignature(masked)) return raw.trim();
@@ -581,5 +657,6 @@ export function prepass(raw: string, opts: PrepassOptions = {}): string {
   const before = new Set(dictionary.match(/\d+/g) ?? []);
   const restored = out.replace(/\b\d+\b/g, (d) => (before.has(d) ? d : spokenFormOf(Number(d))));
   if (numberSignature(restored) !== numberSignature(dictionary)) return raw.trim();
-  return restore(capitalizeSentences(tidy(out.split(NUMBER_BREAK).join(' '))));
+  const spaced = dropDanglingCommas(tidy(out.split(NUMBER_BREAK).join(' ')));
+  return restore(capitalizeSentences(english ? capitalizePronounI(spaced) : spaced));
 }

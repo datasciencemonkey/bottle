@@ -374,6 +374,26 @@ describe('retry and fallback (RTR-13c, RTR-13d)', () => {
     expect(trace.map((e) => e.outcome)).toEqual([outcome, 'ok']);
   });
 
+  it('[CAP-67b] with a deadline set, a throwing invoke is called exactly once and never retried', async () => {
+    const double = createRouterModelDouble([{ error: new Error('timeout') }]);
+    const decision = await runRouterStep(UTTERANCE, MOG, input, {
+      invoke: double.invoke,
+      deadlineMs: 1500,
+    });
+    expect(double.calls).toHaveLength(1);
+    expect(decision).toEqual(offlineDecision(UTTERANCE));
+  });
+
+  it('[CAP-67b] with a deadline set, output that does not parse is not retried', async () => {
+    const double = createRouterModelDouble([{ content: 'not json {' }]);
+    const decision = await runRouterStep(UTTERANCE, MOG, input, {
+      invoke: double.invoke,
+      deadlineMs: 1500,
+    });
+    expect(double.calls).toHaveLength(1);
+    expect(decision.intent).toBe('context');
+  });
+
   it('[RTR-13c] a good first reply makes exactly one call', async () => {
     const { trace, calls } = await route([{ decision: {} }]);
     expect(calls).toHaveLength(1);

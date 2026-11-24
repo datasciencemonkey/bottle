@@ -15,8 +15,9 @@ export type RouterModel = typeof LLAMA_3_1_8B | typeof GPT_OSS_20B | typeof CLAU
 
 /**
  * The orchestrator model default (ADR 0122): Haiku 5.5, with `gpt-oss-20b` as the fallback. The
- * owner picked Haiku. It is used by default even while its eval record is missing (see
- * `isTestedRouterModel`); the setting from the contract lane replaces it later.
+ * owner picked Haiku. It is used by default even while its eval record is missing: it counts as
+ * tested only when `evals[haiku] === true` (NFR-22a), and that gate does not block the default.
+ * The setting from the contract lane replaces it later.
  */
 export const DEFAULT_ROUTER_MODEL: RouterModel = CLAUDE_HAIKU_5_5;
 export const FALLBACK_ROUTER_MODEL: RouterModel = GPT_OSS_20B;
@@ -46,14 +47,7 @@ export function servesLlama318b(region: string): boolean {
 
 /** The router model for `region` (RTR-10a, RTR-10b). */
 export function routerModelFor(region: string, evals: RouterEvalRecord): RouterModel {
-  return servesLlama318b(region) && evals[LLAMA_3_1_8B] === true ? LLAMA_3_1_8B : GPT_OSS_20B;
-}
-
-/**
- * Whether `model` has an eval record that passed (NFR-22a). Haiku is the default by the owner's
- * choice (ADR 0122) and is "tested" only when `evals[haiku] === true`; the gate reports it, it
- * does not block the default.
- */
-export function isTestedRouterModel(model: RouterModel, evals: RouterEvalRecord): boolean {
-  return evals[model] === true;
+  return servesLlama318b(region) && evals[LLAMA_3_1_8B] === true
+    ? LLAMA_3_1_8B
+    : FALLBACK_ROUTER_MODEL;
 }

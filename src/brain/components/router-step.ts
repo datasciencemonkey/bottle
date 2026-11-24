@@ -515,6 +515,8 @@ export async function runRouterStep(
     const parsed = parseRouterResponse(result?.json);
     if (!parsed.ok) {
       trace({ step: 'router', attempt, outcome: parsed.outcome });
+      // A call with a deadline has used its budget: no second attempt.
+      if (deps.deadlineMs !== undefined) break;
       continue;
     }
     const { decision, fixes } = applyFieldRules(parsed.decision, input);
