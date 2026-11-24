@@ -140,6 +140,8 @@ fn sample(command: &str) -> (&'static str, Value) {
         "workspace_settings_write" => json!({"genieCallBudget": 10}),
         "genie_code_status" => json!({"recheck": true}),
         "genie_code_install" => json!({"consent": true}),
+        "orchestrator_models" => json!({}),
+        "orchestrator_status" => json!({"recheck": true}),
         "agent_turn_submit" => json!({"mogId": "m", "opId": "op-1", "question": "How many?"}),
         "agent_turn_stop" => json!({"turnId": "0123456789abcdef0123456789abcdef"}),
         "agent_turn_call" => {
@@ -827,6 +829,11 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
         json!({"genieCallBudget": 256}),
         json!({"agentEndpoint": "https://x.example.com/serving"}),
         json!({"agentEndpoint": ""}),
+        json!({"agentEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({"agentEndpoint": "system.ai."}),
+        json!({"cleanDictation": "yes"}),
+        json!({"cleanDictation": null}),
+        json!({"cleanDictation": 1}),
     ] {
         let err = handle("brain", "workspace_settings_write", bad.clone()).unwrap_err();
         assert_eq!(ipc_error_code(&err), "invalid_args", "{bad}");
@@ -834,7 +841,8 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
     for good in [
         json!({"genieCallBudget": 5}),
         json!({"genieCallBudget": 20}),
-        json!({"agentEndpoint": "databricks-claude-sonnet-5-5", "crossWorkspaceData": false}),
+        json!({"agentEndpoint": "system.ai.claude-haiku-5-5", "crossWorkspaceData": false}),
+        json!({"cleanDictation": false}),
     ] {
         if let Err(e) = handle("brain", "workspace_settings_write", good.clone()) {
             assert_ne!(ipc_error_code(&e), "invalid_args", "{good}");
@@ -915,6 +923,8 @@ fn slice_2a_agent_args_refuse_bad_values() {
         ("genie_code_install", json!({"consent": false})),
         ("genie_code_install", json!({})),
         ("genie_code_status", json!({"recheck": "yes"})),
+        ("orchestrator_status", json!({"recheck": "yes"})),
+        ("orchestrator_models", json!({"profile": "p"})),
         ("workspace_settings_write", json!({"runProfile": 5})),
     ];
     for (command, args) in bad {
@@ -959,6 +969,8 @@ fn slice_2a_agent_commands_are_brain_only() {
     use mog_core::ipc::handle;
     for (command, args) in [
         ("genie_code_status", json!({})),
+        ("orchestrator_status", json!({})),
+        ("orchestrator_models", json!({})),
         ("agent_turn_stop", json!({"turnId": TURN})),
         ("agent_session_state", json!({})),
     ] {

@@ -16,6 +16,7 @@ use mog_core::types::{
     RecordingState, RecordingStatus, RecordingSummary, RouterCommand, RouterDecision, SegmentRef,
     SessionPolicy, StorageProbe, TagApp, TagOp, Tags, TalkKeyReason, TalkKeyState, TalkKeyStatus,
     TokenState, TokenStatus, Track, Transcript, TranscriptProvider, WorkspaceList,
+    OrchestratorModels, OrchestratorStatus,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -110,6 +111,8 @@ fn round_trip_by_name(type_name: &str, json: &Value) -> Result<Value, String> {
         "AgentTurnEvent" => round_trip::<AgentTurnEvent>(json),
         "AgentTurnView" => round_trip::<AgentTurnView>(json),
         "WorkspaceList" => round_trip::<WorkspaceList>(json),
+        "OrchestratorModels" => round_trip::<OrchestratorModels>(json),
+        "OrchestratorStatus" => round_trip::<OrchestratorStatus>(json),
         "AgentCallState" => round_trip::<Vec<AgentCallState>>(json),
         "AgentSessionEndReason" => round_trip::<Vec<AgentSessionEndReason>>(json),
         other => panic!("fixture for unknown type {other}: add it to round_trip_by_name"),
@@ -149,6 +152,8 @@ const STRUCTS: &[&str] = &[
     "AgentTurnEvent",
     "AgentTurnView",
     "WorkspaceList",
+    "OrchestratorModels",
+    "OrchestratorStatus",
 ];
 
 #[test]
@@ -208,6 +213,8 @@ fn every_ipc_type_has_a_fixture() {
         "AgentTurnEvent",
         "AgentTurnView",
         "WorkspaceList",
+        "OrchestratorModels",
+        "OrchestratorStatus",
         "AgentCallState",
         "AgentSessionEndReason",
     ] {

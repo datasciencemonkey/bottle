@@ -91,6 +91,9 @@ export const CALL_CLASS = {
   // a turn reaches the model and the workspaces through the agent session.
   genie_code_status: 'cloud',
   genie_code_install: 'cloud',
+  // ADR 0122: both ask the home AI Gateway.
+  orchestrator_models: 'cloud',
+  orchestrator_status: 'cloud',
   agent_turn_submit: 'cloud',
   agent_turn_stop: 'local',
   agent_turn_call: 'local',

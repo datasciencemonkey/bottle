@@ -34,16 +34,16 @@ use crate::mog_config::MogConfigStore;
 use crate::profile_service::ProfileService;
 use crate::token_broker::{CliTokenBroker, TokenBroker};
 use crate::types::{
-    AgentSettings, EndpointName, GenieCallBudget, MogId, Profile, ProfileName, TokenState,
-    WorkspaceList, WorkspaceRow, WorkspaceSignIn,
+    default_clean_dictation, AgentSettings, GenieCallBudget, MogId, OrchestratorModel, Profile,
+    ProfileName, TokenState, WorkspaceList, WorkspaceRow, WorkspaceSignIn,
 };
 
 /// The file name in the app config dir.
 pub const FILE_NAME: &str = "workspaces.json";
 /// The schema version of the file.
 pub const SCHEMA_VERSION: u32 = 1;
-/// The default D9 agent model endpoint.
-pub const DEFAULT_ENDPOINT: &str = "databricks-claude-sonnet-5-5";
+/// The default D9 orchestrator model (ADR 0122).
+pub const DEFAULT_ENDPOINT: &str = crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL;
 /// The sign-in probes that run at once, across all calls.
 pub const PROBE_PARALLEL: usize = 4;
 /// One `workspace_list` call waits at most this long for its probes.
@@ -173,12 +173,28 @@ struct Entry {
     available: bool,
 }
 
+fn default_model() -> OrchestratorModel {
+    OrchestratorModel::try_from(DEFAULT_ENDPOINT.to_owned())
+        .expect("the default orchestrator model is a valid id")
+}
+
+/// Reads any stored string: a valid `system.ai.` id stays, anything else becomes the default.
+fn migrate_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OrchestratorModel, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(OrchestratorModel::try_from(s).unwrap_or_else(|_| default_model()))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentData {
     cross_workspace_data: bool,
     genie_call_budget: GenieCallBudget,
-    endpoint: EndpointName,
+    /// ADR 0122: the orchestrator model. A stored value that is not a `system.ai.` id (the old
+    /// D9 default `databricks-claude-sonnet-5-5`) reads as the default.
+    #[serde(deserialize_with = "migrate_model")]
+    endpoint: OrchestratorModel,
+    #[serde(default = "default_clean_dictation")]
+    clean_dictation: bool,
     /// Slice 2a: the profile the agent runs on. Written only when it is not home.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     run_profile: Option<ProfileName>,
@@ -422,8 +438,8 @@ impl WorkspaceStore {
             agent: AgentData {
                 cross_workspace_data: false,
                 genie_call_budget: GenieCallBudget::DEFAULT,
-                endpoint: EndpointName::try_from(DEFAULT_ENDPOINT.to_owned())
-                    .expect("the default endpoint is a valid name"),
+                endpoint: default_model(),
+                clean_dictation: true,
                 run_profile: None,
             },
         })
@@ -514,6 +530,7 @@ impl WorkspaceStore {
                 cross_workspace_locked: locked,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
+                clean_dictation: data.agent.clean_dictation,
                 run_profile: data.agent.run_profile.clone(),
             },
         })
@@ -717,6 +734,9 @@ impl WorkspaceStore {
             }
             if let Some(v) = &a.agent_endpoint {
                 data.agent.endpoint = v.clone();
+            }
+            if let Some(v) = a.clean_dictation {
+                data.agent.clean_dictation = v;
             }
             if let Some(v) = &a.run_profile {
                 // Home is stored as "not set".
