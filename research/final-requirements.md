@@ -607,7 +607,7 @@ Columns: **ID** · **Pri** (M/S/C) · **Phase** · **Requirement** · **Acceptan
 | MB-08b | M | MVP-D | When the notice version increases, the hub must show the notice again before the next capture. | A version change blocks capture until the user accepts it. | T · AT-24 | D50, UX-CON-2 | ALL |
 | MB-09 | S | v1 | The hub must show a history of utterances, routes, conversations and blurbs with a filter for each MOG. | History obeys the Wipe selection (U9). | D · AT-01 | v0.2 MB-5 | ALL |
 | MB-10a | M | MVP-D | The app must use the product name "Bottle". | No UI text or package metadata contains "Mother Bricks" or "Motherbricks". | I · AT-37 | B0 (binding rename), D41, D80 | ALL |
-| MB-10b | M | MVP-D | The app must show the label "Databricks Labs / experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
+| MB-10b | M | MVP-D | The app must show the label "experimental". | The label shows in About and in the hub title bar. | I · AT-37 | D41 | ALL |
 | MB-10c | M | MVP-D | The UI must use "MOG" only as a UI noun. | No package or bundle ID contains "MOG". | I · AT-37 | D41 | ALL |
 | MB-11a | M | MVP-D | WindowHost must restart a view window that stops. | The window shows again in 2 s or less. | T · AT-15 | ARC | ALL |
 | MB-11b | M | MVP-D | When WindowHost restarts a view window, the brain must send the current state to that window again. | The restarted window shows the same mood and cards in 2 s or less. | T · AT-15 | ARC | ALL |
@@ -1982,7 +1982,7 @@ Status values: **Active**, **Amended** (the amendment shows in the same row), **
 | D38 | Default models | Cleanup Llama 3.1 8B; router Llama 8B or Flash-Lite; writer gpt-oss-120b; judge Llama 8B; ASR Flash-Lite. **Amended by D57 (paths and names), D58 (regional fallback gpt-oss-20b; gpt-6-luna eval only), D59 (ASR residency).** | **Amended** | |
 | D39 | Auth hardening | CLI ≥ 1.17; absolute path; clean env; plaintext-storage warning; host-only tokens; tags and User-Agent; optional `--client-id` app (S); PAT profiles rejected. | Active | **Confirmed (U6)** |
 | D40 | Overlap with Genie One desktop | Proceed and differentiate. **Amended by D61** with the verified feature set. | **Amended by D61** | **Confirmed (U3)** |
-| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** | Amended by B0 | **Confirmed (U13, U14)** |
+| D41 | Names and brand | Product name (former); MOG codename until trademark clearance; "Databricks Labs / experimental"; original mascot. **Product name superseded by B0: Bottle.** **Label superseded 2026-11-24: "experimental" (MB-10b).** | Amended by B0 | **Confirmed (U13, U14)** |
 | D42 | Telemetry | Off until an admin sets `OtlpTable`; content-free spans; content logging needs both opt-ins. | Active | |
 | D43 | Wake word | MVP and v1: idle MOG never opens the mic. v2 wake word needs a new notice, admin policy, local-only processing, no storage before the wake word. | Active | |
 | D44 | Running MOGs | Any number defined; 8 running by default; one brain window; thin views. | Active (fallback in D73) | |

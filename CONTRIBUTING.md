@@ -85,7 +85,7 @@ CI runs these commands on Windows (`windows-2025`) and Linux (`ubuntu-24.04`) fo
 ## Names in UI text
 
 - The product name is "Bottle". Do not use the former names of the app in UI text or package metadata (MB-10a).
-- The hub title bar and the About screen show "Databricks Labs / experimental" (MB-10b).
+- The hub title bar and the About screen show "experimental" (MB-10b).
 - "MOG" is a UI noun only. Write "MOG" or "MOGs" in UI text, never "mog" or "Mog" (MB-10c).
 - Do not put "mog" in a package ID or a bundle ID. Code names such as `mog-core` and `mog-<id>` are not UI text.
 - `pnpm test` (`src/acceptance/at-37-naming.test.tsx`) and `uv run --no-project python tools/ci_checks.py names` check these rules. ADR 0030 gives the scope.

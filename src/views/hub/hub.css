@@ -19,7 +19,7 @@
 
   /* display: grid (ui-1, review of #602 round 3, blockers 2 and 3): one grid for every area, not
      a plain flex column plus a second, different `.hub--wide`-only grid. Row 1 is the header
-     (`.hub-title` + `.hub-labs`, side by side); row 2 is `.hub-body`. Before this, the header
+     (`.hub-title` + `.hub-experimental`, side by side); row 2 is `.hub-body`. Before this, the header
      was a flex column of two stacked lines on MOGs/Settings but one side-by-side grid row on
      Conversations/Recordings (`.hub--wide`'s own grid, same specificity, declared later, won
      there), so the whole page shifted 16px between areas (review finding 3). A fixed
@@ -31,10 +31,10 @@
 
      The leading `var(--hub-sidebar-width, 0px)` column (ui-1, review of #602 round 4, blocker
      1): a pinned rail is `position: fixed` (HubSidebar.tsx), entirely outside this grid, so it
-     never reflows anything on its own. `.hub-title`/`.hub-labs` are direct children of `main`
+     never reflows anything on its own. `.hub-title`/`.hub-experimental` are direct children of `main`
      (AT-37) — outside `.hub-body`, which is the only box whose own padding used to shift with
-     the rail — so a pinned rail used to sit flush on top of "Bottle" and most of "Databricks
-     Labs / experimental" with no way to tell the header to move over. This empty first column
+     the rail — so a pinned rail used to sit flush on top of "Bottle" and most of
+     "experimental" with no way to tell the header to move over. This empty first column
      gives the header row the same leading offset `.hub-content`'s padding-left already gives
      the content column (0 when unpinned or hidden, so nothing moves then). */
   .hub {
@@ -66,13 +66,13 @@
     grid-column: 2;
   }
 
-  .hub > .hub-labs {
+  .hub > .hub-experimental {
     grid-row: 1;
     grid-column: 3;
   }
 
   /* Row 2, every column: `align-self: stretch` overrides the grid's own `align-items: baseline`
-     (set for row 1's title/labs) for this one item, so the sidebar + content column still fills
+     (set for row 1's title/experimental label) for this one item, so the sidebar + content column still fills
      every remaining pixel of height, in every area (ui-1, review of #602 round 3). Spanning the
      leading sidebar-width column too costs nothing: `.hub-body` positions its own children
      (the fixed rail, `.hub-content`'s padding-left) itself, the same as when that column did
@@ -156,13 +156,13 @@
     font-size: var(--mog-text-sm);
   }
 
-  /* Header: the product name and the quiet Labs label (MB-10b), on one line. */
+  /* Header: the product name and the quiet experimental label (MB-10b), on one line. */
   .hub .hub-title {
     display: inline-block;
     margin: 0 var(--mog-space-2) var(--mog-space-5) 0;
   }
 
-  .hub .hub-labs {
+  .hub .hub-experimental {
     display: inline-block;
     margin: 0;
     color: var(--mog-text-muted);
@@ -1575,7 +1575,7 @@
     font-weight: 500;
   }
 
-  /* In the header, next to the Labs label, in every view but Recordings. */
+  /* In the header, next to the experimental label, in every view but Recordings. */
   .rec-on--compact {
     min-height: 26px;
     margin-left: 14px;

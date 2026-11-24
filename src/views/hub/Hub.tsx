@@ -59,14 +59,15 @@ const threadComposer = (thread: Parameters<typeof ThreadComposer>[0]['thread']) 
 );
 
 /**
- * The product name and the Labs label (MB-10a, MB-10b); the title bar shows the label too. Both
- * stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one line.
+ * The product name and the experimental label (MB-10a, MB-10b); the title bar shows the label
+ * too. Both stay direct children of `main` (AT-37 reads `main > p`); the CSS sets them on one
+ * line.
  */
 function HubHeader() {
   return (
     <>
       <h1 className="hub-title">Bottle</h1>
-      <p className="hub-labs">Databricks Labs / experimental</p>
+      <p className="hub-experimental">experimental</p>
     </>
   );
 }
@@ -245,7 +246,7 @@ export function Hub() {
   const activeLabel = NAV_ITEMS.find((i) => i.id === view)?.label ?? '';
   // Set on `<main>`, not `.hub-body` (ui-1, review of #602 round 4, blocker 1): a pinned rail
   // pushes `.hub-content` over by its own width instead of overlaying it (review of #602,
-  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-labs`, below) needs the same
+  // finding 3), and `.hub`'s own header row (`.hub-title`/`.hub-experimental`, below) needs the same
   // push — they are direct children of `main`, outside `.hub-body` entirely (AT-37), so a
   // variable set only on `.hub-body` never reached them. A custom property set here still
   // inherits down into `.hub-body`/`.hub-content`/`.conv`/`.rec-area` exactly as before, just
