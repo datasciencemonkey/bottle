@@ -327,7 +327,8 @@ impl LocalAudio for TempAudio {
     }
     fn never_uploaded(&self, name: &str) -> bool {
         // Parts upload in order and the device copy goes after each upload. The first part
-        // still here is the unsuffixed file or part 01 only when no part was ever sent.
+        // still here is the unsuffixed file or part 01 only when no part was ever sent. This
+        // assumes the local unlink after each upload (cloud.rs) succeeded.
         temp_parts_in(&self.roots, name).first().is_some_and(|p| {
             p.path
                 .file_name()

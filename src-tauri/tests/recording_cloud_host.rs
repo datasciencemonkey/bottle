@@ -513,7 +513,7 @@ fn rec_delete_removes_the_audio_chunks_and_sidecar_of_one_recording_only() {
 }
 
 #[test]
-fn rec_delete_spares_empty_sibling_dirs_other_sidecars_and_symlinks() {
+fn rec_delete_spares_empty_sibling_dirs_and_other_sidecars() {
     use mog_core::recording_cloud::contract::LocalAudio;
     use mog_core::recording_cloud::sidecar::{self, Sidecar};
     let root = temp("delete-safe");
@@ -531,28 +531,36 @@ fn rec_delete_spares_empty_sibling_dirs_other_sidecars_and_symlinks() {
         &Sidecar::new("rec-side", "2026-11-21_1000", 1, "fake-home", None),
     )
     .unwrap();
-    // A symlinked dir with a file of the same name is not followed.
-    let outside = temp("delete-outside");
-    std::fs::write(outside.join("2026-11-20_0900.opus"), b"OggS").unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&outside, root.join("rec-link")).unwrap();
     let seam = TempAudio::new(vec![root.clone()], Arc::new(Default::default));
-    // The scan still lists the symlinked copy, so the call reports that files remain.
-    assert!(!seam.delete("2026-11-20_0900"));
+    assert!(seam.delete("2026-11-20_0900"));
     assert!(!d.exists());
     assert!(fresh.exists(), "an empty sibling dir survives");
     assert!(
         side.join("job.local.json").exists(),
         "another sidecar survives"
     );
-    assert!(
-        outside.join("2026-11-20_0900.opus").exists(),
-        "no symlink is followed"
-    );
     // A busy name is never deleted.
     let busy: std::collections::HashSet<String> = ["2026-11-21_1000".to_owned()].into();
     let seam = TempAudio::new(vec![root.clone()], Arc::new(move || busy.clone()));
     assert!(!seam.delete("2026-11-21_1000"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn rec_delete_does_not_follow_a_symlinked_dir() {
+    use mog_core::recording_cloud::contract::LocalAudio;
+    let root = temp("delete-link");
+    let outside = temp("delete-outside");
+    std::fs::write(outside.join("2026-11-20_0900.opus"), b"OggS").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("rec-link")).unwrap();
+    let seam = TempAudio::new(vec![root.clone()], Arc::new(Default::default));
+    // The scan still lists the symlinked copy, so the call reports that files remain.
+    assert!(!seam.delete("2026-11-20_0900"));
+    assert!(
+        outside.join("2026-11-20_0900.opus").exists(),
+        "no symlink is followed"
+    );
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(outside);
 }
