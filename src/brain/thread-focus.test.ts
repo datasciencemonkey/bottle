@@ -201,3 +201,81 @@ describe('routeAskToFocusedThread (#145, ⌥G)', () => {
     expect(t.f.sends).toEqual([]);
   });
 });
+
+describe('agent threads (ADR 0121)', () => {
+  const THREAD = '41111111-2222-4333-8444-000000000001';
+  const MOG = '00000000-0000-4000-8000-00000000000a';
+
+  it('[AC-C5] thread.active_agent sets the agent thread as the focus; thread.inactive clears it', () => {
+    const focus = createThreadFocus();
+    wireThreadFollowup(bus, { focus, followup: fakeFollowup().followup });
+    input({ action: 'thread.active_agent', threadId: THREAD });
+    expect(focus.active()).toEqual({ agentThreadId: THREAD });
+    input({ action: 'thread.active_agent', threadId: 'nope' });
+    expect(focus.active()).toEqual({ agentThreadId: THREAD });
+    input({ action: 'thread.inactive' });
+    expect(focus.active()).toBeUndefined();
+  });
+
+  it('[AC-C4] agent.thread_send passes the thread, the MOG, the question and the host ticket on', () => {
+    const sends: unknown[] = [];
+    wireThreadFollowup(bus, {
+      focus: createThreadFocus(),
+      followup: fakeFollowup().followup,
+      agentSend: (a, ticket) => void sends.push([a, ticket]),
+    });
+    const send = { action: 'agent.thread_send', threadId: THREAD, mogId: MOG, question: 'And Q4?' };
+    bus.dispatch({
+      event: 'view:input',
+      payload: {
+        from: 'hub',
+        input: { mogId: 'conversations', kind: 'click', payload: send },
+        actionTicket: 'ticket-1',
+      },
+    });
+    input(send);
+    // From another window, or with a bad shape: nothing.
+    input(send, 'card-x');
+    input({ ...send, question: '   ' });
+    input({ ...send, mogId: 'not-a-uuid' });
+    expect(sends).toEqual([
+      [
+        { action: 'agent.thread_send', threadId: THREAD, mogId: MOG, question: 'And Q4?' },
+        'ticket-1',
+      ],
+      [
+        { action: 'agent.thread_send', threadId: THREAD, mogId: MOG, question: 'And Q4?' },
+        undefined,
+      ],
+    ]);
+  });
+
+  it('[AC-C5] ⌥G while the hub is focused on an agent thread is a follow-up in it, not a Genie follow-up', async () => {
+    const focus = createThreadFocus();
+    focus.set({ agentThreadId: THREAD });
+    const f = fakeFollowup();
+    const agent: [string, string][] = [];
+    const release = vi.fn();
+    const deps = {
+      focus,
+      followup: f.followup,
+      agentSend: (t: string, q: string) => void agent.push([t, q]),
+      release,
+      hubFocused: async () => true,
+    };
+    await expect(
+      routeAskToFocusedThread({ route: 'ask', question: 'More?', decision: {} }, deps),
+    ).resolves.toBe(true);
+    expect(agent).toEqual([[THREAD, 'More?']]);
+    expect(f.sends).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+    // A blurred hub is not a target.
+    await expect(
+      routeAskToFocusedThread(
+        { route: 'ask', question: 'More?', decision: {} },
+        { ...deps, hubFocused: async () => false },
+      ),
+    ).resolves.toBe(false);
+    expect(focus.active()).toBeUndefined();
+  });
+});

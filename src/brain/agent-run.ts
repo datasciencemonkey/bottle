@@ -105,7 +105,7 @@ export interface AgentClientDeps {
   log?: Pick<BrainLog, 'event'>;
 }
 
-type Panel = Pick<HubAgentView, 'session' | 'live' | 'waiting' | 'earlier'>;
+type Panel = Pick<HubAgentView, 'session' | 'live' | 'waiting' | 'earlier' | 'threads'>;
 
 interface TurnRec {
   view: AgentTurnView;
@@ -125,6 +125,14 @@ interface TurnRec {
   endedSeq?: number;
   ended: boolean;
   fellBack: boolean;
+  /** The root UUID of the thread of this turn (the `request_id` of the first turn of the thread). */
+  threadId: string;
+  /** The turn row was asked for (once). */
+  recorded: boolean;
+  /** A Wipe ended the session while the turn ran: the turn writes no row. */
+  noRecord: boolean;
+  /** `finish` is over: the turn row is asked for, and a Delete may take the turn. */
+  settled: boolean;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -255,7 +263,13 @@ const NO_SESSION: AgentSessionState = {
 
 export interface AgentClient {
   /** Send one question to the session. It resolves when the core accepted the turn (or fell back). */
-  submit(turn: AgentTurn, mode: AgentMode, actionTicket?: string): Promise<void>;
+  submit(
+    turn: AgentTurn,
+    mode: AgentMode,
+    actionTicket?: string,
+    /** The thread this turn continues (the hub thread composer). Else see `lastAnswered`. */
+    threadId?: string,
+  ): Promise<void>;
   onTurnEvent(payload: unknown): void;
   onSessionEvent(payload: unknown): void;
   /** Wipe: forget every finished turn, also those that a crash left on screen. */
@@ -270,6 +284,16 @@ export interface AgentClient {
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
+  /** The thread (root UUID) of `turnId`, if the client holds the turn. */
+  threadOf(turnId: string): string | undefined;
+  /** The MOG that asked in a thread of the panel, if the client holds one of its turns. */
+  threadMog(threadId: string): MogId | undefined;
+  /** The turns in memory: their stored `request_id`, thread, and whether they are in progress. */
+  turns(): { turnUuid: string; threadId: string; mogId: MogId; inProgress: boolean }[];
+  /** Whether the open session holds a turn of this thread (a reply is a `follow_up`). */
+  inSession(threadId: string): boolean;
+  /** Delete: forget the finished turns of a thread (an in-progress turn stays). */
+  forgetThread(threadId: string): void;
 }
 
 export function createAgentClient(deps: AgentClientDeps): AgentClient {
@@ -280,6 +304,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let seq = 0;
   /** The session ended in a way that leaves its failed turns on screen until the next start. */
   let stale = false;
+  /** The thread of the newest answered turn: a ⌥G follow-up continues it (R-13). */
+  let lastAnswered: string | undefined;
   const fault = () => void deps.log?.event('agent.turn', { ok: 0 });
   const changed = () => {
     try {
@@ -366,7 +392,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
 
   /** One history row for each Genie call. */
   async function record(r: TurnRec, d: AgentTurnCall): Promise<void> {
-    if (!deps.recordCall) return;
+    if (!deps.recordCall || r.noRecord) return;
     const home = await deps.homeProfile().catch(() => undefined);
     const refs = replyRefs(d);
     let end: TerminalAskEvent;
@@ -409,6 +435,41 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         homeWorkspace: home === undefined || d.profile === home,
         ...(refs.conversationId !== undefined ? { conversationId: refs.conversationId } : {}),
         ...(refs.responseId !== undefined ? { responseId: refs.responseId } : {}),
+      });
+    } catch {
+      fault();
+    }
+  }
+
+  /**
+   * The turn row (AC-C1, AC-C2): one `genie_agent` row that holds the user's question and the
+   * combined answer. Written once, when the turn ends, or best effort when the session ends.
+   */
+  async function recordTurn(r: TurnRec, out: string): Promise<void> {
+    if (!deps.recordCall || r.recorded || r.noRecord) return;
+    r.recorded = true;
+    const home = await deps.homeProfile().catch(() => undefined);
+    const profile = home ?? r.agentProfile;
+    if (profile === undefined || r.noRecord) return;
+    const md = r.view.summary?.md ?? '';
+    const end: TerminalAskEvent =
+      out === 'answered'
+        ? { t: 'answer', md, incomplete: false, keyNumbers: [], deepLink: '', queryItems: [] }
+        : out === 'stopped'
+          ? { t: 'cancel_requested' }
+          : out === 'timeout'
+            ? { t: 'abandoned' }
+            : { t: 'failed', code: 'GENIE_FAILED', userText: '', retry: 'none' };
+    try {
+      deps.recordCall({
+        opId: uuidOfTurn(r.view.turnId),
+        mogId: r.origin.mogId,
+        profile,
+        question: r.view.question,
+        end,
+        backend: 'genie_agent',
+        threadId: r.threadId,
+        homeWorkspace: true,
       });
     } catch {
       fault();
@@ -481,6 +542,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       void refresh();
       return;
     }
+    // A turn that never left the queue ran nothing: it saves no turn row.
+    const ran = r.view.state !== 'queued';
     const state: AgentTurnView['state'] =
       out === 'answered'
         ? 'done'
@@ -532,13 +595,17 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     if (recs.get(id) !== r) return;
     syncParts(r);
     update(r);
+    if (ran) await recordTurn(r, out);
     // A fallback has its own phases: the direct call shows its own outcome.
     if (!r.fellBack)
       deps.phase?.(
         r.origin.mogId,
         out === 'answered' ? 'answered' : out === 'stopped' ? 'cancelled' : 'failed',
       );
-    if (out === 'answered') deps.followUp?.answered();
+    if (out === 'answered') {
+      deps.followUp?.answered();
+      lastAnswered = r.threadId;
+    }
     void refresh();
   }
 
@@ -613,7 +680,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         r.view = { ...r.view, state: 'slow' };
         return update(r);
       case 'ended':
-        return void finish(r, e).catch(fault);
+        return void finish(r, e)
+          .catch(fault)
+          .finally(() => {
+            r.settled = true;
+          });
     }
   }
 
@@ -627,7 +698,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   }
 
   return {
-    async submit(turn, mode, actionTicket) {
+    async submit(turn, mode, actionTicket, threadId) {
       const opId = deps.newId();
       let a: AgentTurnAccepted;
       try {
@@ -670,6 +741,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         failedPulls: new Set(),
         ended: false,
         fellBack: false,
+        // A new ask starts a thread (its root is this turn); a follow-up joins one.
+        threadId:
+          threadId ?? (mode === 'follow_up' ? lastAnswered : undefined) ?? uuidOfTurn(a.turnId),
+        recorded: false,
+        noRecord: false,
+        settled: false,
       };
       recs.set(a.turnId, rec);
       deps.phase?.(turn.mogId, 'working');
@@ -702,6 +779,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         return changed();
       }
       deps.followUp?.reset();
+      lastAnswered = undefined;
+      for (const r of recs.values()) {
+        if (r.ended) continue;
+        // A Wipe leaves nothing on disk; any other end saves what it can of a turn that ran.
+        if (e.reason === 'wipe') r.noRecord = true;
+        else if (r.view.state !== 'queued') void recordTurn(r, 'session_ended').catch(fault);
+      }
       if (CLEARING.has(e.reason)) {
         for (const [id, r] of recs) if (r.ended) forget(id, r);
       } else {
@@ -738,9 +822,26 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         ...(live ? { live: live.view } : {}),
         waiting: waiting.map((r) => r.view),
         earlier: earlier.map((r) => r.view),
+        threads: [...recs.values()].map((r) => ({ turnId: r.view.turnId, threadId: r.threadId })),
       };
     },
     turn: (turnId) => recs.get(turnId)?.view,
+    threadOf: (turnId) => recs.get(turnId)?.threadId,
+    threadMog: (threadId) => [...recs.values()].find((r) => r.threadId === threadId)?.origin.mogId,
+    turns: () =>
+      [...recs.values()].map((r) => ({
+        turnUuid: uuidOfTurn(r.view.turnId),
+        threadId: r.threadId,
+        mogId: r.origin.mogId,
+        inProgress: !r.settled,
+      })),
+    inSession: (threadId) =>
+      session.state !== 'none' && [...recs.values()].some((r) => r.threadId === threadId),
+    forgetThread(threadId) {
+      for (const [id, r] of recs) if (r.threadId === threadId && r.settled) forget(id, r);
+      if (lastAnswered === threadId) lastAnswered = undefined;
+      changed();
+    },
   };
 
   /** Wipe, or New session with no session open: nothing stays, also what a crash left on screen. */

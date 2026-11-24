@@ -42,7 +42,9 @@ function cfg(name: string, home: string, variant: string): MogConfig {
 
 function rig(
   initial: WorkspaceList,
-  opts: { exchanges?: Record<string, { askedAt: number; profileName: string }[]> } = {},
+  opts: {
+    exchanges?: Record<string, { askedAt: number; profileName: string; backendKind?: string }[]>;
+  } = {},
 ) {
   let state = initial;
   const configs = memoryConfigs();
@@ -213,6 +215,31 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     await r.ws.refresh();
     expect(r.last()?.homePick?.suggested).toBe('b');
     expect(r.names()).not.toContain('make_home');
+  });
+
+  it('[ADR 0121] an agent turn row counts for no workspace in the suggestion', async () => {
+    const r = rig(
+      workspaceList(null, [
+        { profile: 'a', mogIds: [id(1)], available: true },
+        { profile: 'b', mogIds: [id(2)], available: true },
+      ]),
+      {
+        exchanges: {
+          [id(1)]: [
+            { askedAt: NOW - 1 * DAY, profileName: 'a' },
+            { askedAt: NOW - 1 * DAY, profileName: 'b', backendKind: 'genie_agent' },
+            { askedAt: NOW - 1 * DAY, profileName: 'b', backendKind: 'genie_agent' },
+          ],
+          [id(2)]: [
+            { askedAt: NOW - 2 * DAY, profileName: 'b' },
+            { askedAt: NOW - 2 * DAY, profileName: 'b' },
+          ],
+        },
+      },
+    );
+    await r.ws.refresh();
+    // With the turn rows counted, `b` would have 4 and `a` 1; without them `b` has 2.
+    expect(r.last()?.homePick?.suggested).toBe('b');
   });
 
   it('[AC-1.10] with no exchanges the suggestion is the first candidate; one candidate gives no pick dialog', async () => {

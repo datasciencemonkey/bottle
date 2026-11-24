@@ -91,6 +91,8 @@ export interface GenieDirectDeps {
 export interface DirectSendOptions {
   /** The fallback reason of slice 2a, one line: "Genie Code is not installed. Asked sales only." */
   notice?: string | undefined;
+  /** The fallback of an agent turn: its row joins the turn (`split_group_id` = the turn UUID). */
+  splitGroupId?: string | undefined;
 }
 
 /** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
@@ -168,6 +170,7 @@ export function createGenieDirectSend(
           profile: turn.target,
           question: turn.question,
           end: outcome,
+          ...(opts.splitGroupId !== undefined ? { splitGroupId: opts.splitGroupId } : {}),
           ...accepted,
         });
       } catch {

@@ -128,6 +128,9 @@ const STATUS: Record<OperationState, [string, boolean]> = {
   ABANDONED: ['abandoned', true],
 };
 
+/** A write of one exchange. `noSummary`: save no `answerSummary` (the row of an agent turn). */
+export type ExchangeWrite = GenieExchange & { noSummary?: true };
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The most key numbers kept for one exchange. */
 const KEY_NUMBERS_MAX = 32;
@@ -492,7 +495,7 @@ export class LocalMemoryService implements MemoryService {
    *   over 200,000 characters ends with `ANSWER_CUT_MARK`, and key numbers stop at 16 KiB.
    * The caller registers the MOG row first (`mem.mog.upsert`); the table links to it.
    */
-  async recordExchange(x: GenieExchange): Promise<void> {
+  async recordExchange(x: ExchangeWrite): Promise<void> {
     if (!UUID_RE.test(x.mogId) || !UUID_RE.test(x.requestId)) {
       throw new Error('recordExchange needs a UUID mogId and requestId');
     }
@@ -521,7 +524,9 @@ export class LocalMemoryService implements MemoryService {
         questionUser: home ? codePoints(x.questionUser, QUESTION_USER_MAX) : undefined,
         questionSentSha256: await sha256Hex(x.questionSent),
         status,
-        answerSummary: home ? (distilSummary(x.answerMd) ?? undefined) : undefined,
+        // An agent turn row holds the combined answer in `finalAnswerMd` only (`noSummary`, ADR 0121).
+        answerSummary:
+          home && x.noSummary !== true ? (distilSummary(x.answerMd) ?? undefined) : undefined,
         keyNumbers: home ? fitKeyNumbers(x.keyNumbers) : undefined,
         finalAnswerMd: fitAnswer(x.answerMd),
         deepLink: x.deepLink || undefined,

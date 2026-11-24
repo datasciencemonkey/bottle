@@ -9,24 +9,28 @@
  *   never guesses one.
  * - `thread.send` is the composer's Send (or Enter): it goes straight to `GenieFollowup.send`,
  *   the same path a ⌥G follow-up uses.
+ * - `thread.active_agent` is the same signal for an agent thread (Conversations, ADR 0121): a ⌥G
+ *   press is a follow-up in that thread (`deps.agentSend`).
+ * - `agent.thread_send` is the composer's Send on an agent thread. The host minted an Ask ticket
+ *   for the click (`input.actionTicket`); the brain only passes it on.
  * - `thread.check` asks whether the thread's workspace is signed in (`hub:thread.access`).
  * - All of them travel under the Conversations view id (`CONVERSATIONS_VIEW_ID`), like
  *   `conversations.ready`, so no new `view_emit` kind is needed.
  */
 import {
+  asAgentThreadSendAction,
   asThreadCheckAction,
   asThreadFocusAction,
   asThreadSendAction,
   CONVERSATIONS_VIEW_ID,
+  type AgentThreadSendAction,
   type ThreadAccess,
 } from '../shared/hub-conversations';
 import { onViewInput, type BrainBus } from './bus';
 import type { GenieFollowup } from './genie-followup';
 
-export interface ActiveThread {
-  conversationId: string;
-  profile: string;
-}
+/** A Genie thread (a conversation id and a profile), or an agent thread (its root UUID). */
+export type ActiveThread = { conversationId: string; profile: string } | { agentThreadId: string };
 
 export interface ThreadFocus {
   /** The thread the hub window is currently focused on, or undefined. */
@@ -57,6 +61,8 @@ export function wireThreadFollowup(
     followup: Pick<GenieFollowup, 'send' | 'access'>;
     /** `hub:thread.access`, to the hub window only. Never throws. */
     sendAccess?: ((access: ThreadAccess) => void) | undefined;
+    /** `agent.thread_send` with the host's Ask ticket. Never throws. */
+    agentSend?: ((a: AgentThreadSendAction, ticket: string | undefined) => void) | undefined;
   },
 ): ThreadFollowupWiring {
   const off = onViewInput(bus, (input) => {
@@ -67,8 +73,15 @@ export function wireThreadFollowup(
       deps.focus.set(
         focusAction.action === 'thread.active'
           ? { conversationId: focusAction.conversationId, profile: focusAction.profile }
-          : undefined,
+          : focusAction.action === 'thread.active_agent'
+            ? { agentThreadId: focusAction.threadId }
+            : undefined,
       );
+      return;
+    }
+    const agentSend = asAgentThreadSendAction(input.payload);
+    if (agentSend) {
+      deps.agentSend?.(agentSend, input.actionTicket);
       return;
     }
     const check = asThreadCheckAction(input.payload);
@@ -111,6 +124,8 @@ export async function routeAskToFocusedThread(
   deps: {
     focus: ThreadFocus;
     followup: Pick<GenieFollowup, 'send'>;
+    /** ⌥G while the hub shows an agent thread: a follow-up in it. Never throws. */
+    agentSend?: ((threadId: string, question: string) => void) | undefined;
     release(): void;
     /** The hub window really has OS focus now (`isHubFocused`). A throw counts as false. */
     hubFocused(): Promise<boolean>;
@@ -129,6 +144,10 @@ export async function routeAskToFocusedThread(
   // The focus may have moved on while we asked.
   if (deps.focus.active() !== thread) return false;
   deps.release();
+  if ('agentThreadId' in thread) {
+    deps.agentSend?.(thread.agentThreadId, r.question);
+    return true;
+  }
   void deps.followup.send({
     conversationId: thread.conversationId,
     profile: thread.profile,

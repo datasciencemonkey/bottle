@@ -4,7 +4,7 @@
  * - `partOf`: one answered Genie call becomes one part of the turn view (the sections of today's
  *   answer body: answer, key numbers, footer). The reply is verbatim, never rewritten.
  * - `cardChips`: the chips of the compact card, `agent-stop:<turnId>` (Stop, or Remove for a
- *   queued turn), `agent-open:<turnId>` ("Open in Agent") and, for an expired sign-in,
+ *   queued turn), `agent-open:<turnId>` ("Open in Conversations") and, for an expired sign-in,
  *   `agent-settings:<turnId>`. UX slice 5 adds `agent-resend:<turnId>` to the same row.
  * - `createAgentCard`: puts the live turn on the card of its MOG. Each update is an arrival, so
  *   it goes through the UX slice 1 arrival gate: no card opens during a hold, and the card opens
@@ -28,8 +28,8 @@ import type { ChipView } from './card-chips';
 import { buildSections } from './card-sections';
 import { keyNumbersOf } from './components/ask-events';
 
-/** The label of the compact card link to the hub area. */
-export const OPEN_IN_AGENT_LABEL = 'Open in Agent';
+/** The label of the compact card link to the thread in hub Conversations. */
+export const OPEN_IN_CONVERSATIONS_LABEL = 'Open in Conversations';
 export const STOP_LABEL = 'Stop';
 /** A queued turn has nothing to stop: Stop removes it from the queue. */
 export const REMOVE_LABEL = 'Remove';
@@ -154,7 +154,7 @@ export function cardChips(t: AgentTurnView): ChipView[] {
     chips.push({ id: `${CHIP.settings}${t.turnId}`, label: SETTINGS_LABEL });
   else if (t.state === 'queued') chips.push({ id: `${CHIP.stop}${t.turnId}`, label: REMOVE_LABEL });
   else if (LIVE.has(t.state)) chips.push({ id: `${CHIP.stop}${t.turnId}`, label: STOP_LABEL });
-  chips.push({ id: `${CHIP.open}${t.turnId}`, label: OPEN_IN_AGENT_LABEL });
+  chips.push({ id: `${CHIP.open}${t.turnId}`, label: OPEN_IN_CONVERSATIONS_LABEL });
   return chips;
 }
 
@@ -435,7 +435,7 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
 export interface AgentChipDeps {
   /** Stop the live turn, or remove a waiting one. */
   stop(turnId: string): void;
-  /** Show the hub on its Agent area. */
+  /** Show the hub on Conversations, on the thread of this turn. */
   openAgent(turnId: string): void;
   /** Show the hub on Settings → Workspace. */
   openSettings(): void;
