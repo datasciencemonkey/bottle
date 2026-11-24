@@ -398,6 +398,37 @@ fn a_slow_probe_times_out_and_leaves_the_row_unknown() {
 
 // ---------- switches and home ----------
 
+/// Write the file behind the store, as an old build or a test does, and drop the cache.
+fn write_file(w: &WorkspaceStore, s: &Scratch, data: &Value) {
+    fs::write(s.file(), serde_json::to_vec(data).unwrap()).unwrap();
+    *w.cache.lock().unwrap() = None;
+}
+
+/// L5: the home and the model read the cache. Only a write of the store empties it.
+#[test]
+fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert_eq!(w.home().as_deref(), Some("home"));
+    let model = w.orchestrator_model().unwrap();
+    // A read that hit the disk would fail on this file; the cache answers instead.
+    fs::write(s.file(), b"{ not json").unwrap();
+    assert_eq!(w.home().as_deref(), Some("home"));
+    assert_eq!(w.orchestrator_model().as_deref(), Some(model.as_str()));
+    // A write goes on the cached copy and saves it, so the new value shows at once.
+    w.settings_write(&WorkspaceSettingsWriteArgs {
+        cross_workspace_data: None,
+        genie_call_budget: None,
+        agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
+        clean_dictation: None,
+    })
+    .unwrap();
+    assert_eq!(
+        w.orchestrator_model().as_deref(),
+        Some("system.ai.gpt-oss-20b")
+    );
+}
+
 fn ready(s: &Scratch) -> WorkspaceStore {
     // One old MOG on `home`: home is set. `other` is a new connection.
     put_config(&s.configs(), "a", "A", "home");
@@ -524,7 +555,6 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: GenieCallBudget::DEFAULT,
             endpoint: ep("system.ai.claude-haiku-5-5"),
             clean_dictation: true,
-            run_profile: None,
         }
     );
     // A bad budget or model cannot be built, and the command refuses it on the wire.
@@ -549,7 +579,6 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: Some(budget(20)),
             agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
             clean_dictation: Some(false),
-            run_profile: None,
         })
         .unwrap();
     assert_eq!(
@@ -568,7 +597,6 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
             clean_dictation: None,
-            run_profile: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
@@ -612,7 +640,7 @@ fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
             .as_object_mut()
             .unwrap()
             .remove("cleanDictation");
-        fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+        write_file(&w, &s, &data);
         let l = w.list(false).unwrap();
         assert_eq!(
             l.agent.endpoint.as_str(),
@@ -626,49 +654,29 @@ fn an_old_stored_endpoint_migrates_to_the_default_model_on_read() {
     w.list(false).unwrap();
     let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
     data["agent"]["endpoint"] = json!("system.ai.gpt-oss-20b");
-    fs::write(s.file(), serde_json::to_vec(&data).unwrap()).unwrap();
+    write_file(&w, &s, &data);
     assert_eq!(
         w.list(false).unwrap().agent.endpoint.as_str(),
         "system.ai.gpt-oss-20b"
     );
 }
 
-/// Slice 2a: `runProfile` absent changes nothing, a name sets it and `null` goes back to home.
+/// ADR 0122: an old file with the `runProfile` setting still loads. The command refuses the field,
+/// and the next save drops it.
 #[test]
-fn settings_write_sets_keeps_and_clears_the_agent_run_profile() {
+fn an_old_file_with_run_profile_loads_and_the_next_save_drops_it() {
     let s = Scratch::new();
     let w = ready(&s);
-    assert_eq!(w.list(false).unwrap().agent.run_profile, None);
-    let l = w
-        .call("workspace_settings_write", json!({"runProfile": "other"}))
-        .unwrap();
-    assert_eq!(l["agent"]["runProfile"], "other");
-    let l = w
-        .call("workspace_settings_write", json!({"genieCallBudget": 5}))
-        .unwrap();
-    assert_eq!(l["agent"]["runProfile"], "other");
-    let l = w
-        .call("workspace_settings_write", json!({"runProfile": null}))
-        .unwrap();
-    assert!(l["agent"]["runProfile"].is_null());
-    let bad = w.call("workspace_settings_write", json!({"runProfile": 5}));
+    w.list(false).unwrap();
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]["runProfile"] = json!("other");
+    write_file(&w, &s, &data);
+    let l = w.call("workspace_settings_write", json!({"genieCallBudget": 5}));
+    assert!(l.unwrap()["agent"].get("runProfile").is_none());
+    let saved: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    assert!(saved["agent"].get("runProfile").is_none());
+    let bad = w.call("workspace_settings_write", json!({"runProfile": "other"}));
     assert_eq!(code(bad.unwrap_err()), "invalid_args");
-    // An unknown, an unsupported and a flag-like name are refused, and the value stays.
-    w.call("workspace_settings_write", json!({"runProfile": "other"}))
-        .unwrap();
-    for name in ["nope", "pat", "-x", "--profile"] {
-        let bad = w.call("workspace_settings_write", json!({"runProfile": name}));
-        assert_eq!(code(bad.unwrap_err()), "profile_invalid", "{name}");
-    }
-    assert_eq!(
-        w.list(false).unwrap().agent.run_profile.as_deref(),
-        Some("other")
-    );
-    // Home is stored as "not set".
-    let l = w
-        .call("workspace_settings_write", json!({"runProfile": "home"}))
-        .unwrap();
-    assert!(l["agent"]["runProfile"].is_null());
 }
 
 /// Slice 2a: the agent session snapshot.
@@ -720,14 +728,7 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
     assert_eq!(snap.home_profile.as_deref(), Some("fin"));
     assert_eq!(snap.model, crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL);
     assert_eq!((snap.cross_workspace, snap.budget), (false, 10));
-    // The model runs on the home profile, so a run profile does not move the agent workspace.
-    w.call(
-        "workspace_settings_write",
-        json!({"runProfile": "sales-prod"}),
-    )
-    .unwrap();
-    let snap = w.catalog_snapshot().unwrap();
-    assert_eq!(snap.home_profile.as_deref(), Some("fin"));
+    // The model runs on the home profile, so the agent workspace is the home.
     assert_eq!(
         snap.catalog.iter().filter(|c| c.is_agent_workspace).count(),
         1

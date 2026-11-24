@@ -195,9 +195,10 @@ struct AgentData {
     endpoint: OrchestratorModel,
     #[serde(default = "default_clean_dictation")]
     clean_dictation: bool,
-    /// Slice 2a: the profile the agent runs on. Written only when it is not home.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    run_profile: Option<ProfileName>,
+    /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
+    /// kept and never written.
+    #[serde(default, skip_serializing, rename = "runProfile")]
+    _legacy_run_profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +334,9 @@ pub struct WorkspaceStore {
     slots: Arc<Slots>,
     /// One read-modify-write at a time.
     lock: Mutex<()>,
+    /// The parsed file, so the home, the model and the catalog reads of each call do not read
+    /// the disk again. Only this store writes the file: `save` empties the cache.
+    cache: Mutex<Option<Data>>,
 }
 
 impl std::fmt::Debug for WorkspaceStore {
@@ -357,6 +361,7 @@ impl WorkspaceStore {
             probe_timeout: PROBE_TIMEOUT,
             slots: Slots::new(PROBE_PARALLEL),
             lock: Mutex::new(()),
+            cache: Mutex::new(None),
         }
     }
 
@@ -378,6 +383,15 @@ impl WorkspaceStore {
     /// Read the file, or migrate it from the MOG configs when it is missing. A file that is
     /// there but bad is an error and stays on disk. The caller holds `lock`.
     fn load(&self) -> CoreResult<Data> {
+        if let Some(d) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+            return Ok(d);
+        }
+        let data = self.load_from_disk()?;
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(data.clone());
+        Ok(data)
+    }
+
+    fn load_from_disk(&self) -> CoreResult<Data> {
         let file = match fs::File::open(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -440,13 +454,15 @@ impl WorkspaceStore {
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
-                run_profile: None,
+                _legacy_run_profile: None,
             },
         })
     }
 
     fn save(&self, data: &Data) -> CoreResult<()> {
         let bytes = serde_json::to_vec_pretty(data).map_err(|_| storage_failed())?;
+        // The cache goes first: a failed write may leave the file in an unknown state.
+        *self.cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
         atomic_write(self.dir(), &self.path, &bytes)
     }
 
@@ -547,7 +563,6 @@ impl WorkspaceStore {
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
-                run_profile: data.agent.run_profile.clone(),
             },
         })
     }
@@ -728,14 +743,6 @@ impl WorkspaceStore {
     /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
-        // The run profile must be a known, supported profile. A name that starts with `-` is
-        // never a profile: it could become a CLI flag in `--profile <P>`.
-        if let Some(Some(p)) = &a.run_profile {
-            if p.starts_with('-') {
-                return Err(refused("profile_invalid"));
-            }
-            self.supported(p)?;
-        }
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -750,10 +757,6 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.clean_dictation {
                 data.agent.clean_dictation = v;
-            }
-            if let Some(v) = &a.run_profile {
-                // Home is stored as "not set".
-                data.agent.run_profile = v.clone().filter(|p| data.home.as_deref() != Some(p));
             }
             self.save(&data)?;
             data

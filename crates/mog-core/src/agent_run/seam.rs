@@ -48,14 +48,13 @@ pub struct CallRecord {
     pub state: AgentCallState,
 }
 
-/// Why a turn stops. `Offline` keeps the open Genie calls polling; `User`, `Lockdown`, `Failed`
-/// and `SessionEnded` cancel them; `Timeout` keeps them polling.
+/// Why a turn stops. `Offline` keeps the open Genie calls polling; `User`, `Failed` and
+/// `SessionEnded` cancel them; `Timeout` keeps them polling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopWhy {
     User,
     Timeout,
     Offline,
-    Lockdown,
     Failed,
     SessionEnded,
 }

@@ -474,8 +474,6 @@ export interface CommandArgs {
     agentEndpoint?: string;
     /** ADR 0122: "Clean up dictation". A bool only. */
     cleanDictation?: boolean;
-    /** Slice 2a: the profile the agent runs on. `null` means home. Absent changes nothing. */
-    runProfile?: ProfileName | null;
   };
   /** ADR 0122: always the home profile. Bottle never picks one. */
   orchestrator_models: NoArgs;
@@ -492,7 +490,7 @@ export interface CommandArgs {
     mogId: MogId;
     opId: string;
     question: string;
-    mode?: 'ask' | 'ask_others' | 'follow_up';
+    mode?: 'ask' | 'follow_up';
     actionTicket?: string;
   };
   /** A live turn: interrupt and cancel its calls. A queued turn: remove it. */
@@ -527,8 +525,6 @@ export interface AgentSettings {
   endpoint: string;
   /** ADR 0122: "Clean up dictation". Default true. */
   cleanDictation: boolean;
-  /** Slice 2a: the profile the agent runs on. `null` means home. */
-  runProfile: ProfileName | null;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -617,14 +613,12 @@ export type AgentSessionEndReason =
   | 'd1_changed'
   | 'catalog_changed'
   | 'tainted'
-  | 'idle'
-  | 'crashed'
-  | 'lockdown'
-  | 'hard_timeout';
+  | 'idle';
 export interface AgentSessionState {
-  state: 'none' | 'starting' | 'idle' | 'busy' | 'ending';
+  state: 'none' | 'idle' | 'busy';
   sessionId?: string;
   startedAt?: number;
+  /** The home profile, whose AI Gateway runs the orchestrator model. */
   agentProfile: ProfileName | null;
   turns: number;
   queued: number;
@@ -668,9 +662,7 @@ export type AgentTurnEvent =
         | 'timeout'
         | 'offline'
         | 'signed_out'
-        | 'not_eligible'
         | 'failed'
-        | 'lockdown'
         | 'refusals'
         | 'session_ended';
       calls: number;
@@ -865,7 +857,6 @@ export const IPC_ERROR_CODES = [
   'agent_offline',
   'agent_timeout',
   'agent_failed',
-  'agent_lockdown_violation',
   'agent_refusals',
 ] as const;
 

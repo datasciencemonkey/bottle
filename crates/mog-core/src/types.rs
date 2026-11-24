@@ -939,9 +939,6 @@ pub struct AgentSettings {
     /// ADR 0122: "Clean up dictation". Default true. A file from before ADR 0122 reads as true.
     #[serde(default = "default_clean_dictation")]
     pub clean_dictation: bool,
-    /// Slice 2a: the profile the agent runs on. `None` means home. Required and nullable.
-    #[serde(deserialize_with = "nullable")]
-    pub run_profile: Option<ProfileName>,
 }
 
 /// The default of [`AgentSettings::clean_dictation`].
@@ -1142,9 +1139,6 @@ pub enum AgentSessionEndReason {
     CatalogChanged,
     Tainted,
     Idle,
-    Crashed,
-    Lockdown,
-    HardTimeout,
 }
 
 /// The phase of the one agent session.
@@ -1152,10 +1146,8 @@ pub enum AgentSessionEndReason {
 #[serde(rename_all = "snake_case")]
 pub enum AgentSessionPhase {
     None,
-    Starting,
     Idle,
     Busy,
-    Ending,
 }
 
 /// `agent_session_state`: for the hub panel at open. Counts only.
@@ -1168,7 +1160,7 @@ pub struct AgentSessionState {
     /// Unix ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<u64>,
-    /// Required and nullable.
+    /// The home profile, whose AI Gateway runs the orchestrator model. Required and nullable.
     #[serde(deserialize_with = "nullable")]
     pub agent_profile: Option<ProfileName>,
     pub turns: u32,
@@ -1214,9 +1206,7 @@ pub enum AgentTurnOutcome {
     Timeout,
     Offline,
     SignedOut,
-    NotEligible,
     Failed,
-    Lockdown,
     Refusals,
     SessionEnded,
 }

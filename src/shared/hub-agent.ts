@@ -66,7 +66,7 @@ function oneOf<T extends string>(list: readonly T[]): (v: unknown) => v is T {
   return (v): v is T => list.includes(v as T);
 }
 
-const isSessionState = oneOf(['none', 'starting', 'idle', 'busy', 'ending']);
+const isSessionState = oneOf(['none', 'idle', 'busy']);
 const isTurnState = oneOf([
   'queued',
   'planning',

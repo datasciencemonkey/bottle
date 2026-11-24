@@ -7,7 +7,7 @@
 //! `install` runs, and when the guard is missing, every command answers `host_failed`.
 //!
 //! Two parts come from earlier steps and are taken from managed state: the `ask_genie` guard
-//! ([`install_guard`]) and the `GatewayChatClient` of [`crate::model_host`]. Without the guard no
+//! ([`install_guard`]) and the ask loop's own `GatewayChatClient` of [`crate::model_host`]. Without the guard no
 //! host is built: the agent is closed, never open without its guard. There is no network source in
 //! Rust yet, so the network watch is always online; a real offline shows as the `offline` error
 //! of the chat client.
@@ -37,7 +37,7 @@ use mog_core::workspaces::SignInSource;
 
 use crate::ipc::BrainChannel;
 use crate::mcp_host::McpHost;
-use crate::model_host::InstallFailure;
+use crate::model_host::{AskChatClient, InstallFailure};
 use crate::workspaces_host::WorkspacesHost;
 
 /// How long the code of a failed chat call counts for the status. After this, the next ask tries
@@ -112,6 +112,11 @@ impl LastError {
         *self.0.lock().unwrap_or_else(|p| p.into_inner()) = next;
     }
 
+    /// Forget the note (the user asked for a recheck).
+    fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
     /// The code of the last failure of `model`, if it is newer than [`ERROR_TTL`].
     fn get(&self, model: &str, now: Instant) -> Option<&'static str> {
         let g = self.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -180,6 +185,10 @@ impl OrchEnv for HostEnv {
     fn probe(&self, profile: &str, model: &str) -> OrchStatus {
         self.check(profile, model, Instant::now())
     }
+
+    fn clear(&self) {
+        self.last.clear();
+    }
 }
 
 /// Build the `ask_genie` guard (R2) on the one R8, the workspace gate and the brain events, and
@@ -226,9 +235,11 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
         return;
     };
     let last = Arc::new(LastError::default());
+    // The ask loop has its own client (its own in-flight cap), so dictation cleanup calls cannot
+    // use up its slots.
     let client: Option<Arc<dyn ChatClient>> = handle
-        .try_state::<Arc<mog_core::model_gateway::client::GatewayChatClient>>()
-        .map(|c| Arc::clone(c.inner()) as Arc<dyn ChatClient>);
+        .try_state::<AskChatClient>()
+        .map(|c| Arc::clone(&c.0) as Arc<dyn ChatClient>);
     let no_client = client.is_none() || handle.try_state::<InstallFailure>().is_some();
     let chat: Arc<dyn ChatClient> = Arc::new(NotingChat {
         inner: client.unwrap_or_else(|| Arc::new(NoChat)),
@@ -389,6 +400,22 @@ mod tests {
         last.record(m, &fail(CANCELLED), t0);
         assert_eq!(e.check("home", m, t0), OrchStatus::Unreachable);
         last.record(m, &Ok(Value::Null), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Ready);
+    }
+
+    #[test]
+    fn a_bad_reply_keeps_the_status_ready_and_a_recheck_clears_a_failure() {
+        use mog_core::model_gateway::client::BAD_REPLY;
+        let last = Arc::new(LastError::default());
+        let e = env(TokenState::Valid, &last);
+        let (m, t0) = ("system.ai.a", Instant::now());
+        // The gateway answered, so a reply that is not usable is no fault of the link.
+        last.record(m, &fail(BAD_REPLY), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Ready);
+        last.record(m, &fail(OFFLINE), t0);
+        assert_eq!(e.check("home", m, t0), OrchStatus::Unreachable);
+        // `orchestrator_status` with `recheck` clears the note through `OrchEnv::clear`.
+        OrchEnv::clear(&e);
         assert_eq!(e.check("home", m, t0), OrchStatus::Ready);
     }
 

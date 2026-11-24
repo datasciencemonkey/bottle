@@ -582,10 +582,6 @@ pub enum IpcError {
     AgentFailed {
         command: String,
     },
-    /// The session ended because the server broke a lockdown rule.
-    AgentLockdownViolation {
-        command: String,
-    },
     /// The turn ended after repeated refused tool calls.
     AgentRefusals {
         command: String,
@@ -797,9 +793,6 @@ impl std::fmt::Display for IpcError {
             }
             IpcError::AgentTimeout { command } => write!(f, "{command}: the agent turn timed out"),
             IpcError::AgentFailed { command } => write!(f, "{command}: the agent turn failed"),
-            IpcError::AgentLockdownViolation { command } => {
-                write!(f, "{command}: the agent session broke the lockdown")
-            }
             IpcError::AgentRefusals { command } => {
                 write!(f, "{command}: the agent turn ended after repeated refusals")
             }
@@ -1039,13 +1032,6 @@ args!(
         )]
         #[schemars(with = "bool")]
         clean_dictation: Option<bool>,
-        /// Slice 2a: the profile the agent runs on. Absent changes nothing; `null` means home.
-        #[serde(
-            default,
-            deserialize_with = "present_or_null",
-            skip_serializing_if = "Option::is_none"
-        )]
-        run_profile: Option<Option<ProfileName>>,
     }
 );
 
@@ -1055,15 +1041,6 @@ where
     D: serde::Deserializer<'de>,
 {
     bool::deserialize(d).map(Some)
-}
-
-/// A field that may be absent (no change), `null` (clear) or a value (set).
-fn present_or_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(d).map(Some)
 }
 args!(ProfileLoginArgs {
     /// The workspace that `databricks auth login --host` opens. Not a request target.
@@ -1586,13 +1563,11 @@ impl std::fmt::Debug for AgentQuestion {
     }
 }
 
-/// How the user asked: a new question, a question to other workspaces, or a follow-up in the
-/// open session.
+/// How the user asked: a new question, or a follow-up in the open session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentAskMode {
     Ask,
-    AskOthers,
     FollowUp,
 }
 

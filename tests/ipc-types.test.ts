@@ -318,9 +318,6 @@ const AGENT_END_REASONS = [
   'catalog_changed',
   'tainted',
   'idle',
-  'crashed',
-  'lockdown',
-  'hard_timeout',
 ] as const satisfies AgentSessionEndReason[];
 const AGENT_TURN_VIEW = {
   turnId: TURN_A,
@@ -536,7 +533,6 @@ const agentTyped: Record<string, unknown> = {
       genieCallBudget: 10,
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
-      runProfile: null,
     },
   } satisfies WorkspaceList,
   OrchestratorModels: {
@@ -555,19 +551,6 @@ const agentTyped: Record<string, unknown> = {
     state: 'unreachable',
     model: 'system.ai.gpt-oss-20b',
   } satisfies OrchestratorStatus,
-  'WorkspaceList.runProfile': {
-    home: null,
-    lampMogId: null,
-    workspaces: [],
-    agent: {
-      crossWorkspaceData: true,
-      crossWorkspaceLocked: false,
-      genieCallBudget: 20,
-      endpoint: 'system.ai.gpt-oss-20b',
-      cleanDictation: false,
-      runProfile: 'finance',
-    },
-  } satisfies WorkspaceList,
   AgentCallState: AGENT_CALL_STATES,
   AgentSessionEndReason: AGENT_END_REASONS,
   OrchestratorState: ORCHESTRATOR_STATES,
