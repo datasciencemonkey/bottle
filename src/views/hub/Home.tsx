@@ -340,6 +340,19 @@ export function Home({ hidden }: { hidden: boolean }) {
             </span>
             <span className="sr-only">Hold Right Option and tap G to ask Genie.</span>
           </li>
+          <li className="home-hint" data-home-hint>
+            <span className="home-keys" aria-hidden="true">
+              <kbd className="home-kbd">Right ⌥</kbd>
+              <span className="home-plus">+</span>
+              <kbd className="home-kbd home-kbd--square">R</kbd>
+            </span>
+            <span className="home-hint-label" aria-hidden="true">
+              Record a call
+            </span>
+            <span className="sr-only">
+              Hold Right Option and tap R to start or stop a call recording.
+            </span>
+          </li>
         </ul>
       </div>
       <p className="hub-home-punchline" data-home-punchline>

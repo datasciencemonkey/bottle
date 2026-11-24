@@ -59,13 +59,14 @@ describe('Home landing', () => {
     expect(el.querySelector('a, button, input, [tabindex]')).toBeNull();
   });
 
-  it('[home] the key hints say the two keys in words', async () => {
+  it('[home] the key hints say the three shortcuts in words', async () => {
     reduced.value = true;
     const { el } = await render(<Home hidden={false} />);
     const said = [...el.querySelectorAll('.home-hint .sr-only')].map((n) => n.textContent);
     expect(said).toEqual([
       'Hold Right Option to dictate.',
       'Hold Right Option and tap G to ask Genie.',
+      'Hold Right Option and tap R to start or stop a call recording.',
     ]);
     expect(el.querySelector('[data-home-punchline]')?.textContent).toBe('Ship in a bottle.');
   });
