@@ -27,8 +27,8 @@
   const scene = document.querySelector('[data-scene]');
   if (!frame || !scene) return;
 
-  const WIDE = { w: 1120, h: 660 };
-  const COMPACT = { w: 358, h: 620 };
+  const WIDE = { w: 1180, h: 680 };
+  const COMPACT = { w: 358, h: 600 };
 
   const fit = () => {
     const compact = frame.clientWidth < 600;
@@ -69,13 +69,12 @@
     setStep('answer');
   };
 
-  // One loop, about 15 seconds. Each beat has a cause on screen.
+  // One loop, about 13.6 seconds. Each beat has a cause on screen.
   const WORD_MS = 210;
   const beats = [
     [
       0,
       () => {
-        scene.removeAttribute('data-poster');
         scene.removeAttribute('data-hl');
         words$(0);
         setStep('idle');
@@ -90,23 +89,31 @@
       },
     ],
     [
-      1700,
+      1500,
       () => {
         keys('opt g');
         key('g').classList.add('is-down');
         setStep('ask');
       },
     ],
-    [1960, () => key('g').classList.remove('is-down')],
-    ...spans.map((_, i) => [2000 + i * WORD_MS, () => words$(i + 1)]),
+    [1760, () => key('g').classList.remove('is-down')],
+    ...spans.map((_, i) => [1700 + i * WORD_MS, () => words$(i + 1)]),
     [
-      2000 + spans.length * WORD_MS + 500,
+      1700 + spans.length * WORD_MS + 500,
       () => {
         key('opt').classList.remove('is-down');
         setStep('wait');
       },
     ],
-    [7600, () => setStep('answer')],
+    [
+      7600,
+      () => {
+        // The HUD is hidden by now: fold G away unseen, ready for the next press.
+        scene.removeAttribute('data-poster');
+        keys('opt');
+        setStep('answer');
+      },
+    ],
     [10000, () => scene.setAttribute('data-hl', '1')],
     [11000, () => scene.setAttribute('data-hl', '2')],
     [12000, () => scene.removeAttribute('data-hl')],
@@ -119,9 +126,12 @@
       },
     ],
     [13150, () => key('esc').classList.remove('is-down')],
-    [13900, () => setStep('idle')],
+    [13400, () => setStep('idle')],
   ];
-  const LOOP_MS = 14800;
+  const LOOP_MS = 13600;
+  // Starting from the poster (load, back in view, Play), the loop picks up at the answer it
+  // already shows, so nothing is tidied away without a cause: Esc closes it a few beats later.
+  const ANSWER_AT = 7600;
 
   let timers = [];
   let playing = false;
@@ -133,10 +143,10 @@
     timers = [];
   }
 
-  function run() {
+  function run(from = 0) {
     clear();
-    beats.forEach(([t, fn]) => timers.push(setTimeout(fn, t)));
-    timers.push(setTimeout(run, LOOP_MS));
+    beats.filter(([t]) => t >= from).forEach(([t, fn]) => timers.push(setTimeout(fn, t - from)));
+    timers.push(setTimeout(() => run(0), LOOP_MS - from));
   }
 
   const toggle = document.querySelector('[data-scene-toggle]');
@@ -146,7 +156,7 @@
     const shouldPlay = !reduce.matches && !userPaused && visible;
     if (shouldPlay && !playing) {
       playing = true;
-      run();
+      run(scene.hasAttribute('data-poster') ? ANSWER_AT : 0);
     } else if (!shouldPlay && playing) {
       playing = false;
       poster();

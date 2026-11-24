@@ -506,7 +506,7 @@ a {
   position: relative;
   overflow: hidden;
   border-radius: 22px;
-  aspect-ratio: 1120 / 660;
+  aspect-ratio: 1180 / 680;
   background: var(--navy-deep);
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 8%),
@@ -515,7 +515,7 @@ a {
 }
 
 .scene-frame.is-compact {
-  aspect-ratio: 358 / 620;
+  aspect-ratio: 358 / 600;
 }
 
 .scene {
@@ -523,8 +523,9 @@ a {
   position: absolute;
   left: 0;
   top: 0;
-  width: 1120px;
-  height: 660px;
+  width: 1180px;
+  height: 680px;
+  overflow: hidden;
   transform: scale(var(--k));
   transform-origin: 0 0;
   font: 400 13px/1.4 var(--font);
@@ -584,10 +585,10 @@ a {
 }
 
 .doc {
-  left: 56px;
+  left: 64px;
   top: 64px;
-  width: 720px;
-  height: 680px;
+  width: 800px;
+  height: 760px;
 }
 
 .win-bar {
@@ -708,9 +709,9 @@ a {
   display: flex;
   align-items: flex-end;
   gap: 14px;
-  height: 120px;
+  height: 132px;
   max-width: 520px;
-  padding: 14px 16px 0;
+  padding: 16px;
   border-radius: 10px;
   background: #eff0f4;
 }
@@ -772,6 +773,10 @@ a {
   width: 58px;
 }
 
+.hud .kc {
+  will-change: transform;
+}
+
 .kc.is-down,
 .key-row:hover .kc:not(.tap) {
   transform: translateY(3px);
@@ -791,11 +796,10 @@ a {
 
 .hud {
   position: absolute;
-  left: 96px;
-  bottom: 34px;
+  left: 124px;
+  bottom: 64px;
   display: flex;
   align-items: center;
-  gap: 10px;
   padding: 14px 16px 18px;
   border-radius: 16px;
   background: #0f1520;
@@ -805,14 +809,40 @@ a {
   opacity: 0;
   transform: translateY(10px);
   transition:
-    opacity 260ms ease,
-    transform 360ms var(--ease-out),
-    width 300ms ease;
+    opacity 140ms ease,
+    transform 360ms var(--ease-out);
+  will-change: transform;
 }
 
-.hud .kc,
-.hud-plus {
+.hud .kc-opt,
+.hud .kc-esc {
   display: none;
+}
+
+/* The plus and G open their own room beside Option when G is tapped, so the HUD grows
+   with them instead of jumping a key wider in one frame. */
+.hud-more {
+  display: grid;
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-columns 340ms var(--ease-travel),
+    opacity 160ms ease 260ms;
+}
+
+.hud-more-in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-left: 10px;
+  overflow: clip;
+  overflow-clip-margin: 18px;
+}
+
+.hud[data-keys~='g'] .hud-more {
+  grid-template-columns: 1fr;
+  opacity: 1;
 }
 
 .hud-plus {
@@ -830,20 +860,15 @@ a {
 }
 
 .hud[data-keys~='opt'] .kc-opt,
-.hud[data-keys~='g'] .kc-g,
 .hud[data-keys~='esc'] .kc-esc {
   display: inline-grid;
-}
-
-.hud[data-keys~='g'] .hud-plus {
-  display: inline;
 }
 
 /* The MOG and its moods. */
 .mog {
   position: absolute;
-  left: 948px;
-  top: 470px;
+  left: 976px;
+  top: 476px;
   width: 140px;
   height: 140px;
   animation: mog-bob 4s ease-in-out infinite;
@@ -883,21 +908,22 @@ a {
 /* The pill: the full question, next to the lamp. */
 .pill {
   position: absolute;
-  right: 170px;
-  top: 478px;
-  width: 312px;
-  padding: 12px 16px 14px;
+  right: 64px;
+  top: 64px;
+  width: 440px;
+  padding: 14px 20px 16px;
   border-radius: 18px;
   background: #1f2839;
   box-shadow:
     0 0 0 1px rgb(244 167 172 / 20%),
     0 18px 40px -12px rgb(0 0 0 / 60%);
   opacity: 0;
-  transform: translateX(14px) scale(0.96);
-  transform-origin: 100% 50%;
+  transform: translateY(-10px) scale(0.97);
+  transform-origin: 50% 0;
   transition:
-    opacity 300ms ease,
+    opacity 140ms ease,
     transform 500ms var(--ease-arrive);
+  will-change: transform;
 }
 
 .scene[data-step='listen'] .pill,
@@ -907,10 +933,16 @@ a {
   transform: none;
 }
 
+/* The answer card opens over the pill; the pill leaves once the card covers it. */
+.scene[data-step='answer'] .pill {
+  transition-delay: 160ms;
+}
+
 .pill-status {
   position: relative;
   height: 18px;
   margin-bottom: 6px;
+  overflow: clip;
   font-size: 12px;
   font-weight: 600;
 }
@@ -923,10 +955,17 @@ a {
   align-items: center;
   gap: 7px;
   opacity: 0;
-  transform: translateY(6px);
+  transform: translateY(100%);
   transition:
-    opacity 220ms ease,
-    transform 300ms var(--ease-out);
+    opacity 120ms ease,
+    transform 340ms var(--ease-travel);
+  will-change: transform;
+}
+
+.scene[data-step='ask'] .st-listen,
+.scene[data-step='wait'] .st-listen,
+.scene[data-step='wait'] .st-ask {
+  transform: translateY(-100%);
 }
 
 .st-listen {
@@ -954,6 +993,9 @@ a {
 .scene[data-step='wait'] .st-wait {
   opacity: 1;
   transform: none;
+  transition:
+    opacity 200ms ease 140ms,
+    transform 340ms var(--ease-travel);
 }
 
 .ell i {
@@ -993,9 +1035,9 @@ a {
 /* The answer card. */
 .card {
   position: absolute;
-  right: 52px;
+  right: 64px;
   top: 64px;
-  width: 424px;
+  width: 440px;
   padding: 18px 20px 20px;
   border-radius: 18px;
   background: var(--navy);
@@ -1004,11 +1046,12 @@ a {
     0 40px 80px -24px rgb(0 0 0 / 75%),
     0 12px 24px -12px rgb(0 0 0 / 50%);
   opacity: 0;
-  transform: translate(16px, 24px) scale(0.96);
-  transform-origin: 90% 100%;
+  transform: translateY(-10px) scale(0.97);
+  transform-origin: 50% 0;
   transition:
-    opacity 360ms ease,
-    transform 700ms var(--ease-arrive);
+    opacity 140ms ease,
+    transform 600ms var(--ease-arrive);
+  will-change: transform;
 }
 
 .scene[data-step='answer'] .card {
@@ -1017,15 +1060,16 @@ a {
 }
 
 .scene[data-step='close'] .card {
-  transition-duration: 260ms, 360ms;
-  transform: translate(12px, 18px) scale(0.97);
+  transition-duration: 160ms, 320ms;
+  transform: translateY(-8px) scale(0.97);
 }
 
 .card > * {
   transition:
     opacity 380ms ease,
     transform 520ms var(--ease-out);
-  transition-delay: calc(var(--i, 0) * 90ms + 160ms);
+  transition-delay: calc(var(--i, 0) * 70ms + 40ms);
+  will-change: transform;
 }
 
 .scene:not([data-step='answer']) .card > * {
@@ -1050,6 +1094,7 @@ a {
 }
 
 .card-open {
+  height: 16px;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
@@ -1060,8 +1105,8 @@ a {
 }
 
 .card-open .ic {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
 }
 
 .card-q {
@@ -1080,13 +1125,9 @@ a {
 }
 
 .cite {
-  display: inline-grid;
-  place-items: center;
-  min-width: 19px;
-  height: 19px;
-  padding: 0 5px;
+  display: inline;
+  padding: 2px 6px;
   border-radius: 6px;
-  vertical-align: 1px;
   background: rgb(140 200 255 / 16%);
   color: var(--eye);
   font: 700 11px/1 var(--font);
@@ -1187,40 +1228,76 @@ a {
   box-shadow: inset 0 0 0 1px rgb(140 200 255 / 50%);
 }
 
-/* Compact composition for a phone column: the lamp, the pill and the card, the doc as context. */
+/* Compact composition for a phone column: a closer crop below the menu bar. The document
+   window sits wide and short at the top, the pill and then the answer card float over its
+   lower half, and the HUD and the lamp sit on the bottom gutter. One 16px gutter. */
 .scene.compact {
   width: 358px;
-  height: 620px;
+  height: 600px;
 }
 
-.scene.compact .menubar span:not(.mb-right):not(.mb-right *) {
+.scene.compact .menubar {
   display: none;
 }
 
 .scene.compact .doc {
-  left: 14px;
-  top: 52px;
+  left: 16px;
+  top: 16px;
   width: 420px;
+  height: 330px;
 }
 
 .scene.compact .doc-body {
-  padding: 28px 24px;
+  padding: 20px 22px;
+  gap: 10px;
 }
 
 .scene.compact .doc-h {
-  font-size: 24px;
+  font-size: 22px;
 }
 
-.scene.compact .doc-line {
+.scene.compact .doc-h + .bars,
+.scene.compact .doc-chart + .bars {
   display: none;
 }
 
+.scene.compact .doc-chart {
+  max-width: 300px;
+  height: 42px;
+  gap: 8px;
+  padding: 10px;
+}
+
+.scene.compact .doc-h2 {
+  margin-top: 2px;
+  font-size: 16px;
+}
+
+.scene.compact .doc-line {
+  max-width: 280px;
+  font-size: 14px;
+}
+
+.scene.compact .bars {
+  gap: 8px;
+  max-width: 300px;
+}
+
 .scene.compact .card {
-  left: 14px;
-  right: 14px;
-  top: 52px;
+  left: 16px;
+  right: 16px;
+  top: 180px;
   width: auto;
   padding: 16px;
+}
+
+.scene.compact .card-hd {
+  gap: 8px;
+}
+
+.scene.compact .card-from,
+.scene.compact .card-open {
+  font-size: 11.5px;
 }
 
 .scene.compact .card-q {
@@ -1235,30 +1312,41 @@ a {
   font-size: 12px;
 }
 
-.scene.compact .card-src {
-  grid-template-columns: 1fr;
+.scene.compact .src small {
+  display: none;
 }
 
 .scene.compact .mog {
-  left: 236px;
-  top: 470px;
-  width: 112px;
-  height: 112px;
+  left: 238px;
+  top: 480px;
+  width: 104px;
+  height: 104px;
 }
 
 .scene.compact .pill {
-  right: 14px;
-  left: 14px;
-  top: 340px;
+  left: 16px;
+  right: 16px;
+  top: auto;
+  bottom: 128px;
   width: auto;
+  padding: 12px 16px 14px;
+  transform-origin: 50% 100%;
 }
 
 .scene.compact .hud {
-  left: 14px;
-  bottom: 28px;
+  left: 16px;
+  bottom: 16px;
   padding: 12px 12px 16px;
-  transform-origin: 0 100%;
-  scale: 0.86;
+}
+
+.scene.compact .hud .kc {
+  min-width: 40px;
+  height: 40px;
+  font-size: 17px;
+}
+
+.scene.compact .hud .kc-opt {
+  width: 100px;
 }
 
 .scene-cap {
@@ -1583,7 +1671,8 @@ a {
 
 .step {
   grid-column: var(--col);
-  align-self: center;
+  align-self: start;
+  margin-block: 34px;
   padding: 18px 18px 20px;
   border-radius: 16px;
   background: var(--raised);
