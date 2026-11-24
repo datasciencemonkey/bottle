@@ -317,9 +317,13 @@ export function TurnParts({
               size={12}
               aria-hidden="true"
             />
-            {open
-              ? 'Hide workspace answers'
-              : plural(folded.length, 'workspace answer', 'workspace answers')}
+            {combined
+              ? open
+                ? 'Hide workspace answers'
+                : plural(folded.length, 'workspace answer', 'workspace answers')
+              : open
+                ? 'Hide more answers'
+                : plural(folded.length, 'more answer', 'more answers')}
           </button>
           <ul
             id={foldId}

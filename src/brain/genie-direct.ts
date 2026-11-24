@@ -92,6 +92,12 @@ export interface GenieDirectDeps {
   offerOthers?: ((turn: AgentTurn, opId: string) => ChipView | undefined) | undefined;
 }
 
+/**
+ * The Wipe fence of a part row. It gets `replay`: the fence calls it with a fresh fence of the same
+ * kind to write the same row again (a row that a failed Wipe held back). It returns true to skip.
+ */
+export type PartFence = (replay: (again: PartFence) => void) => boolean;
+
 /** The options of one send. */
 export interface DirectSendOptions {
   /** The fallback reason of slice 2a, one line: "Genie Code is not installed. Asked sales only." */
@@ -99,7 +105,7 @@ export interface DirectSendOptions {
   /** The fallback of an agent turn: its row joins the turn (`split_group_id` = the turn UUID). */
   splitGroupId?: string | undefined;
   /** With `splitGroupId`: the Wipe fence of the part row (`GenieEnd.isStale`). */
-  isStale?: (() => boolean) | undefined;
+  isStale?: PartFence | undefined;
 }
 
 /** The mood phase of a terminal event. A clarify question is an answer: Genie answered. */
@@ -195,16 +201,20 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
       const outcome = end;
       // #40: the history write is not an arrival: it runs at the terminal event, and a fault in it never reaches the card.
       try {
-        deps.onEnd?.({
-          opId,
-          mogId: turn.mogId,
-          profile: turn.target,
-          question: turn.question,
-          end: outcome,
-          ...(opts.splitGroupId !== undefined ? { splitGroupId: opts.splitGroupId } : {}),
-          ...(opts.splitGroupId !== undefined && opts.isStale ? { isStale: opts.isStale } : {}),
-          ...accepted,
-        });
+        const write = (fence: PartFence | undefined): void =>
+          deps.onEnd?.({
+            opId,
+            mogId: turn.mogId,
+            profile: turn.target,
+            question: turn.question,
+            end: outcome,
+            ...(opts.splitGroupId !== undefined ? { splitGroupId: opts.splitGroupId } : {}),
+            ...(opts.splitGroupId !== undefined && fence
+              ? { isStale: () => fence((again) => write(again)) }
+              : {}),
+            ...accepted,
+          });
+        write(opts.isStale);
       } catch {
         // The history logs its own fixed code; the answer on the card stays as it is.
       }

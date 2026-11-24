@@ -16,6 +16,7 @@ import type {
 import { createFollowUpWindow } from './agent-route';
 import { createAgentClient, uuidOfTurn, type AgentApi, type AgentClient } from './agent-run';
 import { createSimClock } from './clock';
+import type { PartFence } from './genie-direct';
 import { createGenieHistory, type ExchangeMemory, type GenieEnd } from './genie-history';
 import { createBrainLog } from './log';
 import { routerDecision } from '../test-support/model-invoke';
@@ -121,7 +122,7 @@ function rig(opts: { real?: boolean } = {}) {
   const shown: AgentTurnView[] = [];
   const dropped: string[] = [];
   const notes: string[] = [];
-  const directs: { turn: AgentTurn; notice: string; isStale?: () => boolean }[] = [];
+  const directs: { turn: AgentTurn; notice: string; isStale?: PartFence }[] = [];
   const history: GenieEnd[] = [];
   const phases: string[] = [];
   const logLines: string[] = [];
@@ -595,9 +596,41 @@ describe('the fallback to the direct home path (AC-2a.11)', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'timeout', calls: 0 });
     await r.settle();
     const isStale = r.directs[0]?.isStale;
-    expect(isStale?.()).toBe(false);
+    expect(isStale?.(() => undefined)).toBe(false);
     r.client.clear();
-    expect(isStale?.()).toBe(true);
+    expect(isStale?.(() => undefined)).toBe(true);
+  });
+
+  /** A fallback that starts under a client fence: the writer of `genie-direct` asks the fence. */
+  async function fallbackUnderFence(r: ReturnType<typeof rig>) {
+    const lift = r.client.fence();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn('Compare a and b'), 'ask');
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'timeout', calls: 0 });
+    await r.settle();
+    const written: string[] = [];
+    const write = (fence: PartFence): void => {
+      if (!fence(write)) written.push('row');
+    };
+    const fence = r.directs[0]?.isStale;
+    if (fence) write(fence);
+    return { lift, written, write };
+  }
+
+  it('[Wipe] a fallback that starts under a client fence is held, and a lift writes one row', async () => {
+    const r = rig();
+    const { lift, written } = await fallbackUnderFence(r);
+    expect(written).toEqual([]);
+    lift();
+    expect(written).toEqual(['row']);
+  });
+
+  it('[Wipe] a fallback that starts under a client fence writes no row after a good Wipe', async () => {
+    const r = rig();
+    const { lift, written } = await fallbackUnderFence(r);
+    r.client.clear();
+    lift();
+    expect(written).toEqual([]);
   });
 
   it('a turn that already made a call does not fall back', async () => {

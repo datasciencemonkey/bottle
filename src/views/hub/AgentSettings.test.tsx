@@ -148,6 +148,18 @@ describe('AgentSettings', () => {
     expect(el.querySelector('label[for]')).not.toBeNull();
   });
 
+  it('[D1] a click on the title toggles the switch, and a click on the help text does not', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    const title = el.querySelector<HTMLElement>('label[for] span');
+    await click(title);
+    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: true }]);
+    tauri.reset();
+    const sw = combine(el);
+    const help = document.getElementById(sw?.getAttribute('aria-describedby') ?? '');
+    await click(help);
+    expect(clicks()).toEqual([]);
+  });
+
   it('[D1] the disclosure line says that other answers stay out unless the switch is on', async () => {
     const { el } = await render(<AgentSettings list={list()} />);
     expect(el.querySelector('[data-agent-disclosure]')?.textContent).toContain(

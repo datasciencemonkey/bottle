@@ -47,7 +47,7 @@ import {
 import type { FollowUpWindow } from './agent-route';
 import { keyNumbersOf, type TerminalAskEvent } from './components/ask-events';
 import type { GenieEnd } from './genie-history';
-import type { GeniePhase } from './genie-direct';
+import type { GeniePhase, PartFence } from './genie-direct';
 import type { BrainLog } from './log';
 
 /** The mode of a submit. `ask_others` is the click on the R-8 chip. */
@@ -93,8 +93,8 @@ export interface AgentClientDeps {
     turn: AgentTurn,
     notice: string,
     turnId?: string,
-    /** The Wipe fence of the fallback row: true once a Wipe ran since the fallback began. */
-    isStale?: () => boolean,
+    /** The Wipe fence of the fallback row: true when a Wipe stops it, or a client fence holds it. */
+    isStale?: PartFence,
   ): Promise<void>;
   /** The card of `mogId` shows this turn (`agent-card.ts`). */
   showTurn(mogId: MogId, turn: AgentTurnView): void;
@@ -348,6 +348,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let clearGen = 0;
   const deferredTurns = new Map<TurnRec, string>();
   const deferredCalls = new Map<AgentTurnCall, TurnRec>();
+  /** The fallback rows that a client fence held back: each one writes its row again. */
+  const deferredRows = new Map<() => void, TurnRec>();
   const fault = () => void deps.log?.event('agent.turn', { ok: 0 });
   const changed = () => {
     try {
@@ -646,10 +648,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       update(r);
       // The fallback row is a part of this turn: a Wipe since now (a client fence or a clear)
       // stops it, as it stops the other parts.
-      const gen = wipeGen;
-      const cg = clearGen;
-      const isStale = () => r.noRecord || cg !== clearGen || gen !== wipeGen;
-      await deps.direct(r.origin, notice, id, isStale).catch(fault);
+      await deps.direct(r.origin, notice, id, fallbackFence(r)).catch(fault);
       if (recs.get(id) !== r) return;
     } else {
       update(r);
@@ -904,6 +903,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       fenceEra += 1;
       deferredTurns.clear();
       deferredCalls.clear();
+      deferredRows.clear();
       clearAll();
     },
     async stop(turnId) {
@@ -949,6 +949,8 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       for (const r of [...deferredTurns.keys()])
         if (r.threadId === threadId) deferredTurns.delete(r);
       for (const [d, r] of [...deferredCalls]) if (r.threadId === threadId) deferredCalls.delete(d);
+      for (const [again, r] of [...deferredRows])
+        if (r.threadId === threadId) deferredRows.delete(again);
       for (const [id, r] of recs) if (r.threadId === threadId && r.settled) forget(id, r);
       if (lastAnswered === threadId) lastAnswered = undefined;
       changed();
@@ -967,6 +969,27 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (!deferred) {
         deferred = true;
         defer();
+      }
+      return true;
+    };
+  }
+
+  /**
+   * The fence of a fallback row, like `staleOrDefer`: a Wipe drops it, and a client fence (up now,
+   * or raised since the start) holds it. A lift writes it again with a new fence.
+   */
+  function fallbackFence(r: TurnRec): PartFence {
+    const gen = wipeGen;
+    const cg = clearGen;
+    let held = false;
+    return (replay) => {
+      if (r.noRecord || cg !== clearGen) return true;
+      if (gen === wipeGen && fenceDepth === 0) return false;
+      if (!held) {
+        held = true;
+        const again = () => replay(fallbackFence(r));
+        if (fenceDepth > 0) deferredRows.set(again, r);
+        else again();
       }
       return true;
     };
@@ -992,8 +1015,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   function replayDeferred() {
     const turns = [...deferredTurns];
     const calls = [...deferredCalls];
+    const rows = [...deferredRows];
     deferredTurns.clear();
     deferredCalls.clear();
+    deferredRows.clear();
+    for (const [again, r] of rows) if (!r.noRecord) again();
     for (const [d, r] of calls) if (!r.noRecord) void record(r, d).catch(fault);
     for (const [r, out] of turns) if (!r.noRecord) void recordTurn(r, out).catch(fault);
   }

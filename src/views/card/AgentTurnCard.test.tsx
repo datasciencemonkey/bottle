@@ -9,6 +9,7 @@ import {
   clock,
   firstAnswerLine,
   tokensText,
+  TurnParts,
   turnHeadline,
   FROM_EARLIER_COPY,
   NOT_SHOWN_COPY,
@@ -214,6 +215,23 @@ describe('AgentTurnCard', () => {
       expect(p.textContent).toContain(NOT_SHOWN_COPY);
     }
     expect(el.querySelector('[data-agent-note]')?.className).not.toContain('agent-note--after');
+  });
+
+  it('a card that is not combined folds the extra answers under "N more answers"', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [fin] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', { workspace: sales, folded: true }),
+        partOf('c-00000003', { workspace: sales, folded: true }),
+      ],
+    });
+    const { el } = await render(<TurnParts turn={t} />);
+    const fold = el.querySelector<HTMLButtonElement>('[data-action="fold"]');
+    expect(fold?.textContent).toBe('2 more answers');
+    await click(fold);
+    expect(fold?.textContent).toBe('Hide more answers');
   });
 
   it('names the list of a combined fold "Workspace answers"', async () => {

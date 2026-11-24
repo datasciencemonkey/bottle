@@ -77,7 +77,10 @@ export function SettingsRow({
     >
       {descriptionOutsideLabel ? (
         <div className="flex min-w-0 flex-col gap-[var(--mog-space-1)]">
-          <label htmlFor={htmlFor} className={cn('flex', htmlFor ? 'cursor-pointer' : undefined)}>
+          <label
+            htmlFor={htmlFor}
+            className={cn('inline-flex self-start', htmlFor ? 'cursor-pointer' : undefined)}
+          >
             <span className="text-[var(--mog-text-md)]">{label}</span>
           </label>
           {descriptionNode}
