@@ -103,7 +103,8 @@ pub trait RecordingHttp: Send + Sync {
 
     /// As [`RecordingHttp::send`], within `bounds`. An implementation must end the wait for the
     /// rate bucket at the budget, must not send after `abandoned` is set, and must cap the HTTP
-    /// timeout at the budget. The default does none of this: it is for test doubles.
+    /// timeout at the budget. The default refuses the call (`bounds_unsupported`): it never
+    /// drops the bounds and sends anyway.
     fn send_bounded(
         &self,
         profile: &str,
@@ -113,7 +114,11 @@ pub trait RecordingHttp: Send + Sync {
         tags: Option<&Tags>,
         _bounds: CallBounds<'_>,
     ) -> CoreResult<Reply> {
-        self.send(profile, route_id, params, body, tags)
+        let _ = (profile, route_id, params, body, tags);
+        Err(CoreError::Unavailable {
+            component: "R7",
+            reason: "bounds_unsupported",
+        })
     }
 }
 

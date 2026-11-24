@@ -374,6 +374,17 @@ mod tests {
             let _ = self.0.lock().unwrap().recv();
             Err(err(OFFLINE))
         }
+        fn send_bounded(
+            &self,
+            p: &str,
+            r: &str,
+            q: &JsonObject,
+            b: ReqBody<'_>,
+            t: Option<&Tags>,
+            _: CallBounds<'_>,
+        ) -> CoreResult<Reply> {
+            self.send(p, r, q, b, t)
+        }
     }
 
     #[test]
