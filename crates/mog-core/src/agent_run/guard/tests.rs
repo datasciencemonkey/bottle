@@ -338,7 +338,7 @@ fn ac_2a_5_d1_off_a_workspace_that_is_not_the_agent_workspace_gets_a_receipt() {
     assert_eq!(v["hasLink"], true);
     assert_eq!(v["workspace"], "finance");
     assert_eq!(v["note"], receipt::RECEIPT_NOTE);
-    assert!(v["callId"].as_str().unwrap().starts_with("call-"));
+    assert!(v["callId"].as_str().unwrap().starts_with("c-"));
     // The user view has the reply.
     let d = r
         .guard
@@ -365,8 +365,29 @@ fn ac_2a_5_the_agent_workspace_gets_a_text_block_and_taints_the_session() {
     assert!(v["answer"]
         .as_str()
         .unwrap()
-        .starts_with("<genie_answer workspace=\"sales\" call=\"call-"));
+        .starts_with("<genie_answer workspace=\"sales\" call=\"c-"));
     assert!(r.guard.tainted(S));
+}
+
+/// The owner bug of 0.1.8: the guard made `call-<12 hex>` ids, the wire takes only `c-<8 hex>`,
+/// so the brain dropped every call event and Conversations had no parts, chips or links.
+#[test]
+fn adr_0122_every_call_id_has_the_wire_form_of_agent_call_id() {
+    let r = rig();
+    r.session();
+    r.turn("t1", 5);
+    let id = val(&r.ask("sales"))["callId"].as_str().unwrap().to_owned();
+    assert!(
+        crate::ipc::AgentCallId::try_from(id.clone()).is_ok(),
+        "{id}"
+    );
+    for _ in 0..50 {
+        let id = super::ledger::new_call_id();
+        assert!(
+            crate::ipc::AgentCallId::try_from(id.clone()).is_ok(),
+            "{id}"
+        );
+    }
 }
 
 #[test]

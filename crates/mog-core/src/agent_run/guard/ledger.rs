@@ -105,12 +105,15 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// A new call id in the wire form of `ipc::AgentCallId` (`c-` and 8 lowercase hex characters).
+/// The `agent:turn` events, `agent_turn_call` and the brain accept only that form: a call id in
+/// any other form is dropped, and the turn then has no parts, citations or links.
 pub(crate) fn new_call_id() -> String {
-    let mut b = [0u8; 6];
+    let mut b = [0u8; 4];
     // A failed read leaves zeros; the session ledger also keeps the callIds apart by turn.
     let _ = getrandom::fill(&mut b);
     let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("call-{hex}")
+    format!("c-{hex}")
 }
 
 pub(crate) fn tags_of(session_id: &str) -> Tags {

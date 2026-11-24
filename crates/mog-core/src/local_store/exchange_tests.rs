@@ -697,3 +697,41 @@ fn adr_0121_delete_clears_the_question_hash_and_an_item_never_links_to_a_tombsto
         .unwrap();
     assert_eq!(src, None);
 }
+
+#[test]
+fn adr_0122_a_turn_row_keeps_its_citations_and_a_delete_erases_them() {
+    let t = TempDir::new("0122-cites");
+    let s = open(&t);
+    seed_turn(&s);
+    let cites = json!([{"n": 1, "profile": "logfood"}]).to_string();
+    let mut turn = home(TURN_EXCH, TURN_REQ, T0);
+    turn["backendKind"] = json!("genie_agent");
+    turn["splitGroupId"] = json!(ROOT);
+    turn["citations"] = json!([{"n": 1, "profile": "logfood"}]);
+    exec(&s, "mem.exchange.upsert", turn.clone());
+    // A later upsert with no citations keeps them.
+    let mut again = turn.clone();
+    again.as_object_mut().unwrap().remove("citations");
+    exec(&s, "mem.exchange.upsert", again);
+    let list = exec(
+        &s,
+        "mem.exchange.recent",
+        json!({"mogId": MOG_A, "limit": 50}),
+    );
+    let row = |req: &str, list: &Value| rows(list).iter().find(|r| r["requestId"] == req).cloned();
+    assert_eq!(row(TURN_REQ, &list).unwrap()["citations"], json!(cites));
+    // A call row has none.
+    assert_eq!(row(CALL_REQ, &list).unwrap()["citations"], "[]");
+    // A delete erases them with the answer text.
+    assert_eq!(delete(&s, MOG_A, json!([TURN_REQ])), 1);
+    let left: String = s
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT citations FROM genie_exchange WHERE request_id = ?1",
+                [TURN_REQ],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(left, "[]");
+}

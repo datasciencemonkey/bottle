@@ -83,10 +83,13 @@ pub fn system(i: &PromptInput<'_>) -> String {
     p.push_str(
         "Format: write answer in Markdown. Keep the formatting of the Genie answer, its tables \
          and its hyperlinks exactly. Never drop or rewrite a URL. When only one workspace \
-         answered, return that answer in full with its formatting, not a summary. End the answer \
-         with one \"Open in Databricks\" Markdown link for each workspace that you used, as \
-         [Open in Databricks](<link>), where <link> is the link attribute of its genie_answer \
-         block. Never invent a URL. Use only URLs that appear in the genie_answer blocks.\n",
+         answered, return that answer in full with its formatting, not a summary. \
+         Never invent a URL. Use only URLs that appear in the genie_answer blocks.\n",
+    );
+    p.push_str(
+        "Sources: Bottle shows the sources and their links under the answer. In answer, cite \
+         only with the [n] markers. Do not write a list of sources, a \"Source:\" line, a \
+         callId or an \"Open in Databricks\" link.\n",
     );
     p
 }
@@ -149,15 +152,27 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_keeps_formatting_and_links_and_asks_for_open_in_databricks() {
+    fn the_prompt_keeps_formatting_and_links() {
         let c = cat();
         let p = system(&input(&c, true));
         assert!(p.contains("Markdown"));
         assert!(p.contains("Never drop or rewrite a URL"));
         assert!(p.contains("in full with its formatting"));
-        assert!(p.contains("[Open in Databricks](<link>)"));
         assert!(p.contains("Never invent a URL"));
         assert!(!p.contains("Keep answer short"));
+    }
+
+    #[test]
+    fn adr_0122_the_model_writes_no_sources_footer_call_id_or_open_link() {
+        let c = cat();
+        for d1 in [false, true] {
+            let p = system(&input(&c, d1));
+            assert!(p.contains("Bottle shows the sources"));
+            assert!(p.contains("Do not write a list of sources, a \"Source:\" line, a callId"));
+            // The prompt no longer asks for the Open in Databricks link: Bottle draws it.
+            assert!(!p.contains("[Open in Databricks](<link>)"));
+            assert!(!p.contains("End the answer"));
+        }
     }
 
     #[test]

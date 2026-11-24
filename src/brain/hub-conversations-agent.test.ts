@@ -331,6 +331,85 @@ describe('the rebuild of agent threads', () => {
   );
 });
 
+describe('the stored citations of a turn (ADR 0122)', () => {
+  it('[owner bug] maps each saved [n] to its workspace chip and the last answer of that workspace', async () => {
+    const cites = JSON.stringify([
+      { n: 1, profile: 'fake-sales' },
+      { n: 2, profile: 'fake-fin' },
+      // Bad entries are dropped: a repeated n, n below 1, no profile.
+      { n: 1, profile: 'fake-fin' },
+      { n: 0, profile: 'fake-sales' },
+      { n: 3 },
+    ]);
+    const { store } = fakeStore({
+      [MOG_A]: [
+        turnRow(TURN1, ROOT, T0 + 1000, { finalAnswerMd: 'A [1] B [2].', citations: cites }),
+        partRow(1, TURN1, T0 + 1100),
+        partRow(2, TURN1, T0 + 1200),
+        partRow(3, TURN1, T0 + 1300, { profileName: 'fake-sales', status: 'failed' }),
+      ],
+      // Finance answered in no part of this turn: the chip shows, with no part to reach.
+      [MOG_B]: [],
+    });
+    const list = await readConversations({ store, mogs, chipOf });
+    const turn = list.agentThreads?.[0]?.turns[0];
+    expect(turn?.citations).toEqual([
+      { n: 1, workspace: { name: 'Sales', colorVariant: 'sky' }, requestId: id(2) },
+      { n: 2, workspace: { name: 'Fin', colorVariant: 'sky' } },
+    ]);
+  });
+
+  it('a turn row with no saved citations (an older build) has none', async () => {
+    const { store } = fakeStore(threadRows());
+    const list = await readConversations({ store, mogs, chipOf });
+    expect(list.agentThreads?.[0]?.turns[0]).not.toHaveProperty('citations');
+  });
+
+  it('[owner bug] the agent turn row writes its citations to the store', async () => {
+    const writes: Record<string, unknown>[] = [];
+    const memory: ExchangeMemory = {
+      registerMog: async () => undefined,
+      recordExchange: async (x) => void writes.push(x as unknown as Record<string, unknown>),
+    };
+    const record = createGenieHistory({
+      memory,
+      mogName: async () => 'Sales',
+      hostOf: async () => 'sales.fake.test',
+      log: { event: () => true },
+    });
+    const end = {
+      t: 'answer' as const,
+      md: 'A [1].',
+      incomplete: false,
+      keyNumbers: [],
+      deepLink: '',
+      queryItems: [],
+    };
+    const citations = [{ n: 1, profile: 'fake-sales' }];
+    await record({
+      opId: TURN1,
+      mogId: MOG_A,
+      profile: 'fake-sales',
+      question: 'Q?',
+      end,
+      backend: 'genie_agent',
+      threadId: ROOT,
+      citations,
+    });
+    // A Genie call row never carries them.
+    await record({
+      opId: id(5),
+      mogId: MOG_A,
+      profile: 'fake-sales',
+      question: 'Q?',
+      end,
+      citations,
+    });
+    expect(writes[0]?.['citations']).toEqual(citations);
+    expect(writes[1]).not.toHaveProperty('citations');
+  });
+});
+
 describe('Delete and Clear failed', () => {
   function rig(rows: Record<string, Row[]>, mem: MemoryTurn[] = []) {
     const f = fakeStore(rows);

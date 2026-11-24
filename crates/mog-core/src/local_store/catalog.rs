@@ -278,12 +278,12 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           profile_name, workspace_host, workspace_id, is_home_workspace, space_id, \
           conversation_id, response_id, question_user, question_sent_sha256, status, \
           answer_summary, key_numbers, final_answer_md, deep_link, split_group_id, asked_at, \
-          completed_at, row_hlc, origin_device_id) \
+          completed_at, row_hlc, origin_device_id, citations) \
           VALUES (:exchangeId, :requestId, :mogId, :sessionId, :backendKind, :profileName, \
           :workspaceHost, :workspaceId, :homeWorkspace, :spaceId, :conversationId, :responseId, \
           :questionUser, :questionSentSha256, :status, :answerSummary, \
           coalesce(:keyNumbers, '[]'), :finalAnswerMd, :deepLink, :splitGroupId, :askedAt, \
-          :completedAt, :rowHlc, :deviceId) \
+          :completedAt, :rowHlc, :deviceId, coalesce(:citations, '[]')) \
           ON CONFLICT (request_id) DO UPDATE SET status = CASE \
           WHEN excluded.status IN ('pending','uncertain') \
           AND genie_exchange.status NOT IN ('pending','uncertain') \
@@ -293,6 +293,8 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
           answer_summary = coalesce(excluded.answer_summary, genie_exchange.answer_summary), \
           key_numbers = CASE excluded.key_numbers WHEN '[]' THEN genie_exchange.key_numbers \
           ELSE excluded.key_numbers END, \
+          citations = CASE excluded.citations WHEN '[]' THEN genie_exchange.citations \
+          ELSE excluded.citations END, \
           final_answer_md = coalesce(excluded.final_answer_md, genie_exchange.final_answer_md), \
           deep_link = coalesce(excluded.deep_link, genie_exchange.deep_link), \
           session_id = coalesce(genie_exchange.session_id, excluded.session_id), \
@@ -326,6 +328,8 @@ const EXCHANGE_UPSERT: Stmt = Stmt {
         opt("completedAt", MS),
         ROW_HLC,
         DEVICE_ID,
+        // ADR 0122: the [n] citations of an agent turn row (`[{"n": 1, "profile": "p"}]`).
+        opt("citations", json(4096)),
     ],
     kind: Kind::Write,
     access: Access::Brain,
@@ -359,7 +363,7 @@ const EXCHANGE_RECENT: Stmt = Stmt {
           key_numbers AS keyNumbers, final_answer_md AS finalAnswerMd, \
           deep_link AS deepLink, conversation_id AS conversationId, \
           backend_kind AS backendKind, split_group_id AS splitGroupId, \
-          asked_at AS askedAt, completed_at AS completedAt \
+          asked_at AS askedAt, completed_at AS completedAt, citations \
           FROM genie_exchange \
           WHERE mog_id = :mogId AND deleted_at IS NULL \
           ORDER BY asked_at DESC, exchange_id DESC LIMIT :limit",
@@ -381,7 +385,7 @@ const EXCHANGE_DELETE: Stmt = Stmt {
     id: "mem.exchange.delete",
     sql: "UPDATE genie_exchange SET deleted_at = :now, question_user = NULL, \
           question_sent_sha256 = '', answer_summary = NULL, final_answer_md = NULL, key_numbers = '[]', \
-          updated_at = :now \
+          citations = '[]', updated_at = :now \
           WHERE mog_id = :mogId AND deleted_at IS NULL AND EXISTS \
           (SELECT 1 FROM json_each(:requestIds) j \
           WHERE genie_exchange.mog_id = :mogId AND j.value = genie_exchange.request_id)",

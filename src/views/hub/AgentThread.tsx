@@ -30,14 +30,16 @@ import {
   type AgentThreadPart,
   type AgentThreadTurn,
 } from '../../shared/hub-conversations';
-import { isLoneAnswer, summaryFooterLinks } from '../../shared/agent-answer-rule';
+import { foldedUnderLone, genieOneLinks, loneAnswerIndex } from '../../shared/agent-answer-rule';
 import type { AgentTurnView, OrchestratorState } from '../../shared/ipc';
 import { bareHost, displayHost, LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import {
+  CiteChip,
+  FLASH_MS,
+  GenieOneLinks,
   OPEN_IN_DATABRICKS,
   QUEUED_LABEL,
   SLOW_COPY,
-  SummaryFooter,
   TurnBody,
   WAITING_COPY,
   WsChip,
@@ -326,10 +328,16 @@ const openPartLink = (url: string, requestId: string) =>
 function StoredPart({
   part,
   turnFailed,
+  flash,
+  linked,
 }: {
   part: AgentThreadPart;
   /** The turn shows "Failed" already: the part adds no second tag. */
   turnFailed: boolean;
+  /** The part was just reached from a citation: it is highlighted for a moment. */
+  flash?: 0 | 1 | undefined;
+  /** The links that the turn shows once under its answer: the part does not repeat them. */
+  linked: ReadonlySet<string>;
 }) {
   const trust = useMemo(
     () => ({ profileHost: part.workspaceHost, allowedAppUrls: [] as string[] }),
@@ -338,7 +346,13 @@ function StoredPart({
   const url = openInDatabricksUrl(part.deepLink, part.workspaceHost);
   const failed = part.status === 'failed';
   return (
-    <li className="agent-part" data-agent-part={part.requestId} style={stripe(part.workspace)}>
+    <li
+      className="agent-part"
+      data-agent-part={part.requestId}
+      {...(flash !== undefined ? { 'data-flash': flash } : {})}
+      tabIndex={-1}
+      style={stripe(part.workspace)}
+    >
       <div className="agent-part-head">
         {part.answerMd ? (
           <h3 className="agent-part-title">
@@ -376,7 +390,7 @@ function StoredPart({
           ))}
         </ul>
       )}
-      {url !== undefined && (
+      {url !== undefined && !linked.has(url) && (
         <a
           className="agent-databricks"
           href={url}
@@ -397,8 +411,10 @@ function StoredPart({
 
 /**
  * A turn read from the store: the question, the meta line, and the answer. The answer is the text
- * of the MOG with the workspace answers folded under it, or, when exactly one answered call
- * exists (`isLoneAnswer`, the same rule as the live card), that Genie answer shown open as it is.
+ * of the MOG with the workspace answers folded under it, or, when a Genie answer is the answer
+ * (`loneAnswerIndex`, the same rule as the live card), that Genie answer shown open as it is.
+ * Each `[n]` of the text is a citation chip (`turn.citations`), as on the live card, and each
+ * workspace that answered has one "Open Genie One in <workspace>" link.
  */
 function StoredTurn({
   turn,
@@ -408,7 +424,12 @@ function StoredTurn({
   headingId?: string | undefined;
 }) {
   // The answer of the MOG comes first; the workspace answers fold under it.
-  const [open, setOpen] = useState(turn.summaryMd === '');
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLElement>(null);
+  const [reveal, setReveal] = useState<{ id: string; seq: number; done?: boolean } | undefined>(
+    undefined,
+  );
+  const seq = useRef(0);
   // The note may link to the workspaces that it combines: each of their hosts is trusted for it,
   // and a click goes to the brain with the part of that host (the same path as StoredPart).
   const trust = useMemo(
@@ -428,35 +449,96 @@ function StoredTurn({
     if (part) openPartLink(url, part.requestId);
   };
   const listId = `agent-parts-${turn.turnUuid}`;
-  // The same rule as the live card (`isLoneAnswer`): one answered call shows as it is. A stored
-  // withheld part already arrives as `status: 'failed'` (`record()` saves it as `GENIE_FAILED`),
-  // so `answered` alone is enough: there is no separate withheld flag to carry here.
-  const hasNote =
-    turn.summaryMd !== '' &&
-    !isLoneAnswer(
-      turn.parts.map((p) => ({
-        answered: p.status === 'answered',
-        withheld: false,
-        fromEarlier: false,
-      })),
-    );
-  const footerLinks = summaryFooterLinks(
-    turn.summaryMd,
+  // The same rule as the live card (`loneAnswerIndex`): one answered call, or the last of several
+  // to one workspace, shows as it is. A stored withheld part already arrives as `status: 'failed'`
+  // (`record()` saves it as `GENIE_FAILED`), so `answered` alone is enough: there is no separate
+  // withheld flag to carry here.
+  const rule = turn.parts.map((p) => ({
+    answered: p.status === 'answered',
+    withheld: false,
+    fromEarlier: false,
+    workspace: p.profile,
+  }));
+  const hasNote = turn.summaryMd !== '' && loneAnswerIndex(rule) < 0;
+  const under = foldedUnderLone(rule);
+  // In view: the lone answer (and the parts that do not fold under it). In the fold: the rest.
+  const main = hasNote ? [] : turn.parts.filter((_, i) => !under.has(i));
+  const rest = hasNote ? turn.parts : turn.parts.filter((_, i) => under.has(i));
+  const genieLinks = genieOneLinks(
     turn.parts
       .filter((p) => p.status === 'answered')
       .map((p) => ({
         name: p.workspace.name,
         deepLink: p.deepLink,
         workspaceHost: p.workspaceHost,
+        requestId: p.requestId,
       })),
   );
-  const shown = !hasNote || open;
+  const linked = new Set(genieLinks.map((l) => l.url));
+  const openGenieLink = (url: string) => {
+    const l = genieLinks.find((x) => x.url === url);
+    if (l) openPartLink(url, l.source.requestId);
+  };
+  const reach = (id: string) => {
+    if (id === '') return;
+    if (rest.some((p) => p.requestId === id)) setOpen(true);
+    setReveal({ id, seq: ++seq.current });
+  };
+  const revealSeq = reveal?.seq;
+  const revealId = reveal?.id;
+  // After the part is in view (its fold is open), scroll to it and highlight it for a moment.
+  useEffect(() => {
+    if (revealSeq === undefined) return;
+    const el = [...(rootRef.current?.querySelectorAll('[data-agent-part]') ?? [])].find(
+      (x) => x.getAttribute('data-agent-part') === revealId,
+    ) as HTMLElement | undefined;
+    const calm =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el?.scrollIntoView?.({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+    el?.focus?.({ preventScroll: true });
+    const t = setTimeout(
+      () => setReveal((r) => (r?.seq === revealSeq ? { ...r, done: true } : r)),
+      FLASH_MS,
+    );
+    return () => clearTimeout(t);
+  }, [revealSeq, revealId]);
+  const flashOf = (id: string): 0 | 1 | undefined =>
+    reveal && !reveal.done && reveal.id === id ? (reveal.seq % 2 === 0 ? 0 : 1) : undefined;
+  const cites = new Map((turn.citations ?? []).map((c) => [c.n, c]));
+  const renderMarker = (n: number) => {
+    const c = cites.get(n);
+    if (!c) return undefined;
+    const part = turn.parts.find((p) => p.requestId === c.requestId);
+    const cite = {
+      n,
+      callId: c.requestId ?? '',
+      workspace: c.workspace,
+      ...(part?.deepLink ? { deepLink: part.deepLink, workspaceHost: part.workspaceHost } : {}),
+    };
+    return (
+      <CiteChip
+        cite={cite}
+        onReveal={reach}
+        onOpenLink={part ? (u: string) => openPartLink(u, part.requestId) : undefined}
+      />
+    );
+  };
+  const partsOf = (ps: AgentThreadPart[]) =>
+    ps.map((p) => (
+      <StoredPart
+        key={p.requestId}
+        part={p}
+        turnFailed={failed}
+        flash={flashOf(p.requestId)}
+        linked={linked}
+      />
+    ));
   const names = [...new Map(turn.parts.map((p) => [p.workspace.name, p.workspace])).values()];
   const word =
     turn.status === 'answered' ? 'Answered' : turn.status === 'stopped' ? 'Stopped' : 'Failed';
   const failed = turn.status === 'failed';
   return (
-    <section className="conv-exchange" data-agent-stored-turn={turn.turnUuid}>
+    <section ref={rootRef} className="conv-exchange" data-agent-stored-turn={turn.turnUuid}>
       <h2 id={headingId} className="conv-question">
         {turn.question || QUESTION_NOT_SAVED}
       </h2>
@@ -488,38 +570,41 @@ function StoredTurn({
       {hasNote && (
         <div className="agent-summary" data-agent-summary data-agent-note>
           <div className="agent-part-body" data-answer>
-            <SafeMarkdown text={turn.summaryMd} trust={trust} onOpenLink={openNoteLink} />
+            <SafeMarkdown
+              text={turn.summaryMd}
+              trust={trust}
+              onOpenLink={openNoteLink}
+              renderMarker={renderMarker}
+            />
           </div>
-          <SummaryFooter links={footerLinks} onOpenLink={openNoteLink} />
         </div>
       )}
-      {turn.parts.length > 0 && (
+      {main.length > 0 && (
+        <ul className="agent-parts" aria-label="Answers">
+          {partsOf(main)}
+        </ul>
+      )}
+      {rest.length > 0 && (
         <>
-          {hasNote && (
-            <button
-              type="button"
-              className="agent-fold agent-fold--chevron"
-              aria-expanded={open}
-              aria-controls={listId}
-              data-action="parts"
-              onClick={() => setOpen((o) => !o)}
-            >
-              <ChevronRightIcon
-                className={open ? 'size-3 rotate-90' : 'size-3'}
-                aria-hidden="true"
-              />
-              {open
-                ? 'Hide workspace answers'
-                : plural(turn.parts.length, 'workspace answer', 'workspace answers')}
-            </button>
-          )}
-          <ul id={listId} className="agent-parts" aria-label="Answers" hidden={!shown}>
-            {turn.parts.map((p) => (
-              <StoredPart key={p.requestId} part={p} turnFailed={failed} />
-            ))}
+          <button
+            type="button"
+            className="agent-fold agent-fold--chevron"
+            aria-expanded={open}
+            aria-controls={listId}
+            data-action="parts"
+            onClick={() => setOpen((o) => !o)}
+          >
+            <ChevronRightIcon className={open ? 'size-3 rotate-90' : 'size-3'} aria-hidden="true" />
+            {open
+              ? 'Hide workspace answers'
+              : plural(rest.length, 'workspace answer', 'workspace answers')}
+          </button>
+          <ul id={listId} className="agent-parts" aria-label="Answers" hidden={!open}>
+            {partsOf(rest)}
           </ul>
         </>
       )}
+      <GenieOneLinks links={genieLinks} onOpenLink={openGenieLink} />
     </section>
   );
 }

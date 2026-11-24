@@ -209,6 +209,26 @@ function rowOf(x: Stored): ConversationRow {
 
 const NO_CHIP = (profile: string): AgentWsChip => ({ name: profile, colorVariant: '' });
 
+/** The `citations` column of a turn row (ADR 0122): `[{n, profile}]`, one entry for each n. */
+function storedCitationsOf(raw: unknown): { n: number; profile: string }[] {
+  let v: unknown;
+  try {
+    v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<number>();
+  return v.flatMap((c: unknown) => {
+    if (typeof c !== 'object' || c === null) return [];
+    const { n, profile } = c as Record<string, unknown>;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || seen.has(n)) return [];
+    if (typeof profile !== 'string' || profile === '') return [];
+    seen.add(n);
+    return [{ n, profile }];
+  });
+}
+
 function partOf(x: Stored, chipOf: (profile: string) => AgentWsChip): AgentThreadPart {
   const r = rowOf(x);
   return {
@@ -308,6 +328,13 @@ function agentThreadsOf(
     const sorted = [...ps].sort(byAsked);
     const status = x.o['status'];
     const answeredPart = sorted.some((p) => p.o['status'] === 'completed');
+    const citations = storedCitationsOf(x.o['citations']).map(({ n, profile }) => {
+      // The marker reaches the last answer of its workspace in this turn.
+      const part = sorted
+        .filter((p) => p.o['status'] === 'completed' && str(p.o['profileName']) === profile)
+        .at(-1);
+      return { n, workspace: chipOf(profile), ...(part ? { requestId: part.requestId } : {}) };
+    });
     return {
       turnUuid: x.requestId,
       question: str(x.o['questionUser']),
@@ -321,6 +348,7 @@ function agentThreadsOf(
             : 'failed',
       summaryMd: str(x.o['finalAnswerMd']),
       parts: sorted.map((p) => partOf(p, chipOf)),
+      ...(citations.length > 0 ? { citations } : {}),
     };
   };
   type Draft = { mog: ConversationMog; turns: AgentThreadTurn[]; rows: Stored[] };

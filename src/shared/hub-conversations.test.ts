@@ -144,4 +144,19 @@ describe('hub:conversations agentThreads', () => {
       bad([{ ...thread, turns: [{ ...turn, parts: [{ ...part, workspace: {} }] }] }]),
     ).toBeUndefined();
   });
+  it('[ADR 0122] takes the stored citations of a turn and refuses a bad one', () => {
+    const withCites = (citations: unknown) =>
+      asHubConversations({
+        rows: [],
+        agentThreads: [{ ...thread, turns: [{ ...turn, citations }] }],
+      });
+    const chip = part.workspace;
+    expect(withCites([{ n: 1, workspace: chip, requestId: part.requestId }])).toBeDefined();
+    expect(withCites([{ n: 2, workspace: chip }])).toBeDefined();
+    expect(withCites('x')).toBeUndefined();
+    expect(withCites([{ n: 0, workspace: chip }])).toBeUndefined();
+    expect(withCites([{ n: 1.5, workspace: chip }])).toBeUndefined();
+    expect(withCites([{ n: 1, workspace: {} }])).toBeUndefined();
+    expect(withCites([{ n: 1, workspace: chip, requestId: 7 }])).toBeUndefined();
+  });
 });

@@ -156,9 +156,8 @@ describe('AgentTurnCard', () => {
     expect(note.compareDocumentPosition(parts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(parts.hidden).toBe(true);
     expect(el.querySelector('.agent-part-title')).toBeNull();
-    expect(el.querySelector('[data-agent-footer]')?.textContent).toBe(
-      'Planned in Sales · 41k tokens',
-    );
+    // The planner workspace is internal: the footer shows the tokens only.
+    expect(el.querySelector('[data-agent-footer]')?.textContent).toBe('41k tokens');
     const fold = el.querySelector<HTMLButtonElement>('[data-action="fold"]');
     expect(fold?.textContent).toBe('3 workspace answers');
     expect(fold?.getAttribute('aria-expanded')).toBe('false');
@@ -229,9 +228,10 @@ describe('AgentTurnCard', () => {
     expect(list?.getAttribute('aria-label')).toBe('Workspace answers');
   });
 
-  it('[owner bug] a summary is the main answer: markdown, a trusted link, Open in Databricks, chips, no "Note from your MOG"', async () => {
+  it('[owner bug] a summary is the main answer: markdown, a trusted link, Open Genie One, chips, no "Note from your MOG"', async () => {
     const host = 'sales.cloud.databricks.test';
     const link = `https://${host}/one/chat/threads/x`;
+    const footer = { id: 'footer' as const, deepLink: link, workspaceHost: host };
     const t = view({
       state: 'done',
       summary: {
@@ -242,7 +242,13 @@ describe('AgentTurnCard', () => {
           { n: 1, callId: 'c-00000001', workspace: sales, deepLink: link, workspaceHost: host },
         ],
       },
-      parts: [partOf('c-00000001', { workspace: sales }), partOf('c-00000002')],
+      parts: [
+        partOf('c-00000001', {
+          workspace: sales,
+          sections: [{ id: 'answer' as const, md: 'Answer c-00000001' }, footer],
+        }),
+        partOf('c-00000002'),
+      ],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     const main = el.querySelector('[data-agent-summary]') as HTMLElement;
@@ -255,8 +261,13 @@ describe('AgentTurnCard', () => {
       `https://${host}/sql/dashboards/d1`,
     );
     expect(anchors.map((a) => a.getAttribute('href'))).not.toContain('https://evil.example/x');
-    const open = main.querySelector('[data-action="open-in-databricks"]');
-    expect(open?.textContent).toBe('Open in Databricks');
+    // Bottle draws the link to the Genie One conversation of the workspace, once, under the answer.
+    const open = [...el.querySelectorAll('[data-action="open-genie-one"]')];
+    expect(open.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['Open Genie One in Sales', link],
+    ]);
+    // The folded part does not repeat that link.
+    expect(el.querySelector('[data-action="open-in-databricks"]')).toBeNull();
     // The answer comes first; the part folds under it.
     expect(el.querySelector('.agent-part-title')).toBeNull();
     expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('2 workspace answers');
@@ -330,32 +341,70 @@ describe('AgentTurnCard', () => {
     expect(rec.closest('[hidden]')).toBeNull();
   });
 
-  it('the footer links of the summary are one for each URL, and none that the text carries', async () => {
+  it('[owner bug] one Open Genie One link for each workspace that answered: its newest trusted link', async () => {
     const host = 'sales.cloud.databricks.test';
-    const a = `https://${host}/one/chat/threads/a`;
-    const b = `https://${host}/one/chat/threads/b`;
-    const cite = (n: number, callId: string, deepLink: string) => ({
-      n,
-      callId,
-      workspace: sales,
-      deepLink,
-      workspaceHost: host,
+    const fhost = 'fin.cloud.databricks.test';
+    const withLink = (id: string, workspace: typeof sales, h: string, path: string, at = h) =>
+      partOf(id, {
+        workspace,
+        sections: [
+          { id: 'answer' as const, md: `Answer ${id}` },
+          {
+            id: 'footer' as const,
+            deepLink: `https://${at}/one/chat/threads/${path}`,
+            workspaceHost: h,
+          },
+        ],
+      });
+    const t = view({
+      state: 'done',
+      summary: { md: 'Both [1] [2].', kind: 'combined', workspaces: [sales, fin] },
+      parts: [
+        withLink('c-00000001', sales, host, 'a'),
+        withLink('c-00000002', fin, fhost, 'f'),
+        withLink('c-00000003', sales, host, 'b'),
+        // A link to a host that is not its workspace is not trusted: it adds nothing.
+        withLink('c-00000004', fin, fhost, 'x', 'evil.example'),
+      ],
     });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const links = [...el.querySelectorAll('[data-action="open-genie-one"]')];
+    expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Open Genie One in Sales', `https://${host}/one/chat/threads/b`],
+      ['Open Genie One in Finance', `https://${fhost}/one/chat/threads/f`],
+    ]);
+    // A click goes the trusted link path.
+    await click(links[0] ?? null);
+    expect(inputEmits()).toContainEqual(
+      expect.objectContaining({
+        payload: { target: 'link_open', url: `https://${host}/one/chat/threads/b` },
+      }),
+    );
+  });
+
+  it('[owner bug] two calls to one workspace show the last Genie answer as it is, the first folds', async () => {
     const t = view({
       state: 'done',
       summary: {
-        md: `Text with [link](${a}).`,
-        kind: 'combined',
-        workspaces: [sales, fin],
-        citations: [cite(1, 'c-00000001', a), cite(2, 'c-00000002', b), cite(3, 'c-00000003', b)],
+        md: 'MODEL-SYNTHESIS [1]',
+        kind: 'note',
+        workspaces: [sales],
+        citations: [{ n: 1, callId: 'c-00000002', workspace: sales }],
       },
-      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
+      parts: [
+        partOf('c-00000001', { workspace: sales }),
+        partOf('c-00000002', { workspace: sales }),
+      ],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
-    const links = [
-      ...el.querySelectorAll('[data-agent-summary] [data-action="open-in-databricks"]'),
-    ];
-    expect(links.map((l) => l.getAttribute('href'))).toEqual([b]);
+    expect(el.textContent).not.toContain('MODEL-SYNTHESIS');
+    expect(el.querySelector('[data-agent-summary]')).toBeNull();
+    const last = el.querySelector('[data-agent-part="c-00000002"]') as HTMLElement;
+    expect(last.closest('[hidden]')).toBeNull();
+    expect(last.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
+    const first = el.querySelector('[data-agent-part="c-00000001"]') as HTMLElement;
+    expect(first.closest('[hidden]')).not.toBeNull();
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('1 workspace answer');
   });
 
   it('[owner rule] two answered calls show the combined answer first and fold both answers', async () => {

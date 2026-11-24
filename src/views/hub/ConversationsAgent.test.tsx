@@ -338,16 +338,92 @@ describe('the agent thread detail', () => {
     expect(d.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
   });
 
-  it('[owner rule] a stored combined answer has one Open in Databricks link for each workspace', async () => {
+  it('[owner bug] a stored turn has one Open Genie One link for each workspace that answered', async () => {
+    const { el } = await mount();
+    const dl = (n: number) => `https://example.cloud.databricks.test/one/chat/threads/t${n}`;
+    const parts = [
+      part(1, { deepLink: dl(1) }),
+      part(2, { deepLink: dl(2) }),
+      part(3, { workspace: fin, profile: 'fake-2', deepLink: dl(3) }),
+    ];
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: 'Both.', parts })])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    const links = [...d.querySelectorAll('[data-action="open-genie-one"]')];
+    // One link for each workspace: the newest answer of Finance wins.
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      [`Open Genie One in ${sales.name}`, dl(1)],
+      [`Open Genie One in ${fin.name}`, dl(3)],
+    ]);
+    // The parts do not repeat those links.
+    expect(
+      [...d.querySelectorAll('[data-action="open-in-databricks"]')].map((a) =>
+        a.getAttribute('href'),
+      ),
+    ).toEqual([dl(2)]);
+    // A click goes to the brain with the part it belongs to (#523).
+    await click(links[1] ?? null);
+    expect(payloads(CONVERSATIONS_VIEW_ID)).toContainEqual({
+      target: 'link_open',
+      url: dl(3),
+      requestId: parts[2]?.requestId,
+    });
+  });
+
+  it('[owner bug] each [n] of a stored answer is a citation chip that reaches and opens its part', async () => {
     const { el } = await mount();
     const dl = (n: number) => `https://example.cloud.databricks.test/one/chat/threads/t${n}`;
     const parts = [part(1, { deepLink: dl(1) }), part(2, { deepLink: dl(2) })];
-    await feed([thread(THREAD_A, [stored('a', { summaryMd: `Both. [x](${dl(1)})`, parts })])]);
+    const t = stored('a', {
+      summaryMd: 'Sales [1], finance [2], plain [3].',
+      parts,
+      citations: [
+        { n: 1, workspace: sales, requestId: parts[0]?.requestId ?? '' },
+        { n: 2, workspace: fin, requestId: parts[1]?.requestId ?? '' },
+      ],
+    });
+    await feed([thread(THREAD_A, [t])]);
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    const chips = [...note.querySelectorAll<HTMLButtonElement>('[data-agent-cite]')];
+    expect(chips.map((c) => c.getAttribute('data-agent-cite'))).toEqual(['1', '2']);
+    expect(chips[1]?.getAttribute('aria-label')).toBe(`Source 2: ${fin.name}`);
+    // A marker with no saved citation stays plain text.
+    expect(note.textContent).toContain('plain [3].');
+    // A click opens the fold and reaches the part; Shift-click opens its trusted link.
+    const fold = el.querySelector('[data-action="parts"]') as HTMLElement;
+    expect(fold.getAttribute('aria-expanded')).toBe('false');
+    await click(chips[1] ?? null);
+    expect(fold.getAttribute('aria-expanded')).toBe('true');
+    const target = el.querySelector(`[data-agent-part="${parts[1]?.requestId}"]`) as HTMLElement;
+    expect(target.closest('[hidden]')).toBeNull();
+    expect(target.hasAttribute('data-flash')).toBe(true);
+    await act(async () => {
+      chips[0]?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }),
+      );
+    });
+    expect(payloads(CONVERSATIONS_VIEW_ID)).toContainEqual({
+      target: 'link_open',
+      url: dl(1),
+      requestId: parts[0]?.requestId,
+    });
+  });
+
+  it('[owner bug] two stored calls to one workspace show the last answer as it is, the first folds', async () => {
+    const { el } = await mount();
+    const parts = [
+      part(1, { answerMd: 'FIRST-WORDING' }),
+      part(2, { workspace: sales, profile: 'fake-1', answerMd: 'REFINED-ANSWER' }),
+    ];
+    await feed([thread(THREAD_A, [stored('a', { summaryMd: 'MODEL-SYNTHESIS [1]', parts })])]);
     const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
-    const hrefs = [
-      ...d.querySelectorAll('[data-agent-summary] [data-action="open-in-databricks"]'),
-    ].map((a) => a.getAttribute('href'));
-    expect(hrefs).toEqual([dl(2)]);
+    expect(d.textContent).not.toContain('MODEL-SYNTHESIS');
+    expect(d.querySelector('[data-agent-summary]')).toBeNull();
+    const last = d.querySelector(`[data-agent-part="${parts[1]?.requestId}"]`) as HTMLElement;
+    expect(last.closest('[hidden]')).toBeNull();
+    expect(last.textContent).toContain('REFINED-ANSWER');
+    const first = d.querySelector(`[data-agent-part="${parts[0]?.requestId}"]`) as HTMLElement;
+    expect(first.closest('[hidden]')).not.toBeNull();
+    expect(d.querySelector('[data-action="parts"]')?.textContent).toBe('1 workspace answer');
   });
 
   it('[owner rule] a stored turn with two answered calls shows the combined text first', async () => {

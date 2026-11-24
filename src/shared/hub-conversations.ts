@@ -95,6 +95,16 @@ export interface AgentThreadTurn {
   status: 'answered' | 'failed' | 'stopped';
   summaryMd: string;
   parts: AgentThreadPart[];
+  /** ADR 0122: the `[n]` markers of `summaryMd`, one for each workspace. Absent: none saved. */
+  citations?: AgentThreadCitation[];
+}
+
+/** One `[n]` of a stored summary: the workspace it names, and the part it reaches. */
+export interface AgentThreadCitation {
+  n: number;
+  workspace: AgentWsChip;
+  /** The part of this turn that the marker reaches (the last answer of that workspace). */
+  requestId?: string;
 }
 
 /** One agent thread (the MOG agent, slice 2a): its turns, oldest first. */
@@ -372,7 +382,20 @@ function isAgentTurn(v: unknown): v is AgentThreadTurn {
     (v['status'] === 'answered' || v['status'] === 'failed' || v['status'] === 'stopped') &&
     isStr(v['summaryMd']) &&
     Array.isArray(v['parts']) &&
-    v['parts'].every(isAgentPart)
+    v['parts'].every(isAgentPart) &&
+    (v['citations'] === undefined ||
+      (Array.isArray(v['citations']) && v['citations'].every(isAgentCitation)))
+  );
+}
+
+function isAgentCitation(v: unknown): v is AgentThreadCitation {
+  return (
+    isObj(v) &&
+    isNum(v['n']) &&
+    Number.isInteger(v['n']) &&
+    v['n'] >= 1 &&
+    isChip(v['workspace']) &&
+    (v['requestId'] === undefined || isStr(v['requestId']))
   );
 }
 
