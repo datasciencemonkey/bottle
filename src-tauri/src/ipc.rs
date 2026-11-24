@@ -300,6 +300,9 @@ pub struct HostComponents<'a> {
     /// The `genie_code_*`, `agent_turn_*` and `agent_session_*` commands (slice 2a):
     /// `agent_session_host::AgentSessionHost`. `None` when it is not managed: `host_failed`.
     pub agent_session: Option<&'a dyn GatewayComponents>,
+    /// `model_invoke` (ADR 0122): `mog_core::model_gateway::invoke::ModelInvokeComponent` over
+    /// the AI Gateway chat route. `None` when it is not managed: `host_failed`.
+    pub model: Option<&'a dyn GatewayComponents>,
 }
 
 fn refused(e: IpcError) -> CoreError {
@@ -370,6 +373,7 @@ impl<'a> HostComponents<'a> {
             links: None,
             workspaces: None,
             agent_session: None,
+            model: None,
         }
     }
 }
@@ -548,6 +552,12 @@ impl GatewayComponents for HostComponents<'_> {
                 .agent
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
+            // ADR 0122: one chat call on the home AI Gateway. The gateway refused any tool field
+            // (RTR-20a) and let only the brain through; the component checks the tools again.
+            "model_invoke" => self
+                .model
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
             // #514 (ADR 0082): R4. The gateway let only the brain through (SEC-02a).
             "stt_transcribe" => self.stt_transcribe(command, args),
             // #426 (MEM-34a): R10. The gateway let only the brain through (SEC-02a, ARC-4).
@@ -680,6 +690,8 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "capture_resume"
                 | "insert_text"
                 | "mcp_call"
+                // ADR 0122: a blocking HTTPS call to the AI Gateway.
+                | "model_invoke"
                 | "agent_start"
                 | "agent_stop"
                 | "agent_send"
@@ -826,6 +838,9 @@ fn route_from<R: Runtime>(
     let workspaces = webview.try_state::<crate::workspaces_host::WorkspacesHost>();
     // `try_state`: `lib.rs` manages the agent session component (slice 2a).
     let agent_session = webview.try_state::<crate::agent_session_host::AgentSessionHost>();
+    // `try_state`: `model_host::install` manages the `model_invoke` component (ADR 0122).
+    let model = webview
+        .try_state::<std::sync::Arc<mog_core::model_gateway::invoke::ModelInvokeComponent>>();
     let components = HostComponents {
         from: label,
         brain: &brain,
@@ -872,6 +887,9 @@ fn route_from<R: Runtime>(
         agent_session: agent_session
             .as_ref()
             .map(|a| a.inner() as &dyn GatewayComponents),
+        model: model
+            .as_ref()
+            .map(|m| m.inner().as_ref() as &dyn GatewayComponents),
     };
     route(components, command, args)
 }

@@ -29,8 +29,13 @@ use serde_json::Value;
 
 use crate::error::CoreResult;
 
+pub mod client;
+pub mod invoke;
+pub mod models;
+pub mod responses;
+
 /// One Responses-API request to the orchestrator model.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatRequest<'a> {
     /// The CLI profile whose AI Gateway runs the model: the home profile. Bottle never picks it.
     pub profile: &'a str,
@@ -44,6 +49,17 @@ pub struct ChatRequest<'a> {
     /// Set by the caller to abandon the call (Stop, Wipe, session end). The implementation must
     /// return `cancelled` promptly and drop the request. It must not wait for the full deadline.
     pub cancel: Option<&'a AtomicBool>,
+}
+
+impl std::fmt::Debug for ChatRequest<'_> {
+    /// Shows only the model id and the deadline: never the body, which holds the prompt, and
+    /// never the profile.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatRequest")
+            .field("model", &self.model)
+            .field("deadline", &self.deadline)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The orchestrator model's call. Implementations must be content-free in logs: no prompt,
@@ -63,3 +79,22 @@ impl<T: ChatClient + ?Sized> ChatClient for std::sync::Arc<T> {
 pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "system.ai.claude-haiku-5-5";
 /// The fallback when the default is not served or has not passed its eval.
 pub const FALLBACK_ORCHESTRATOR_MODEL: &str = "system.ai.gpt-oss-20b";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adr_0122_chat_request_debug_shows_no_prompt() {
+        let r = ChatRequest {
+            profile: "SECRET-PROFILE",
+            model: DEFAULT_ORCHESTRATOR_MODEL,
+            body: serde_json::json!({"input": "SECRET PROMPT"}),
+            deadline: Duration::from_secs(1),
+            cancel: None,
+        };
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("SECRET"));
+        assert!(shown.contains("claude-haiku"));
+    }
+}

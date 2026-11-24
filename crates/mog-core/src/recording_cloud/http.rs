@@ -7,7 +7,9 @@
 //! after one retry, a 429, an HTML page) stay [`CoreError`]s with content-free codes.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -75,6 +77,16 @@ impl Reply {
     }
 }
 
+/// The limits of one bounded call (ADR 0122): the whole call, bucket wait included, must end
+/// within `budget`, and a call whose caller has given up (`abandoned`) must not be sent.
+#[derive(Debug, Clone, Copy)]
+pub struct CallBounds<'a> {
+    /// The most time the call may take, from the start of the wait for the rate bucket.
+    pub budget: Duration,
+    /// Set by the caller when it stops waiting (timeout, cancel).
+    pub abandoned: &'a AtomicBool,
+}
+
 /// One call on a fixed recording route for `profile`. `params` fill the route's slots and
 /// query keys (a `{*path}` slot takes a validated volume path). `tags` go on the Unity Gateway
 /// model route only (SEC-06a); the workspace routes take `None`.
@@ -88,6 +100,21 @@ pub trait RecordingHttp: Send + Sync {
         body: ReqBody<'_>,
         tags: Option<&Tags>,
     ) -> CoreResult<Reply>;
+
+    /// As [`RecordingHttp::send`], within `bounds`. An implementation must end the wait for the
+    /// rate bucket at the budget, must not send after `abandoned` is set, and must cap the HTTP
+    /// timeout at the budget. The default does none of this: it is for test doubles.
+    fn send_bounded(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+        _bounds: CallBounds<'_>,
+    ) -> CoreResult<Reply> {
+        self.send(profile, route_id, params, body, tags)
+    }
 }
 
 /// One call that [`ScriptedHttp`] saw.
@@ -171,6 +198,25 @@ impl ScriptedHttp {
 }
 
 impl RecordingHttp for ScriptedHttp {
+    /// Like the real transport: a call that was abandoned is not sent, so it is not seen.
+    fn send_bounded(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+        bounds: CallBounds<'_>,
+    ) -> CoreResult<Reply> {
+        if bounds.abandoned.load(Ordering::SeqCst) {
+            return Err(CoreError::Unavailable {
+                component: "test",
+                reason: "timeout",
+            });
+        }
+        self.send(profile, route_id, params, body, tags)
+    }
+
     fn send(
         &self,
         _profile: &str,
