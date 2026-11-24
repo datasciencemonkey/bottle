@@ -245,3 +245,66 @@
     scroll-behavior: auto;
   }
 }
+
+/* The hub Agent panel (`AgentPanel.tsx`). */
+.agent-panel-block {
+  margin-top: var(--mog-space-4);
+}
+
+.agent-panel-label {
+  margin: 0 0 var(--mog-space-2);
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-panel-q {
+  margin: 0 0 var(--mog-space-2);
+  font-size: var(--mog-text-md);
+  font-weight: var(--mog-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.agent-waiting-list,
+.agent-earlier {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mog-space-3);
+  padding: var(--mog-space-2) var(--mog-space-3);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+}
+
+.agent-waiting + .agent-waiting {
+  margin-top: var(--mog-space-2);
+}
+
+.agent-waiting-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-waiting-q {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-sub {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-earlier-row {
+  padding: var(--mog-space-3) 0;
+  border-top: 1px solid var(--mog-edge);
+}

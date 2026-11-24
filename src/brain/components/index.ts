@@ -57,6 +57,7 @@ import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, wireAgentChips } from '../agent-card';
 import { createAgentClient, ipcAgentApi } from '../agent-run';
 import { createAskRouter, createFollowUpWindow } from '../agent-route';
+import { sendHubAgent, wireHubAgent, type HubAgentWiring } from '../hub-agent-wiring';
 import { MOG_PALETTE } from '../../shared/mog-palette';
 import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
 import { createGenieFollowup } from '../genie-followup';
@@ -459,8 +460,10 @@ export function startBrain(): Brain {
       },
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
       followUp,
+      onChange: () => void hubRef.current?.push(),
       log: agentLog,
     });
+    const hubRef: { current?: HubAgentWiring } = {};
     bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
     bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
     const askRouter = createAskRouter({
@@ -478,10 +481,23 @@ export function startBrain(): Brain {
         stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true }),
       refreshGenieCode: () => void workspaces.refreshGenieCode(),
     });
+    // The hub Agent panel: the live turn, the waiting turns and the earlier turns, in memory only.
+    hubRef.current = wireHubAgent(bus, {
+      client: agentClient,
+      genieCode: () => workspaces.genieCode(),
+      send: sendHubAgent,
+      openSettings: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+    });
     // The agent chips of the card: Stop, Open in Agent, Open Settings, "Ask other workspaces too".
     wireAgentChips(bus, {
       stop: (turnId) => void agentClient.stop(turnId),
-      openAgent: () => void showHub(),
+      openAgent: () => {
+        void showHub();
+        void hubRef.current?.open();
+      },
       openSettings: () => {
         void showHub();
         void workspaces.showSettings();

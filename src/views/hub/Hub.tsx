@@ -3,6 +3,7 @@ import { PanelLeftIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { HUB_AGENT_EVENT, asHubAgentView } from '../../shared/hub-agent';
 import { HUB_WORKSPACES_EVENT, asHubWorkspaceList } from '../../shared/hub-workspaces';
 import type { HubRecording } from '../../shared/recording-view';
 import {
@@ -14,6 +15,7 @@ import {
 } from '../view-ipc';
 import type { MogId } from '../../shared/interfaces';
 import { About } from './About';
+import { AgentPanel, useHubAgent } from './AgentPanel';
 import { Button } from '../ui/button';
 import { CliInstallStep } from './CliInstallStep';
 import { CliSettings } from './CliSettings';
@@ -105,8 +107,10 @@ function SettingsArea({
   workspaces,
   homeDomains,
   onChoose,
+  agentBusy,
 }: {
   hidden: boolean;
+  agentBusy: boolean;
   recording: HubRecording | undefined;
   workspaces: HubWorkspaceList | undefined;
   homeDomains: readonly MogViewState[];
@@ -117,7 +121,12 @@ function SettingsArea({
       {/* ADR 0117: one row for each workspace, with the switch "Available to your MOG". It ends
           with the "Connect another workspace…" row (#162 follow-up, W-07e), the one deliberate
           way to open "Connect a workspace" again once a usable profile exists. */}
-      <WorkspaceSettings list={workspaces} homeDomains={homeDomains} onChoose={onChoose} />
+      <WorkspaceSettings
+        list={workspaces}
+        homeDomains={homeDomains}
+        onChoose={onChoose}
+        agentBusy={agentBusy}
+      />
       <MicPreference />
       <DictationWords />
       <RecordingSettings model={recording} />
@@ -181,6 +190,34 @@ export function Hub() {
       off?.();
     };
   }, []);
+  // Slice 2a: "Open in Agent" on the card sends a new notice, and the hub shows the Agent area.
+  const lastAgentNotice = useRef('');
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void listen<unknown>(
+      HUB_AGENT_EVENT,
+      (e) => {
+        const n = asHubAgentView(e.payload)?.notice;
+        if (n === undefined) {
+          lastAgentNotice.current = '';
+          return;
+        }
+        const key = `${n.kind}|${n.text}`;
+        if (key === lastAgentNotice.current) return;
+        lastAgentNotice.current = key;
+        setView('agent');
+      },
+      { target: getCurrentWindow().label },
+    ).then((u) => {
+      if (gone) u();
+      else off = u;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
   const recording = useHubRecording();
   const openRecordingSettings = useCallback(() => {
     pickView('settings');
@@ -201,6 +238,7 @@ export function Hub() {
   useViewEvent('mog.view_state', onState);
   const notice = useHubNotice();
   const workspaces = useHubWorkspaces();
+  const agent = useHubAgent();
   const homeDomains = [...mogs.values()].filter((m) => m.homeDomain !== undefined);
   const hp = workspaces?.homePick;
   const pickKey = hp ? `${hp.suggested}|${hp.candidates.join(',')}` : '';
@@ -296,6 +334,7 @@ export function Hub() {
             onOpen={showConversations}
             composer={threadComposer}
           />
+          <AgentPanel view={agent} active={view === 'agent'} />
           <MemoryArea active={view === 'memory'} forgetMogId={[...mogs.keys()][0]} />
           <Recordings
             active={view === 'recordings'}
@@ -308,6 +347,7 @@ export function Hub() {
             workspaces={workspaces}
             homeDomains={homeDomains}
             onChoose={onChoose}
+            agentBusy={agent?.live !== undefined || agent?.session.state === 'busy'}
           />
           <ForgetDialogHost />
           {/* ADR 0117 (FLAG 5): the one-time home pick shows over every area while it is set. */}

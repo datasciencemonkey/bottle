@@ -3,9 +3,11 @@
  * show; `NAV_ITEMS` is the single source of which ones render right now. 'recordings'
  * (rec-lead's area, ADR 0103, #595) joined once its own PR landed (merge of origin/main into
  * ui-1, review of #602). 'memory' is the local memory area (local memory plan 9.1, ADR 0112).
+ * 'agent' is the live Genie Code session (slice 2a), between Conversations and Recordings.
  * The workspaces live in Settings → Workspace (ADR 0117), not in an area of their own.
  */
 import {
+  BotIcon,
   BrainIcon,
   DiscAlbumIcon,
   HouseIcon,
@@ -14,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export type HubView = 'home' | 'conversations' | 'memory' | 'recordings' | 'settings';
+export type HubView = 'home' | 'conversations' | 'agent' | 'memory' | 'recordings' | 'settings';
 
 export interface NavItem {
   readonly id: HubView;
@@ -25,6 +27,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { id: 'home', label: 'Home', icon: HouseIcon },
   { id: 'conversations', label: 'Conversations', icon: MessageSquareIcon },
+  { id: 'agent', label: 'Agent', icon: BotIcon },
   { id: 'recordings', label: 'Recordings', icon: DiscAlbumIcon },
   { id: 'memory', label: 'Memory', icon: BrainIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
