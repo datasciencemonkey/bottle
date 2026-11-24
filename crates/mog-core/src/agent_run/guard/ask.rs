@@ -116,7 +116,14 @@ impl AgentGuard {
     /// Serve one `ask_genie` call of the model. It blocks until the call ends, so the shim channel
     /// runs it on its own thread.
     pub fn ask_genie(&self, session_id: &str, args: &Value) -> ToolOut {
-        let a = match self.admit(session_id, args) {
+        self.ask_genie_for(session_id, None, args)
+    }
+
+    /// The same call, bound to a turn: with `Some(turn_id)`, check 1 also needs that turn to be
+    /// the live one. A worker of a stopped turn that arrives late is refused as `run_stopped`
+    /// and cannot spend the budget of the next turn.
+    pub fn ask_genie_for(&self, session_id: &str, turn_id: Option<&str>, args: &Value) -> ToolOut {
+        let a = match self.admit(session_id, turn_id, args) {
             Ok(a) => a,
             Err(out) => return out,
         };
@@ -150,14 +157,19 @@ impl AgentGuard {
         if trip {
             self.cv.notify_all();
             self.fire_refusal_hook(turn_id);
+            // The refusal that stops the turn reads as a stop, so the caller stops at once.
+            return ToolOut::refusal(RUN_STOPPED);
         }
         ToolOut::refusal(refusal_code(code))
     }
 
     /// Checks 1 to 6, then the call record in the state Queued.
-    fn admit(&self, sid: &str, args: &Value) -> Result<Admitted, ToolOut> {
+    fn admit(&self, sid: &str, bound: Option<&str>, args: &Value) -> Result<Admitted, ToolOut> {
         // 1
         let turn_id = live_turn(&self.lock(), sid).map_err(ToolOut::refusal)?;
+        if bound.is_some_and(|b| b != turn_id) {
+            return Err(ToolOut::refusal(RUN_STOPPED));
+        }
         // 2
         let Some((alias, question)) = parse_args(args) else {
             return Err(self.refuse(sid, &turn_id, AgentRefusal::InvalidArgs));

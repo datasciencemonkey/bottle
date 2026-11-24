@@ -573,7 +573,8 @@ fn a_refused_ask_does_not_count_and_a_failed_call_does() {
     // Failed calls use the budget.
     assert!(r.ask("finance").is_error);
     assert!(r.ask("finance").is_error);
-    assert_eq!(r.ask("finance").text, "budget_reached");
+    // The third refusal of the turn (two unknown or off, then this one) stops it.
+    assert_eq!(r.ask("finance").text, "run_stopped");
     assert_eq!(r.r8.count("genie_ask"), 2);
 }
 
@@ -841,7 +842,8 @@ fn three_refusals_in_a_turn_stop_it() {
     assert_eq!(r.ask("legal").text, "workspace_not_available");
     assert_eq!(r.ask("legal").text, "workspace_not_available");
     assert!(hook_turn.lock().unwrap().is_empty());
-    assert_eq!(r.ask("legal").text, "workspace_not_available");
+    // The third refusal stops the turn, so it reads as a stop.
+    assert_eq!(r.ask("legal").text, "run_stopped");
     assert_eq!(*hook_turn.lock().unwrap(), vec!["t1".to_owned()]);
     assert_eq!(r.guard.refusals("t1"), 3);
     // The turn is stopped: even a good ask is refused, and the hook ran once.
