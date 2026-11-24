@@ -43,12 +43,13 @@ asks for the words as spoken. The existing pre-pass, cleanup model and word chec
 2. **Route.** Bottle uses chat completions with an `audio_url` data URL. This is the recording request, in one
    shared function (`recording_cloud::model::audio_chat_body`). The audio is FLAC, 16 kHz mono, from RAM. The call
    uses the home profile only, through `GatewayChatClient` (R7, token broker, tags, shared rate bucket).
-3. **Deadline and cancel.** The deadline is 3.5 s, not the probed worst case (2.5 s) plus margin, and not the
+3. **Deadline and cancel.** The deadline is 3.2 s, not the probed worst case (2.5 s) plus margin, and not the
    ADR 0122 ask-loop budget. The brain's arrival gate (`arrival-gate.ts`) holds Ask Genie arrivals for a pasting
-   hold for at most 5 s after key-up (`ARRIVAL_CAP_MS`). The cloud deadline (3.5 s) plus the dictation cleanup
-   budget (1.5 s, ADR 0122) must stay at or under that 5 s cap, so a slow cloud call cannot let an arrival move
-   the card before the paste lands. No retry. Wipe and the zero-buffer event cancel the call; a cancel gives no
-   transcript, enforced even if the HTTP call itself returns a reply in the same instant (see "Races" below).
+   hold for at most 5 s after key-up (`ARRIVAL_CAP_MS`). The cloud deadline (3.2 s) plus the dictation cleanup
+   budget (1.5 s, ADR 0122) is 4.7 s, under that 5 s cap with 0.3 s of slack for the rest of the paste path, so a
+   slow cloud call cannot let an arrival move the card before the paste lands. No retry. Wipe and the zero-buffer
+   event cancel the call; a cancel gives no transcript, enforced even if the HTTP call itself returns a reply in
+   the same instant (see "Races" below).
 4. **Local audio stays the fallback.** R4 still decodes the take with Parakeet during speech. It also keeps the
    take in RAM, up to a 120 s cap (the PTT hold cap, CAP-04a) and only when the choice is on, re-checked at both
    key-down and key-up (see "Races" below). On any cloud error, including a panic inside the cloud call, R4
@@ -97,8 +98,6 @@ transcript for that hold) and leak the list entry.
 
 ## Contract changes
 
-## Contract changes
-
 - `AgentSettings.cloudDictation` and `workspace_settings_write.cloudDictation`: new bool.
 - `EndpointName` accepts `.`: pattern `^[A-Za-z0-9_.-]{1,128}$`.
 - `RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT` and `RECORDING_DEFAULT_ENDPOINT`: new default values.
@@ -114,5 +113,5 @@ or token.
 
 - With "Databricks", R4 holds up to 2 min of audio in RAM for a PTT or a hands-free take alike (decision 5). R4
   zeroes it after the call.
-- A cloud call adds up to about 2.5 s after key-up (the probed worst case), bounded by the 3.5 s deadline. The
+- A cloud call adds up to about 2.5 s after key-up (the probed worst case), bounded by the 3.2 s deadline. The
   user can switch back to "On this Mac".

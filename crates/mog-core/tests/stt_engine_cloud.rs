@@ -341,6 +341,7 @@ fn adr_0123_a_hands_free_take_over_the_120s_ptt_cap_uses_the_local_text_with_no_
 
 #[test]
 fn adr_0123_the_cloud_deadline_fits_the_arrival_gate_cap_with_the_cleanup_budget() {
-    // 3.5 s (DEADLINE) + 1.5 s (the dictation cleanup budget) = 5 s, the arrival gate's cap.
-    assert_eq!(cloud_dictation::DEADLINE, Duration::from_millis(3_500));
+    // 3.2 s (DEADLINE) + 1.5 s (the dictation cleanup budget) = 4.7 s, under the arrival gate's
+    // 5 s cap, with 0.3 s of slack for the rest of the paste path.
+    assert_eq!(cloud_dictation::DEADLINE, Duration::from_millis(3_200));
 }

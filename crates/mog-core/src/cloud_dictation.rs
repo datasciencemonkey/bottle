@@ -10,12 +10,13 @@
 //! clip 1.8 to 2.5 s (the worst run seen was 2.5 s). `audio_url` data URLs work on the chat
 //! route; the Responses route takes the same audio as an `input_file`; `input_audio` is refused.
 //!
-//! The deadline ([`DEADLINE`]) is 3.5 s, not the ADR 0122 ask-loop budget: the brain's arrival
+//! The deadline ([`DEADLINE`]) is 3.2 s, not the ADR 0122 ask-loop budget: the brain's arrival
 //! gate (`arrival-gate.ts`, `ARRIVAL_CAP_MS`) holds Ask Genie arrivals for a pasting hold for at
 //! most 5 s after key-up. [`DEADLINE`] plus the 1.5 s dictation cleanup budget
-//! (`DICTATION_CLEANUP_DEADLINE_MS`) must stay at or under that cap, or a slow cloud call can let
-//! an arrival move the card before the paste lands. 3.5 s + 1.5 s = 5 s, with headroom over the
-//! 2.5 s worst probed latency.
+//! (`DICTATION_CLEANUP_DEADLINE_MS`) must stay under that cap, with slack for the rest of the
+//! paste path, or a slow cloud call can let an arrival move the card before the paste lands.
+//! 3.2 s + 1.5 s = 4.7 s, 0.3 s under the 5 s cap, with headroom over the 2.5 s worst probed
+//! latency.
 //!
 //! Privacy: the home profile only (Bottle never picks one), no audio, text, prompt or token in a
 //! log, a `Debug` or an error. Every error is a content-free code. The caller falls back to the
@@ -35,8 +36,9 @@ use crate::types::{TagApp, TagOp, Tags, RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT};
 /// The model of cloud dictation: the recording transcribe model (one Gemini default).
 pub const MODEL: &str = RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT;
 /// The deadline of one cloud transcription. Past it, Bottle uses the local text. Fits the
-/// arrival gate's 5 s cap alongside the 1.5 s dictation cleanup budget (see the module doc).
-pub const DEADLINE: Duration = Duration::from_millis(3_500);
+/// arrival gate's 5 s cap alongside the 1.5 s dictation cleanup budget, with slack (see the
+/// module doc).
+pub const DEADLINE: Duration = Duration::from_millis(3_200);
 /// `max_tokens` of the call (120 s of speech is about 400 words).
 pub const MAX_TOKENS: u32 = 2_000;
 /// The runtime that `Transcript.runtime` shows for a cloud transcript.
