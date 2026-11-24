@@ -39,6 +39,8 @@ import { SettingsGroup } from './SettingsGroup';
 import { ColorDot, WorkspaceColor } from './WorkspaceColor';
 
 const NAME_MAX = 64;
+/** The brain's waiting text (`WORKSPACE_TEXT.waiting`): a Cancel shows while it is up. */
+const SIGN_IN_WAITING = 'Waiting for you to sign in in your browser…';
 
 function send(action: WorkspaceAction): void {
   void emitView(HUB_SCOPE, 'click', action).catch(() => undefined);
@@ -249,7 +251,16 @@ function SignInCommand({ profile }: { profile: string }) {
 
 type Panel = 'rename' | 'colour' | 'confirm' | undefined;
 
-function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
+function WorkspaceRow({
+  row,
+  busy,
+  waiting,
+}: {
+  row: HubWorkspaceRow;
+  busy: boolean;
+  /** The brain waits for the browser sign-in of this row. */
+  waiting: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>(undefined);
   const reduce = useReducedMotion();
   const li = useRef<HTMLLIElement>(null);
@@ -352,6 +363,18 @@ function WorkspaceRow({ row, busy }: { row: HubWorkspaceRow; busy: boolean }) {
                 aria-hidden="true"
               />
             </span>
+          )}
+          {busy && waiting && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Cancel sign-in to ${row.name}`}
+              data-cancel-sign-in
+              onClick={() => send({ action: 'workspace.sign_in_cancel', profile: row.profile })}
+            >
+              Cancel
+            </Button>
           )}
           {row.signIn === 'expired' && (
             <Button
@@ -561,7 +584,12 @@ export function WorkspaceSettings({
         <SettingsGroup className="mt-[var(--mog-space-3)]">
           <ul aria-label="Workspaces" className="m-0 list-none divide-y divide-border/60 p-0">
             {list.rows.map((r) => (
-              <WorkspaceRow key={r.profile} row={r} busy={list.busyProfile === r.profile} />
+              <WorkspaceRow
+                key={r.profile}
+                row={r}
+                busy={list.busyProfile === r.profile}
+                waiting={list.busyProfile === r.profile && list.notice?.text === SIGN_IN_WAITING}
+              />
             ))}
           </ul>
         </SettingsGroup>

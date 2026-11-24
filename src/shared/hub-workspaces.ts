@@ -58,6 +58,8 @@ export type WorkspaceAction =
   | { action: 'workspace.make_home'; profile: string; confirmed: true }
   | { action: 'workspace.pick_home'; profile: string }
   | { action: 'workspace.sign_in'; profile: string }
+  /** Stops a waiting sign-in of that row. */
+  | { action: 'workspace.sign_in_cancel'; profile: string }
   | { action: 'workspace.edit'; profile: string; name?: string; colorVariant?: string }
   /** Slice 1 (the agent loop) ships the control. */
   | { action: 'workspace.budget'; genieCallBudget: HubGenieCallBudget }
@@ -91,6 +93,7 @@ export function asWorkspaceAction(p: unknown): WorkspaceAction | undefined {
         : undefined;
     case 'workspace.pick_home':
     case 'workspace.sign_in':
+    case 'workspace.sign_in_cancel':
       return isProfile(profile) ? { action, profile } : undefined;
     case 'workspace.edit': {
       if (!isProfile(profile)) return undefined;

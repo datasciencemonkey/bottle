@@ -86,6 +86,9 @@ function rig(
       state = { ...state, agent: { ...state.agent, ...a } };
       return state;
     },
+    cancelLogin: async (profile) => {
+      calls.push(['cancel_login', profile]);
+    },
     reauth: async (profile) => {
       calls.push(['reauth', profile]);
     },
@@ -360,6 +363,29 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.calls.at(-1)).toEqual(['list', true]);
   });
 
+  it('Cancel during a waiting sign-in calls profile_login_cancel at once and shows Sign-in cancelled.', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    let reject: (e: unknown) => void = () => undefined;
+    r.deps.reauth = () => new Promise((_, no) => (reject = no));
+    const done = r.ws.act({ action: 'workspace.sign_in', profile: 'home' });
+    await flush();
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.calls).toContainEqual(['cancel_login', 'home']);
+    reject({ error: 'login_cancelled' });
+    await done;
+    expect(r.last()?.busyProfile).toBeUndefined();
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: 'Sign-in cancelled.' });
+  });
+
+  it('a Cancel that the host refuses shows an error instead of staying silent', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
+    await r.ws.refresh();
+    r.deps.cancelLogin = async () => Promise.reject({ error: 'host_failed' });
+    await r.ws.act({ action: 'workspace.sign_in_cancel', profile: 'home' });
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.failed });
+  });
+
   it('profile_invalid from a sign-in tells the user to use the command below', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'expired' }]));
     await r.ws.refresh();
@@ -370,7 +396,6 @@ describe('workspaces: hub actions (ADR 0117)', () => {
   });
 
   it.each([
-    ['login_cancelled', WORKSPACE_TEXT.login_cancelled],
     ['timeout', WORKSPACE_TEXT.timeout],
     ['cli_failed', WORKSPACE_TEXT.cli_failed],
     ['auth_expired', WORKSPACE_TEXT.auth_expired],

@@ -54,7 +54,7 @@ export const WORKSPACE_TEXT = {
   settings: 'Your workspaces are in Settings → Workspace.',
   signed_in: 'Signed in again.',
   waiting: 'Waiting for you to sign in in your browser…',
-  login_cancelled: 'The sign-in was cancelled.',
+  login_cancelled: 'Sign-in cancelled.',
   timeout: 'The sign-in did not finish in 5 minutes.',
   cli_failed: 'The Databricks CLI could not finish the sign-in.',
   not_browser: 'This workspace does not use browser sign-in. Run the command below in Terminal.',
@@ -95,6 +95,8 @@ export interface WorkspacesDeps {
   }): Promise<WorkspaceList>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
+  /** `profile_login_cancel`: stops the running sign-in of the profile. */
+  cancelLogin(profile: ProfileName): Promise<unknown>;
   configs: MogConfigClient;
   /** The local store, for the `mem.exchange.recent` statement of the home suggestion. */
   store: Pick<LocalMemoryStore, 'exec'>;
@@ -391,6 +393,10 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             // reads the new state.
             return publish(last, { notice: { kind: 'error', text: signInByHand(a.profile) } });
           }
+          if (code === 'login_cancelled') {
+            const l = await fetchList().catch(() => last);
+            return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.login_cancelled } });
+          }
           if (code === 'profile_invalid') {
             // A PAT or service-principal profile: a CLI login would change it. The row has Copy.
             return publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.not_browser } });
@@ -404,6 +410,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         const l = await fetchList(true);
         return publish(l, { notice: { kind: 'info', text: WORKSPACE_TEXT.signed_in } });
       }
+      case 'workspace.sign_in_cancel':
+        return; // `act` handles it outside the queue.
       case 'workspace.edit':
         return edit(a);
       case 'workspace.budget':
@@ -503,8 +511,16 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         }
         await publish(last);
       }),
-    act: (action) =>
-      serial(async () => {
+    act: (action) => {
+      if (action.action === 'workspace.sign_in_cancel') {
+        // The sign-in holds the queue until it ends: the cancel must not wait behind it. The
+        // waiting `workspace.sign_in` then ends with `login_cancelled`, which shows the notice.
+        return deps.cancelLogin(action.profile).then(
+          () => undefined,
+          () => publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.failed } }),
+        );
+      }
+      return serial(async () => {
         try {
           await run(action);
         } catch (e) {
@@ -512,7 +528,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
             notice: noticeOf(e),
           });
         }
-      }),
+      });
+    },
   };
 }
 
@@ -531,6 +548,7 @@ export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
       call('workspace_make_home', { profile, ...(mogId !== undefined ? { mogId } : {}) }),
     settingsWrite: (args) => call('workspace_settings_write', args),
     reauth: (profile) => call('profile_reauth', { profile }),
+    cancelLogin: (profile) => call('profile_login_cancel', { profile }),
     configs,
     store: new IpcLocalMemoryStore(),
     send: (list) => emitTo('hub', HUB_WORKSPACES_EVENT, list),

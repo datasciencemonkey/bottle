@@ -277,6 +277,8 @@ describe('Settings → Workspace', () => {
     });
     expect(el.querySelector('[data-workspace-notice="info"]')?.textContent).toBe(waiting);
     expect(li(el, 'old').querySelector('[data-busy-spinner]')).not.toBeNull();
+    await click(li(el, 'old').querySelector('[data-cancel-sign-in]'));
+    expect(hubClicks()).toEqual([{ action: 'workspace.sign_in_cancel', profile: 'old' }]);
     await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, {
       ...LIST,
       notice: { kind: 'error', text: 'The Databricks CLI could not finish the sign-in.' },
@@ -284,6 +286,17 @@ describe('Settings → Workspace', () => {
     expect(el.querySelector('[role="alert"]')?.textContent).toBe(
       'The Databricks CLI could not finish the sign-in.',
     );
+  });
+
+  it('Cancel shows only while the waiting notice is up, not for other busy work', async () => {
+    const { el } = await mount({ ...LIST, busyProfile: 'old' });
+    expect(el.querySelector('[data-cancel-sign-in]')).toBeNull();
+    const w = await mount({
+      ...LIST,
+      busyProfile: 'old',
+      notice: { kind: 'info', text: 'Waiting for you to sign in in your browser…' },
+    });
+    expect(w.el.querySelectorAll('[data-cancel-sign-in]')).toHaveLength(1);
   });
 
   it('busyProfile shows a spinner on that row only and disables its controls', async () => {

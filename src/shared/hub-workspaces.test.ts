@@ -36,6 +36,10 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     });
     expect(asWorkspaceAction({ action: 'workspace.pick_home', profile: 'p' })).toBeDefined();
     expect(asWorkspaceAction({ action: 'workspace.sign_in', profile: 'p' })).toBeDefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel', profile: 'p', x: 1 })).toEqual({
+      action: 'workspace.sign_in_cancel',
+      profile: 'p',
+    });
     expect(asWorkspaceAction({ action: 'workspace.edit', profile: 'p', name: 'Fin' })).toEqual({
       action: 'workspace.edit',
       profile: 'p',
@@ -57,6 +61,8 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
     expect(
       asWorkspaceAction({ action: 'workspace.edit', profile: 'p', name: '  ' }),
     ).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.sign_in_cancel', profile: '' })).toBeUndefined();
     expect(asWorkspaceAction({ action: 'mog.create' })).toBeUndefined();
     expect(asWorkspaceAction(null)).toBeUndefined();
   });
