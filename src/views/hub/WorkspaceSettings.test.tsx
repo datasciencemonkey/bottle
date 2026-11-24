@@ -543,6 +543,13 @@ describe('Settings → Workspace', () => {
     expect(icon()?.getAttribute('class')).not.toContain('animate-spin');
   });
 
+  it('[M1] Refresh workspaces is also disabled while a row sign-in or switch change is busy', async () => {
+    const { el } = await mount({ ...LIST, busyProfile: 'old' });
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(true);
+    await tauri.emitTo('hub', HUB_WORKSPACES_EVENT, LIST);
+    expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(false);
+  });
+
   it('Refresh workspaces is disabled before the first list arrives', async () => {
     const { el } = await render(<Host />);
     expect(el.querySelector<HTMLButtonElement>('[data-refresh-workspaces]')?.disabled).toBe(true);

@@ -19,24 +19,21 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   asConnectModel,
   CONNECT_EVENT,
   CONNECT_VIEW_ID,
   isValidProfileName,
+  PROFILE_NAME_INVALID_TEXT,
+  PROFILE_NAME_TAKEN_TEXT,
+  sameProfileName,
   type ConnectModel,
   type ConnectTarget,
 } from '../../shared/connect-view';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { emitView, sendViewReady } from '../view-ipc';
-
-/** The same copy the brain shows after the `connect_start` round trip (W-07g, Table W-ERR), so
- * an instant client-side check and a server refusal never disagree in wording. */
-const PROFILE_NAME_INVALID =
-  'Use only letters, digits, dots, dashes and underscores, up to 64 characters.';
-const PROFILE_NAME_TAKEN = 'A profile with this name exists. Type a different name.';
 
 function send(target: ConnectTarget, fields: Record<string, string> = {}) {
   void emitView(CONNECT_VIEW_ID, 'click', { target, ...fields }).catch(() => undefined);
@@ -96,10 +93,17 @@ function UrlStep({ model }: { model: Extract<Open, { step: 'url' }> }) {
 function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
   const [name, setName] = useState(model.proposedName);
   const [clientId, setClientId] = useState('');
+  const errorId = useId();
+  const helpId = useId();
   const trimmed = name.trim();
   const taken = model.taken ?? [];
-  const duplicate = trimmed !== '' && taken.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+  const duplicate = trimmed !== '' && taken.some((t) => sameProfileName(t, trimmed));
   const valid = isValidProfileName(trimmed) && !duplicate;
+  // An empty field is only incomplete, not "wrong": it gets no error line, and the help line
+  // below falls back to the brain's own proposal instead of echoing nothing (or, while the
+  // field holds a bad or taken name, instead of echoing a name that would not be saved).
+  const showError = trimmed !== '' && !valid;
+  const helpName = valid ? trimmed : model.proposedName;
   return (
     <form
       data-connect-step="name"
@@ -127,17 +131,18 @@ function NameStep({ model }: { model: Extract<Open, { step: 'name' }> }) {
           data-autofocus
           name="profile-name"
           value={name}
-          aria-invalid={!valid}
+          aria-invalid={showError}
+          aria-describedby={showError ? `${errorId} ${helpId}` : helpId}
           onChange={(e) => setName(e.target.value)}
         />
       </label>
-      {!valid && trimmed !== '' && (
-        <p role="alert" data-profile-name-error>
-          {duplicate ? PROFILE_NAME_TAKEN : PROFILE_NAME_INVALID}
+      {showError && (
+        <p role="alert" id={errorId} data-profile-name-error>
+          {duplicate ? PROFILE_NAME_TAKEN_TEXT : PROFILE_NAME_INVALID_TEXT}
         </p>
       )}
-      <p className="hub-muted" data-profile-name-help>
-        {`Saved as a Databricks CLI profile in ~/.databrickscfg. You can use it from the terminal with --profile ${trimmed === '' ? model.proposedName : trimmed}.`}
+      <p className="hub-muted" id={helpId} data-profile-name-help>
+        {`Saved as a Databricks CLI profile in ~/.databrickscfg. You can use it from the terminal with --profile ${helpName}.`}
       </p>
       <details>
         <summary>Use a custom OAuth app (optional)</summary>

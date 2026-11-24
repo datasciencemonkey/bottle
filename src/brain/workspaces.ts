@@ -157,6 +157,13 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
   let last: WorkspaceList | undefined;
   /** The last rows with their names. */
   let namedRows: HubWorkspaceRow[] = [];
+  /** The notice of the last push the hub actually got (or would have), so a push with no
+   * `notice` of its own (`workspace.refresh`'s first, "refreshing" push) can carry it forward
+   * instead of wiping it off the screen. */
+  let lastNotice: HubWorkspaceList['notice'];
+  /** A `workspace.refresh` is already running: a second click does nothing instead of piling up
+   * another full re-read behind it. */
+  let refreshInFlight = false;
   /** Serialises the actions, so two clicks never write at once. */
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -285,8 +292,10 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     extra?: { busyProfile?: string; notice?: HubWorkspaceList['notice']; refreshing?: boolean },
   ): Promise<void> => {
     if (!l) return;
+    const out = await toHub(l, extra);
+    lastNotice = out.notice;
     try {
-      await deps.send(await toHub(l, extra));
+      await deps.send(out);
     } catch {
       // No hub is open. The hub asks again with workspaces.ready when it opens.
     }
@@ -377,8 +386,15 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       case 'workspace.refresh': {
         // "Refresh workspaces": the same re-read as a hub open, with a spinner on the button
         // instead of the loading line (the hub already has a list to show while it waits).
-        await publish(last, { refreshing: true });
-        return publish(await fetchList(true));
+        // `lastNotice` rides along so an info notice already on screen (e.g. "Signed in again.")
+        // is not wiped the moment the spinner starts. `finally`: `refreshInFlight` clears even
+        // when the read fails, so a later click is never stuck skipped.
+        try {
+          await publish(last, { refreshing: true, notice: lastNotice });
+          return publish(await fetchList(true));
+        } finally {
+          refreshInFlight = false;
+        }
       }
       case 'workspace.set_available': {
         const row = rowOf(a.profile);
@@ -578,6 +594,13 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
           () => undefined,
           () => publish(last, { notice: { kind: 'error', text: WORKSPACE_TEXT.failed } }),
         );
+      }
+      if (action.action === 'workspace.refresh') {
+        // A refresh is already running (or already queued behind one): skip, rather than piling
+        // up another full re-read. This check and set is synchronous, so two clicks in the same
+        // tick cannot both see it false.
+        if (refreshInFlight) return Promise.resolve();
+        refreshInFlight = true;
       }
       return serial(async () => {
         try {

@@ -126,6 +126,60 @@ describe('Connect a workspace (hub view)', () => {
     });
   });
 
+  it('[L] aria-invalid and the error line are empty-field-safe; aria-describedby points at them', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-acme-prod',
+      otherAuthNotice: false,
+      taken: ['bottle-mine'],
+    });
+    const name = el.querySelector<HTMLInputElement>('input[name="profile-name"]');
+    const help = el.querySelector('[data-profile-name-help]');
+    // Valid: aria-invalid is false, and the field points only at the help line.
+    expect(name?.getAttribute('aria-invalid')).toBe('false');
+    expect(name?.getAttribute('aria-describedby')).toBe(help?.id);
+    // Emptied: still not "invalid" (merely incomplete) — no error line, describedby unchanged.
+    await act(async () => setValue(name, ''));
+    expect(name?.getAttribute('aria-invalid')).toBe('false');
+    expect(el.querySelector('[data-profile-name-error]')).toBeNull();
+    expect(name?.getAttribute('aria-describedby')).toBe(help?.id);
+    // Invalid (non-empty): aria-invalid is true, and describedby covers the error and the help.
+    await act(async () => setValue(name, 'bottle-mine'));
+    const error = el.querySelector('[data-profile-name-error]');
+    expect(name?.getAttribute('aria-invalid')).toBe('true');
+    expect(name?.getAttribute('aria-describedby')).toBe(`${error?.id} ${help?.id}`);
+    // The help line falls back to the brain's own proposal while the typed value is invalid,
+    // rather than echoing a name that will not be the one saved.
+    expect(help?.textContent).toBe(
+      'Saved as a Databricks CLI profile in ~/.databrickscfg. You can use it from the terminal with --profile bottle-acme-prod.',
+    );
+  });
+
+  it('[L] the duplicate check folds ASCII letter case only (never a non-ASCII codepoint)', async () => {
+    const { el } = await render(<ConnectWorkspace />);
+    // U+212A KELVIN SIGN: `String.prototype.toLowerCase()` folds it to the plain ASCII "k", so a
+    // naive case-insensitive compare would wrongly call "℀elvin" and "kelvin" the same CLI
+    // profile name. The CLI's own config file does no such folding.
+    await tauri.emitTo('hub', CONNECT_EVENT, {
+      step: 'name',
+      host: HOST,
+      proposedName: 'bottle-x',
+      otherAuthNotice: false,
+      taken: ['Kelvin', 'Bottle-Mine'],
+    });
+    const name = el.querySelector<HTMLInputElement>('input[name="profile-name"]');
+    await act(async () => setValue(name, 'kelvin'));
+    expect(el.querySelector('[data-profile-name-error]')).toBeNull();
+    expect(el.querySelector<HTMLButtonElement>('[data-connect-start]')?.disabled).toBe(false);
+    // A real ASCII-only case difference is still caught.
+    await act(async () => setValue(name, 'BOTTLE-mine'));
+    expect(el.querySelector('[data-profile-name-error]')?.textContent).toBe(
+      'A profile with this name exists. Type a different name.',
+    );
+  });
+
   it('[W-07g] with no `taken` list the field is still validated by format alone', async () => {
     const { el } = await render(<ConnectWorkspace />);
     await tauri.emitTo('hub', CONNECT_EVENT, {

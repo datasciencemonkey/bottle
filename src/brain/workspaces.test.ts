@@ -431,6 +431,69 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.calls.at(-1)).toEqual(['list', true]);
   });
 
+  it('[M1] a second workspace.refresh while one is already running does nothing', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    const listCalls = () => r.calls.filter((c) => c[0] === 'list').length;
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    const before = listCalls();
+    const first = r.ws.act({ action: 'workspace.refresh' });
+    const second = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(listCalls()).toBe(before + 1);
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await Promise.all([first, second]);
+    expect(listCalls()).toBe(before + 1);
+    // Once it ends, a later click runs a new read.
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return Promise.resolve(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    };
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(listCalls()).toBe(before + 2);
+  });
+
+  it('[M2] workspace.refresh carries the current notice into its refreshing push, so it is not wiped', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    // The home row cannot be switched off: this leaves an info notice on screen.
+    await r.ws.act({ action: 'workspace.set_available', profile: 'home', available: false });
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.home_always_available });
+    let resolveList: (v: WorkspaceList) => void = () => undefined;
+    r.deps.list = (refresh) => {
+      r.calls.push(['list', refresh]);
+      return new Promise((ok) => (resolveList = ok));
+    };
+    const done = r.ws.act({ action: 'workspace.refresh' });
+    await flush();
+    expect(r.last()?.refreshing).toBe(true);
+    expect(r.last()?.notice).toEqual({ kind: 'info', text: WORKSPACE_TEXT.home_always_available });
+    resolveList(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await done;
+  });
+
+  it('[L] workspace.refresh clears refreshing (never stuck) when the list read fails', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    r.deps.list = async () => Promise.reject({ error: 'workspace_storage_failed' });
+    r.sent.length = 0;
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.last()?.notice?.kind).toBe('error');
+    // The flag was cleared on the failure, so a later refresh runs again rather than skipping.
+    r.deps.list = async (refresh) => {
+      r.calls.push(['list', refresh]);
+      return workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]);
+    };
+    await r.ws.act({ action: 'workspace.refresh' });
+    expect(r.last()?.refreshing).toBeUndefined();
+    expect(r.calls.at(-1)).toEqual(['list', true]);
+  });
+
   it('a sign-in click for a row that is no longer expired runs nothing; a cancel for an unknown row says so', async () => {
     const r = rig(
       workspaceList('home', [{ profile: 'home', mogIds: [id(1)], signIn: 'signed_in' }]),

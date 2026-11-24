@@ -82,6 +82,35 @@ export function isValidProfileName(name: string): boolean {
   return PLAIN_VALUE.test(name);
 }
 
+/**
+ * The two profile-name refusal texts, one source for both the brain's post-`connect_start`
+ * error (`connect-wiring.ts`'s `CONNECT_TEXT`) and the view's instant, client-side check
+ * (`ConnectWorkspace.tsx`), so the two can never drift apart in wording.
+ */
+export const PROFILE_NAME_INVALID_TEXT =
+  'Use only letters, digits, dots, dashes and underscores, up to 64 characters.';
+export const PROFILE_NAME_TAKEN_TEXT = 'A profile with this name exists. Type a different name.';
+
+/**
+ * ASCII-only case fold, for comparing profile names: `isValidProfileName` allows ASCII letters
+ * only, but a name set before that rule existed, or by another tool, might hold anything the CLI
+ * config format allows, so this never runs `String.prototype.toLowerCase`, which folds by the
+ * runtime's current locale and by Unicode casing beyond ASCII.
+ */
+function asciiFold(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    out += c >= 65 && c <= 90 ? String.fromCharCode(c + 32) : s[i];
+  }
+  return out;
+}
+
+/** True if `a` and `b` are the same CLI profile name, ignoring ASCII letter case only. */
+export function sameProfileName(a: string, b: string): boolean {
+  return asciiFold(a) === asciiFold(b);
+}
+
 /** The model, or `undefined` for a payload that is not one. */
 export function asConnectModel(v: unknown): ConnectModel | undefined {
   if (!isObj(v)) return undefined;
