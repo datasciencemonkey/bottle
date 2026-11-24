@@ -89,3 +89,4 @@
 - D82 UX defaults accepted from ux-mascot: card max 3 blurbs, auto-hide 60 s, doze 20 min, mood priority function, 22 chips, 8-step wizard (step 7 asks Input Monitoring, not Accessibility).
 - D83 Existential questions: none.
 - D84 Cost presentation: security-governance model is an upper bound (Flash-Lite cleanup rates); 2 DBU/question is an assumption to measure (SPIKE-COST-1).
+- D85 (2026-11-24, ADR 0122) One orchestrator model replaces the external agent session host and the small cleanup and router models: default `system.ai.claude-haiku-5-5`, Responses route on the home AI Gateway, `store:false`; dictation cleanup with a 1.5 s budget and a word check; the Ask loop in Rust with `ask_genie` and `submit_answer` behind the guard; direct Genie One is the fallback. Supersedes ADR 0120. Amends D38, D58, D69 (model names, deadline) and B4 (see B6).

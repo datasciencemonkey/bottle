@@ -16,8 +16,8 @@ Bottle is a Tauri desktop app (macOS first, Windows second) for Databricks users
 
 | Key action | What happens |
 |---|---|
-| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie** (PRs #572, #571). |
-| Hold **Right Option**, tap **G** (⌥G) during the hold, release | **Ask Genie.** Nothing is pasted. Bottle sends the exact text to **Genie One** through a direct MCP call, then shows the answer (markdown and key numbers) in the MOG card. |
+| Hold **Right Option**, speak, release | **Dictation.** Local Parakeet STT transcribes the audio on the device. The orchestrator model cleans up the text. Bottle pastes the text at the cursor in the frontmost app. A small pop-up on the MOG shows the text with Copy and **Ask Genie** (PRs #572, #571). |
+| Hold **Right Option**, tap **G** (⌥G) during the hold, release | **Ask.** Nothing is pasted. The orchestrator model asks **Genie One** in the switched-on workspaces, then shows the answer (markdown, key numbers, citations) in the MOG card. |
 
 The user always knows whether they dictate or ask, so the key decides. Bottle does not guess the intent. The pop-up's
 Ask Genie button is only a fallback for text you dictated and then want to ask about.
@@ -28,10 +28,20 @@ Binding decisions for the MVP:
   permission that was never asked (Input Monitoring, then Accessibility). A denied permission shows a hub and
   pop-up notice with one button (Open Settings) and, for Input Monitoring, "reopen Bottle".
 
-- **Direct Genie path.** Until the MOG agent lands (ADR 0117), Ask Genie is one direct Genie One MCP call (JSON-RPC over HTTPS). No agent, no Claude Agent
-  SDK, no Python bridge and no generic fetch layer sits in the middle. The parts on main: TokenBroker (R6),
-  McpTransport (R8, tool allowlist `genie_ask`, `genie_poll_response`, `genie_get_query_result`,
-  `genie_cancel_response`), PollActor and GenieBridge (T8). See ADR 0097.
+- **One orchestrator model (ADR 0122, owner decision 2026-11-24).** One chat model serves dictation cleanup and ⌥G.
+  The default is `system.ai.claude-haiku-5-5`. The user picks it in Settings → Workspace from the `system.ai` chat
+  models. Every call uses the Responses API, `POST /ai-gateway/mlflow/v1/responses`, on the home profile, through
+  `model_gateway::ChatClient`. Each body sets `store: false`.
+  - **Dictation:** local Parakeet, then a local filler pre-pass, then the model cleans the text (1.5 s budget, no
+    retry, no tools). Bottle pastes the model text only when its words match the speaker's words. Otherwise it pastes
+    the local text. The setting "Clean up dictation" switches this off.
+  - **Ask (⌥G):** the model runs a tool loop in Rust (`agent_run::orchestrator`). It has two tools:
+    `ask_genie(workspace, question)` and `submit_answer`. Every `ask_genie` call goes through the guard
+    (`agent_run/guard`): switched-on workspaces only, a budget, quarantine, and receipts when "Combine across
+    workspaces" is off. Combined answers cite each workspace as [1] [2], and each marker links to that workspace's answer.
+  - **Direct Genie is the fallback.** If the model is not reachable, ⌥G asks Genie One on the home workspace
+    (ADR 0097 path) and shows a short notice. The parts on main: TokenBroker (R6), McpTransport (R8, tool allowlist
+    `genie_ask`, `genie_poll_response`, `genie_get_query_result`, `genie_cancel_response`), PollActor and GenieBridge (T8).
 - **Auth.** Tokens come only from `databricks auth token --profile <p>` (OAuth U2M through the user's Databricks CLI)
   and live only in memory. One CLI profile = one workspace. The user picks the profile; code never guesses one.
 - **Local history.** Each Genie exchange is saved in the local encrypted SQLite store (SQLCipher) through the
@@ -43,9 +53,8 @@ Binding decisions for the MVP:
 - **One MOG with workspaces (ADR 0117, owner decision 2026-11-23; slice 1 in progress).** Bottle moves to one MOG. Each connected
   Databricks CLI profile is a workspace of that MOG. The user switches each workspace on or off in Settings →
   Workspace. The home workspace is always on. A new connection starts off. Bottle never picks the home for the user.
-- **The MOG agent (planned; plan in draft PR #617, ADR 0117 written in slice 1).** ⌥G becomes agentic: a tool loop in the brain
-  over a Rust model step on the home profile's AI Gateway. It asks the Genie of each switched-on workspace. This loop
-  is the only agent in scope. It is not R16 or `bottle-mcp`.
+- **The MOG agent is the orchestrator loop (ADR 0122).** The tool loop above is the only agent in scope. It is
+  not R16 or `bottle-mcp`. The model never gets a shell, a URL fetch, a general CLI tool or a token.
 
 ### Out of scope for now ("we'll consider later")
 
@@ -72,7 +81,7 @@ later".
 | Hub Local speech step | In flight: #600. |
 | Hub Workspaces area, home workspace pick (draft) | In flight: #599. |
 | Dependabot config | In flight: #398. |
-| Not started or stubbed | Preview and approve of context before Genie, UC Pages drafts (PageService is a stub), memory recall in the ask path (`recall: []`), the main agent in the live ask path, dictation cleanup. |
+| Not started or stubbed | Preview and approve of context before Genie, UC Pages drafts (PageService is a stub), memory recall in the ask path (`recall: []`), R16 and `bottle-mcp` tools. Dictation cleanup and the ask loop run on the orchestrator model (ADR 0122). |
 
 Re-check with `gh pr list` before you rely on this table.
 
@@ -87,6 +96,8 @@ Re-check with `gh pr list` before you rely on this table.
  │ insertion (insert_text: clipboard paste, no Enter, clipboard restore)                                │
  │ cli_runner (R5: find, vet, run `databricks`) ─► token_broker (R6) ─► mcp_transport (R8) ─► Genie One │
  │ profile_service (CLI profiles)   local_store (SQLCipher, mem_local_exec)   ipc + ipc_gateway (gate)  │
+ │ model_gateway (ChatClient, Responses client, model_invoke) ─► home AI Gateway /responses (store:false)│
+ │ agent_run/orchestrator (ask tool loop) ─► agent_run/guard ─► mcp_transport ─► Genie One (per workspace)│
  └──────▲───────────────────────────────────────────────────────────────────────────────────────────────┘
         │ Tauri IPC: commands and events, typed in src/shared/ipc.ts ⇄ crates/mog-core/src/ipc.rs
  ┌──────┴──────────── brain: src/brain (hidden window, TypeScript) ──────────────────────────────────────┐
@@ -99,6 +110,16 @@ Re-check with `gh pr list` before you rely on this table.
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
+Two flows use the model (ADR 0122):
+
+```
+ Dictation:  Parakeet ─► local filler pre-pass ─► model_invoke (role router, no tools, 1.5 s) ─► word check ─► insert_text
+                                                      └─ timeout, refusal or mismatch ─► insert_text with the local text
+ Ask (⌥G):   local text ─► agent_run/orchestrator ─► model (Responses) ⇄ ask_genie(workspace, question) ─► guard ─► Genie One
+                                                      └─ submit_answer ─► answer card with [n] citations
+                                                      └─ model not reachable ─► direct Genie One on the home workspace + notice
+```
+
 Rules of the boundary:
 
 - Rust owns the mic, the hotkey, the paste, the CLI, tokens, network and storage. The brain never sees a token.
@@ -109,7 +130,7 @@ Rules of the boundary:
 
 | Path | What it is |
 |---|---|
-| `crates/mog-core/src/` | The Rust core library. Key modules: `hotkey_*`, `capture.rs`, `stt_*`, `insertion*`, `cli_runner.rs`, `token_broker.rs`, `mcp_transport*`, `http_transport*`, `profile_service.rs`, `local_store*`, `ipc.rs`, `ipc_gateway.rs`, `types.rs`. |
+| `crates/mog-core/src/` | The Rust core library. Key modules: `hotkey_*`, `capture.rs`, `stt_*`, `insertion*`, `cli_runner.rs`, `token_broker.rs`, `mcp_transport*`, `http_transport*`, `model_gateway/`, `agent_run/` (`orchestrator`, `guard`), `profile_service.rs`, `local_store*`, `ipc.rs`, `ipc_gateway.rs`, `types.rs`. |
 | `crates/mog-core-ffi/` | A C ABI over mog-core for future non-Tauri hosts. Not on the MVP path. |
 | `crates/mog-core/tests/` | Rust integration and acceptance tests (`at_*` files map to acceptance tests AT-nn). |
 | `crates/cli-runner/` | The CLI runner crate and its real-process tests. |
@@ -188,7 +209,8 @@ This file does not track live status. Use:
 - `gh issue list --state open` — the remaining issues are the MVP set. Issue #245 is the MVP-D exit gate.
 - `gh pr list --state open` — work in flight.
 - `docs/adr/` and open PRs — the latest decisions. The MVP ones: ADR 0096 (dictation-first card), ADR 0097
-  (direct Genie path), ADR 0098 (the ⌥G key) and ADR 0103 (call recording), all on main. In flight: ADR 0104 (the
+  (direct Genie path, now the fallback), ADR 0098 (the ⌥G key) and ADR 0103 (call recording), all on main. ADR 0122
+  (the orchestrator model) is the current design for dictation cleanup and Ask. In flight: ADR 0104 (the
   hub's `stt_model_*` commands and the packaged local-stt build, #413, #45, #529).
 
 ## 8. Reference projects

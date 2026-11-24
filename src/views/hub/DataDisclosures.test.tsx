@@ -119,18 +119,24 @@ describe('Table SEC-DISC disclosures', () => {
 
   it('[SEC-17] home-profile processing names the model calls and the hop sentence', () => {
     const t = text('home-profile');
-    for (const w of ['cleanup', 'router step', 'memory writer', 'embeddings', 'main agent model']) {
+    for (const w of [
+      'cleanup',
+      'router step',
+      'memory writer',
+      'embeddings',
+      'orchestrator model',
+    ]) {
       expect(t).toContain(w);
     }
     expect(t).toContain('Questions about another workspace are processed in your home workspace.');
   });
 
-  it('[SEC-17] the main agent harness and model location, and tokens stay in the core', () => {
+  it('[SEC-17] the orchestrator model and its location, and tokens stay in the core', () => {
     const t = text('agent-harness');
-    expect(t).toMatch(/Claude or Codex harness/);
-    expect(t).toMatch(/on this computer/);
+    expect(t).toMatch(/one orchestrator model/);
     expect(t).toMatch(/Databricks AI Gateway/);
-    expect(t).toMatch(/local model/);
+    expect(t).toMatch(/sets store to false/);
+    expect(t).toMatch(/Clean up dictation/);
     expect(t).toMatch(/never gets your sign-in tokens/);
     expect(text('where-data-goes')).toMatch(/tokens stay in the Bottle core/);
   });
