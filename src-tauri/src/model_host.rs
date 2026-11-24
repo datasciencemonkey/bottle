@@ -17,10 +17,16 @@ use tauri::Manager;
 use crate::mcp_host::McpHost;
 use crate::profiles_host::ProfilesHost;
 use crate::rate_bucket_host::SharedRateBucket;
+use crate::workspaces_host::WorkspacesHost;
 
 const ID: &str = "model_host";
 /// The MOG ID of the request tags for a call that no MOG made (the ask loop).
 const ORCHESTRATOR_TAG: &str = "orchestrator";
+
+/// Managed when [`install`] failed: the content-free reason code, for the status of the
+/// orchestrator (ADR 0122). Nothing else is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstallFailure(pub &'static str);
 
 fn missing(reason: &'static str) -> CoreError {
     CoreError::Unavailable {
@@ -48,7 +54,17 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
     let transport = Arc::new(ReqwestHttpTransport::new(hosts, tokens, bucket)?);
     let client = Arc::new(GatewayChatClient::new(transport, ORCHESTRATOR_TAG));
     // The model is the default until the integration step reads the user's orchestrator setting.
-    let component = Arc::new(ModelInvokeComponent::new(client.clone(), Arc::new(|| None)));
+    // The home profile comes from the workspace store (read only). Without the host, no home:
+    // `model_invoke` refuses every call.
+    let home = match handle.try_state::<WorkspacesHost>() {
+        Some(w) => w.home_source(),
+        None => Arc::new(|| None),
+    };
+    let component = Arc::new(ModelInvokeComponent::new(
+        client.clone(),
+        Arc::new(|| None),
+        home,
+    ));
     handle.manage(client);
     handle.manage(component);
     Ok(())

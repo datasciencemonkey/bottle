@@ -74,6 +74,13 @@ impl WorkspacesHost {
         Arc::new(HostView(self.store.clone()))
     }
 
+    /// A read-only source of the home profile, for `model_invoke` (ADR 0122). It returns `None`
+    /// until a store is set, and never picks a profile.
+    pub fn home_source(&self) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().and_then(|s| s.home()))
+    }
+
     /// Bind R6 to the store, for the sign-in column and the probe.
     pub fn bind_sign_in(&self, source: Arc<dyn SignInSource>) {
         if let Some(s) = self.store.get() {

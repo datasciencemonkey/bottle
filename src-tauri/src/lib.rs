@@ -458,7 +458,11 @@ pub fn run() {
             // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
             let _ = recording_cloud_host::install(handle);
             // ADR 0122: `model_invoke` and the orchestrator chat client, on the same R6.
-            let _ = model_host::install(handle);
+            // On failure the content-free reason code is kept as managed state (no log sink exists
+            // in the host, SEC-16c); `model_invoke` then answers `host_failed`.
+            if let Err(e) = model_host::install(handle) {
+                handle.manage(model_host::InstallFailure(e.code()));
+            }
             // #523: `link_open`, over T7 and the OS opener.
             link_host::install(handle);
             // "Connect a workspace" (#162): `profile_login` over R5 and the W-06a check of R6.

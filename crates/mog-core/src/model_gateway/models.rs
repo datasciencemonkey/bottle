@@ -1,14 +1,14 @@
 //! The orchestrator model list and status (ADR 0122).
 //!
 //! No read-only route lists the chat models of a profile's AI Gateway: R7 has only
-//! `mlflow.chat_completions` and `mlflow.embeddings` on the gateway (`http_transport::ROUTES`),
-//! and the recording routes add no list call. So [`list_orchestrator_models`] returns a curated
+//! `mlflow.chat_completions`, `mlflow.responses` and `mlflow.embeddings` on the gateway
+//! (`http_transport::ROUTES`), and the recording routes add no list call. So [`list_orchestrator_models`] returns a curated
 //! list of known `system.ai.*` chat models. A model that the gateway does not serve gives
 //! `model_not_found` at the first call, and the status goes to `no_model`.
 
 use serde::{Deserialize, Serialize};
 
-use super::client::{MODEL_NOT_FOUND, OFFLINE, SIGNED_OUT, TIMEOUT};
+use super::client::{BAD_REPLY, MODEL_NOT_FOUND, OFFLINE, REFUSED, SIGNED_OUT, TIMEOUT};
 
 /// One model of the picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +106,7 @@ pub fn orchestrator_status(
     if !set(model) || last_error == Some(MODEL_NOT_FOUND) {
         return OrchestratorStatus::NoModel;
     }
-    if matches!(last_error, Some(OFFLINE | TIMEOUT)) {
+    if matches!(last_error, Some(OFFLINE | TIMEOUT | REFUSED | BAD_REPLY)) {
         return OrchestratorStatus::Unreachable;
     }
     OrchestratorStatus::Ready

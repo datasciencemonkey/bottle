@@ -91,16 +91,22 @@ pub fn usage(reply: &Value) -> Usage {
     }
 }
 
-/// The text of a chat `content`: a string, or the `text` parts of a part list.
-fn chat_text(content: &Value) -> String {
+/// The text of a chat `content`: a string, or a list of `text` parts and nothing else. `None`
+/// for any other part (an image, an audio part, a tool part).
+fn chat_text(content: &Value) -> Option<String> {
     match content {
-        Value::String(s) => s.clone(),
+        Value::String(s) => Some(s.clone()),
         Value::Array(parts) => parts
             .iter()
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
+            .map(|p| {
+                let is_text = p.get("type").and_then(Value::as_str) == Some("text");
+                is_text
+                    .then(|| p.get("text").and_then(Value::as_str))
+                    .flatten()
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|t| t.join("")),
+        _ => None,
     }
 }
 
@@ -121,48 +127,58 @@ fn format_instruction(rf: &Value) -> Option<String> {
 }
 
 /// The chat-completions shape of a Responses reply: `{choices:[{message:{content:<text>}}]}`.
-/// The brain reads `model_invoke` replies in this shape (`messageContent`). A reply with no text
-/// gives empty content.
-pub fn to_chat_reply(reply: &Value) -> Value {
-    json!({"choices": [{"message": {
-        "role": "assistant",
-        "content": output_text(reply).unwrap_or_default(),
-    }}]})
+/// The brain reads `model_invoke` replies in this shape (`messageContent`). `None` when
+/// [`checked_text`] refuses the reply.
+pub fn to_chat_reply(reply: &Value) -> Option<Value> {
+    let content = checked_text(reply)?;
+    Some(json!({"choices": [{"message": {"role": "assistant", "content": content}}]}))
 }
 
-/// The Responses body of a router request. A request that has `input` is already a Responses body
-/// and goes through as it is (without `model`, which the client adds). Only the fields below are
-/// kept; any other field is dropped.
-pub fn from_chat_request(request: &Map<String, Value>) -> Map<String, Value> {
-    let mut out = Map::new();
-    if request.contains_key("input") {
-        out.extend(
-            request
-                .iter()
-                .filter(|(k, _)| *k != "model")
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
-        return out;
+/// The top-level fields of a chat request that Bottle sends. Any other field is refused: the
+/// request is an allowlist, never a passthrough (RTR-20a, ADR 0122). `model` is accepted and
+/// ignored; `stream` only as `false`.
+const CHAT_FIELDS: &[&str] = &[
+    "model",
+    "messages",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "max_completion_tokens",
+    "response_format",
+    "stream",
+];
+
+/// The Responses body of a chat-shaped request, or `None` if the request is not a plain chat
+/// request: an unknown field, a role other than system, developer, user or assistant, a message
+/// with a field other than `role` and `content`, or a content part that is not text. Every
+/// content part of the result is `input_text` or `output_text`, and every `input` item is a
+/// message.
+pub fn from_chat_request(request: &Map<String, Value>) -> Option<Map<String, Value>> {
+    if request.keys().any(|k| !CHAT_FIELDS.contains(&k.as_str()))
+        || request.get("stream").is_some_and(|s| s != &json!(false))
+    {
+        return None;
     }
+    let mut out = Map::new();
     let mut input = Vec::new();
     let mut instructions = Vec::new();
-    for m in request
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let text = chat_text(m.get("content").unwrap_or(&Value::Null));
-        match m.get("role").and_then(Value::as_str) {
-            Some("system" | "developer") => instructions.push(text),
-            Some("assistant") => input.push(json!({
+    for m in request.get("messages")?.as_array()? {
+        let m = m.as_object()?;
+        if m.keys().any(|k| k != "role" && k != "content") {
+            return None;
+        }
+        let text = chat_text(m.get("content")?)?;
+        match m.get("role")?.as_str()? {
+            "system" | "developer" => instructions.push(text),
+            "assistant" => input.push(json!({
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": text}],
             })),
-            _ => input.push(json!({
+            "user" => input.push(json!({
                 "role": "user",
                 "content": [{"type": "input_text", "text": text}],
             })),
+            _ => return None,
         }
     }
     out.insert("input".to_owned(), Value::Array(input));
@@ -183,7 +199,36 @@ pub fn from_chat_request(request: &Map<String, Value>) -> Map<String, Value> {
     if !instructions.is_empty() {
         out.insert("instructions".to_owned(), json!(instructions.join("\n\n")));
     }
-    out
+    Some(out)
+}
+
+/// The one text of a finished reply, or `None` when the reply is not a plain answer: the status
+/// is not `completed` (or absent), there is no or more than one `message` item, or a content part
+/// is not `output_text` (a `refusal` part, for example). The brain then falls back.
+pub fn checked_text(reply: &Value) -> Option<String> {
+    if !matches!(
+        reply.get("status").and_then(Value::as_str),
+        None | Some("completed")
+    ) {
+        return None;
+    }
+    let mut messages = reply
+        .get("output")?
+        .as_array()?
+        .iter()
+        .filter(|i| i.get("type").and_then(Value::as_str) == Some("message"));
+    let msg = messages.next()?;
+    if messages.next().is_some() {
+        return None;
+    }
+    let mut out = String::new();
+    for p in msg.get("content")?.as_array()? {
+        if p.get("type").and_then(Value::as_str) != Some("output_text") {
+            return None;
+        }
+        out.push_str(p.get("text")?.as_str()?);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -243,6 +288,7 @@ mod tests {
     fn adr_0122_responses_translates_a_chat_request() {
         let chat = obj(json!({
             "model": "evil",
+            "stream": false,
             "messages": [
                 {"role": "system", "content": "be brief"},
                 {"role": "user", "content": "hi"},
@@ -253,9 +299,8 @@ mod tests {
                 "json_schema": {"name": "r", "schema": {"type": "object"}, "strict": true}},
             "max_tokens": 120,
             "temperature": 0,
-            "logit_bias": {"1": 1},
         }));
-        let r = from_chat_request(&chat);
+        let r = from_chat_request(&chat).unwrap();
         assert_eq!(
             Value::Object(r),
             json!({
@@ -272,22 +317,38 @@ mod tests {
     }
 
     #[test]
-    fn adr_0122_responses_json_object_and_passthrough() {
+    fn adr_0122_responses_json_object_instruction() {
         let r = from_chat_request(&obj(json!({
             "messages": [{"role": "user", "content": "x"}],
             "response_format": {"type": "json_object"},
             "max_completion_tokens": 5,
-        })));
+        })))
+        .unwrap();
         assert_eq!(r["instructions"], "Return only a JSON object.");
         assert!(r.get("text").is_none());
         assert_eq!(r["max_output_tokens"], 5);
-        let own = from_chat_request(&obj(
-            json!({"model": "m", "input": [], "max_output_tokens": 9}),
-        ));
-        assert_eq!(
-            Value::Object(own),
-            json!({"input": [], "max_output_tokens": 9})
-        );
+    }
+
+    #[test]
+    fn rtr_20a_responses_translation_is_an_allowlist() {
+        let user = json!({"role": "user", "content": "x"});
+        let bad = [
+            json!({"messages": [user], "prompt": {"id": "p"}}),
+            json!({"messages": [user], "previous_response_id": "r"}),
+            json!({"messages": [user], "stream": true}),
+            json!({"input": [user]}),
+            json!({"messages": [{"role": "tool", "content": "x"}]}),
+            json!({"messages": [{"role": "user", "content": "x", "tool_calls": []}]}),
+            json!({"messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "u"}}]}]}),
+            json!({"messages": [{"role": "user", "content": [{"type": "input_image"}]}]}),
+            json!({"messages": [{"role": "user", "content": [{"type": "mcp_call"}]}]}),
+            json!({"messages": "x"}),
+            json!({}),
+        ];
+        for b in bad {
+            assert!(from_chat_request(&obj(b.clone())).is_none(), "{b}");
+        }
     }
 
     #[test]
@@ -295,12 +356,22 @@ mod tests {
         let r = json!({"output": [{"type": "message", "content": [
             {"type": "output_text", "text": "{\"a\":1}"}]}]});
         assert_eq!(
-            to_chat_reply(&r)["choices"][0]["message"]["content"],
+            to_chat_reply(&r).unwrap()["choices"][0]["message"]["content"],
             "{\"a\":1}"
         );
-        assert_eq!(
-            to_chat_reply(&json!({"output": []}))["choices"][0]["message"]["content"],
-            ""
-        );
+    }
+
+    #[test]
+    fn adr_0122_responses_checked_text_refuses_what_is_not_one_plain_answer() {
+        let msg =
+            |t: &str| json!({"type": "message", "content": [{"type": "output_text", "text": t}]});
+        let refusal = json!({"type": "message", "content": [{"type": "refusal", "refusal": "no"}]});
+        assert!(to_chat_reply(&json!({"output": []})).is_none());
+        assert!(to_chat_reply(&json!({"output": [msg("a"), msg("b")]})).is_none());
+        assert!(to_chat_reply(&json!({"output": [refusal]})).is_none());
+        assert!(to_chat_reply(&json!({"status": "incomplete", "output": [msg("a")]})).is_none());
+        assert!(to_chat_reply(&json!({"status": "completed", "output": [msg("a")]})).is_some());
+        // Reasoning items beside one message are fine.
+        assert!(to_chat_reply(&json!({"output": [{"type": "reasoning"}, msg("a")]})).is_some());
     }
 }

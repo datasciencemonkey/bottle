@@ -10,14 +10,14 @@
 //! transport's own content-free code.
 
 use serde_json::Value;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use super::{ChatClient, ChatRequest};
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
-use crate::recording_cloud::http::{RecordingHttp, ReqBody};
+use crate::recording_cloud::http::{CallBounds, RecordingHttp, ReqBody};
 use crate::types::{TagApp, TagOp, Tags};
 
 const ID: &str = "model_gateway";
@@ -92,12 +92,37 @@ fn from_status(status: u16, error_code: &str) -> CoreError {
 pub struct GatewayChatClient {
     http: Arc<dyn RecordingHttp>,
     mog: String,
+    /// The calls whose worker thread has not ended ([`MAX_IN_FLIGHT`]).
+    in_flight: Arc<AtomicUsize>,
 }
+
+/// The most calls in flight at once. A call that gave up (a timeout, a cancel) still counts until
+/// its worker ends, so an abandoned call cannot pile up threads: the next one is `rate_limited`.
+pub const MAX_IN_FLIGHT: usize = 4;
 
 impl std::fmt::Debug for GatewayChatClient {
     /// Shows nothing: no profile, host or MOG ID.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayChatClient").finish_non_exhaustive()
+    }
+}
+
+/// Counts one call in flight; the count drops when the worker ends.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Sets the abandoned flag when the caller stops waiting, on every exit (the worker has ended by
+/// then on success, so a late set is harmless).
+struct Abandon(Arc<AtomicBool>);
+
+impl Drop for Abandon {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 
@@ -108,38 +133,62 @@ impl GatewayChatClient {
         Self {
             http,
             mog: mog.into(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     /// As [`ChatClient::chat`], with the request `tags` of the IPC call (SEC-06a).
+    ///
+    /// The call runs on a worker thread. When the caller stops waiting (deadline, cancel), it sets
+    /// an abandoned flag. The transport ends its wait for the rate bucket at the deadline and does
+    /// not send an abandoned call, and its HTTP timeout is capped at the deadline.
     pub fn chat_tagged(&self, req: ChatRequest<'_>, tags: Tags) -> CoreResult<Value> {
         let Value::Object(mut body) = req.body else {
             return Err(err(REFUSED));
         };
+        if req.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            return Err(err(CANCELLED));
+        }
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return Err(err(RATE_LIMITED));
+        }
+        let slot = Slot(Arc::clone(&self.in_flight));
         body.insert("model".to_owned(), Value::String(req.model.to_owned()));
         body.insert("store".to_owned(), Value::Bool(false));
         let body = Value::Object(body);
         let profile = req.profile.to_owned();
         let http = Arc::clone(&self.http);
-        // The deadline is the caller's, not the transport's 10 minute model timeout: the call runs
-        // on its own thread, and the caller stops waiting when the deadline passes. The thread
-        // ends with the transport's own timeout; its reply is dropped.
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let _abandon = Abandon(Arc::clone(&abandoned));
+        let deadline = req.deadline;
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("model-gateway-chat".to_owned())
-            .spawn(move || {
-                let r = http.send(
-                    &profile,
-                    RESPONSES_ROUTE,
-                    &JsonObject::new(),
-                    ReqBody::Json(&body),
-                    Some(&tags),
-                );
-                let _ = tx.send(r);
+            .spawn({
+                let abandoned = Arc::clone(&abandoned);
+                move || {
+                    let _slot = slot;
+                    if abandoned.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let r = http.send_bounded(
+                        &profile,
+                        RESPONSES_ROUTE,
+                        &JsonObject::new(),
+                        ReqBody::Json(&body),
+                        Some(&tags),
+                        CallBounds {
+                            budget: deadline,
+                            abandoned: &abandoned,
+                        },
+                    );
+                    let _ = tx.send(r);
+                }
             })
             .map_err(|_| err(OFFLINE))?;
         // Wait in short slices so a cancel is seen promptly.
-        let end = Instant::now() + req.deadline;
+        let end = Instant::now() + deadline;
         let reply = loop {
             if req.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
                 return Err(err(CANCELLED));
@@ -158,9 +207,13 @@ impl GatewayChatClient {
             return Err(from_status(reply.status, reply.error_code()));
         }
         let json = reply.json();
-        // A Responses reply has an `output` array.
+        // A Responses reply has an `output` array and ends with status `completed` (or none).
+        let finished = !matches!(
+            json.get("status").and_then(Value::as_str),
+            Some("incomplete" | "failed" | "cancelled")
+        );
         match json.get("output").and_then(Value::as_array) {
-            Some(_) => Ok(json.clone()),
+            Some(_) if finished => Ok(json.clone()),
             _ => Err(err(BAD_REPLY)),
         }
     }
@@ -182,7 +235,6 @@ mod tests {
     use super::*;
     use crate::recording_cloud::http::{Reply, ReplyBody, ScriptedHttp};
     use serde_json::json;
-    use std::sync::atomic::AtomicBool;
 
     fn client(h: &Arc<ScriptedHttp>) -> GatewayChatClient {
         GatewayChatClient::new(h.clone(), "orchestrator")
@@ -351,5 +403,122 @@ mod tests {
         assert_eq!(e.code(), CANCELLED);
         assert!(started.elapsed() < Duration::from_secs(5));
         drop(release);
+    }
+
+    /// A transport that waits for the test, then behaves like the real one: an abandoned call is
+    /// not sent, so it is not recorded.
+    struct Gated {
+        gate: std::sync::Mutex<mpsc::Receiver<()>>,
+        sent: std::sync::Mutex<u32>,
+    }
+    impl RecordingHttp for Gated {
+        fn send(
+            &self,
+            _: &str,
+            _: &str,
+            _: &JsonObject,
+            _: ReqBody<'_>,
+            _: Option<&Tags>,
+        ) -> CoreResult<Reply> {
+            *self.sent.lock().unwrap() += 1;
+            Err(err(OFFLINE))
+        }
+        fn send_bounded(
+            &self,
+            p: &str,
+            r: &str,
+            q: &JsonObject,
+            b: ReqBody<'_>,
+            t: Option<&Tags>,
+            bounds: CallBounds<'_>,
+        ) -> CoreResult<Reply> {
+            let _ = self.gate.lock().unwrap().recv();
+            if bounds.abandoned.load(Ordering::SeqCst) {
+                return Err(err(TIMEOUT));
+            }
+            self.send(p, r, q, b, t)
+        }
+    }
+
+    fn wait_idle(c: &GatewayChatClient) {
+        for _ in 0..500 {
+            if c.in_flight.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("workers did not end");
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_a_timed_out_or_cancelled_call_is_never_sent_later() {
+        for cancel in [false, true] {
+            let (release, gate) = mpsc::channel();
+            let http = Arc::new(Gated {
+                gate: std::sync::Mutex::new(gate),
+                sent: std::sync::Mutex::new(0),
+            });
+            let c = GatewayChatClient::new(http.clone(), "m");
+            let flag = AtomicBool::new(cancel);
+            let mut r = req(json!({}), 30);
+            if cancel {
+                // Set while in flight, so the worker has started.
+                flag.store(false, Ordering::SeqCst);
+                r.cancel = Some(&flag);
+                let e = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        std::thread::sleep(Duration::from_millis(40));
+                        flag.store(true, Ordering::SeqCst);
+                    });
+                    let mut r2 = req(json!({}), 10_000);
+                    r2.cancel = Some(&flag);
+                    c.chat(r2).unwrap_err()
+                });
+                assert_eq!(e.code(), CANCELLED);
+            } else {
+                assert_eq!(c.chat(r).unwrap_err().code(), TIMEOUT);
+            }
+            // The worker was still waiting for the bucket. Now it gets its slot.
+            drop(release);
+            wait_idle(&c);
+            assert_eq!(*http.sent.lock().unwrap(), 0, "cancel={cancel}");
+        }
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_caps_calls_in_flight() {
+        let (release, wait) = mpsc::channel();
+        let h = Arc::new(Stuck(std::sync::Mutex::new(wait)));
+        let c = GatewayChatClient::new(h, "m");
+        for _ in 0..MAX_IN_FLIGHT {
+            assert_eq!(c.chat(req(json!({}), 20)).unwrap_err().code(), TIMEOUT);
+        }
+        let started = Instant::now();
+        assert_eq!(
+            c.chat(req(json!({}), 5_000)).unwrap_err().code(),
+            RATE_LIMITED
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(release);
+        wait_idle(&c);
+        // The slots are free again.
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(RESPONSES_ROUTE, 200, ok_reply());
+        let c2 = GatewayChatClient::new(h, "m");
+        assert!(c2.chat(req(json!({}), 1000)).is_ok());
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_an_incomplete_reply_is_bad_reply() {
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(
+            RESPONSES_ROUTE,
+            200,
+            json!({"status": "incomplete", "output": []}),
+        );
+        assert_eq!(
+            client(&h).chat(req(json!({}), 1000)).unwrap_err().code(),
+            BAD_REPLY
+        );
     }
 }

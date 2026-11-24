@@ -21,6 +21,7 @@ use mog_core::keyboard_env::EnvReads;
 use mog_core::recording::{MemorySettingsStore as RecordingMemoryStore, RecordingComponent};
 use mog_core::window_host::WindowHost;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // ---------- fakes ----------
@@ -1693,4 +1694,77 @@ impl mog_core::workspaces::ProfileSource for OneProfile {
             workspace_id: None,
         }])
     }
+}
+
+// ---------- model_invoke (ADR 0122, RTR-20a, SEC-02a) ----------
+
+/// A fake `model_invoke` component: it counts calls and answers with a fixed reply.
+#[derive(Default)]
+struct FakeModel {
+    calls: AtomicUsize,
+}
+
+impl GatewayComponents for FakeModel {
+    fn call(&self, command: &'static str, _args: Value) -> CoreResult<Value> {
+        assert_eq!(command, "model_invoke");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({"json": {"choices": []}}))
+    }
+}
+
+fn model_args() -> Value {
+    json!({
+        "role": "router",
+        "profile": "home",
+        "request": {"messages": [{"role": "user", "content": "hi"}]},
+        "tags": {"app": "bottle", "mog": "mog-1", "op": "router"},
+    })
+}
+
+fn model_route(
+    from: &str,
+    model: Option<&dyn GatewayComponents>,
+    args: Value,
+) -> Result<Value, Value> {
+    let brain = FakeBrain::default();
+    route(
+        HostComponents {
+            model,
+            ..HostComponents::none(from, &brain)
+        },
+        "model_invoke",
+        args,
+    )
+}
+
+#[test]
+fn adr_0122_model_invoke_reaches_the_component_for_the_brain_only() {
+    let fake = FakeModel::default();
+    assert_eq!(
+        model_route("brain", Some(&fake), model_args()),
+        Ok(json!({"json": {"choices": []}}))
+    );
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert_eq!(
+            model_route(label, Some(&fake), model_args()),
+            err("window_not_allowed"),
+            "{label}"
+        );
+    }
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn adr_0122_model_invoke_without_a_component_is_host_failed() {
+    assert_eq!(model_route("brain", None, model_args()), err("host_failed"));
+}
+
+#[test]
+fn rtr_20a_model_invoke_with_tools_never_reaches_the_component() {
+    let fake = FakeModel::default();
+    let mut a = model_args();
+    a["request"]["tools"] = json!([{"type": "function", "name": "x"}]);
+    assert_eq!(model_route("brain", Some(&fake), a), err("invalid_args"));
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
 }

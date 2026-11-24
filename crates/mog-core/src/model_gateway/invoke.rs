@@ -1,16 +1,23 @@
 //! The `model_invoke` host component (ADR 0122, clean mode).
 //!
-//! The IPC command `model_invoke` runs one chat call on the profile that the brain passes (the
-//! home profile). It uses [`GatewayChatClient::chat_tagged`], so the host rules, the token
-//! broker, the request tags and the shared rate bucket of R7 all apply.
+//! The IPC command `model_invoke` runs one chat call on the home profile. It uses
+//! [`GatewayChatClient::chat_tagged`], so the host rules, the token broker, the request tags and
+//! the shared rate bucket of R7 all apply.
 //!
-//! - RTR-20a: a request with a tool field is refused (`invalid_args`), here as well as in the
-//!   gateway, because Rust trusts no caller.
-//! - The model is the user's orchestrator model, not a value from the request. A `model` key in
-//!   the request is replaced.
-//! - The deadline is `deadlineMs`; the `router` role defaults to [`ROUTER_DEADLINE_MS`].
+//! - RTR-20a: a request with a tool field (any case) is refused (`invalid_args`), here as well as
+//!   in the gateway, because Rust trusts no caller. The request is an allowlist: it must be a
+//!   plain chat request (`responses::from_chat_request`), so a Responses body (`input`), a
+//!   `prompt`, a `previous_response_id` and non-text parts are refused too.
+//! - Home only: the profile must be the home profile, read from the workspace store. With no home
+//!   the call is refused. Bottle never picks a profile.
+//! - The model is the user's orchestrator model, not a value from the request.
+//! - The deadline is `deadlineMs`; the `router` role defaults to [`ROUTER_DEADLINE_MS`]. Rust does
+//!   not retry after a timeout.
 //! - Only chat calls are served. The `embed` role is not wired.
+//! - The reply is in chat-completions shape (`{json: {choices: [...]}}`), the one that the brain
+//!   reads. A reply that is not one plain answer is `bad_reply`.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,8 +33,9 @@ use crate::model_request_guard::model_invoke_has_tools;
 
 const ID: &str = "model_invoke";
 
-/// The deadline of the `router` role when the call gives none (ADR 0122).
-pub const ROUTER_DEADLINE_MS: u32 = 900;
+/// The deadline of the `router` role when the call gives none. It equals the brain's
+/// `DICTATION_CLEANUP_DEADLINE_MS`; the brain passes `deadlineMs` as well.
+pub const ROUTER_DEADLINE_MS: u32 = 1500;
 /// The deadline of every other role when the call gives none.
 pub const DEFAULT_DEADLINE_MS: u32 = 30_000;
 /// The longest deadline a call may ask for.
@@ -35,22 +43,6 @@ pub const MAX_DEADLINE_MS: u32 = 120_000;
 
 fn refused(code: &'static str) -> CoreError {
     CoreError::IpcRefused { code }
-}
-
-/// Whether a Responses `input` list holds a tool item (a call or a result): RTR-20a for the
-/// Responses shape, where tools can also come in as items.
-fn has_tool_items(request: &serde_json::Map<String, Value>) -> bool {
-    request
-        .get("input")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items.iter().any(|i| {
-                matches!(
-                    i.get("type").and_then(Value::as_str),
-                    Some("function_call" | "function_call_output")
-                )
-            })
-        })
 }
 
 /// The client's fine-grained code as a code that already crosses IPC (`ERROR_CODES`):
@@ -83,6 +75,9 @@ pub fn deadline_of(role: &ModelRole, deadline_ms: Option<u32>) -> Duration {
 pub struct ModelInvokeComponent {
     client: Arc<GatewayChatClient>,
     model: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    home: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    /// Set to abandon every call in flight (Wipe, quit). Reset it to allow calls again.
+    stop: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for ModelInvokeComponent {
@@ -94,12 +89,24 @@ impl std::fmt::Debug for ModelInvokeComponent {
 }
 
 impl ModelInvokeComponent {
-    /// `model` returns the user's orchestrator model, or `None` for the default.
+    /// `model` returns the user's orchestrator model, or `None` for the default. `home` returns
+    /// the home profile (read only), or `None` when there is none.
     pub fn new(
         client: Arc<GatewayChatClient>,
         model: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+        home: Arc<dyn Fn() -> Option<String> + Send + Sync>,
     ) -> Self {
-        Self { client, model }
+        Self {
+            client,
+            model,
+            home,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The flag that abandons every call in flight and refuses new ones while it is set.
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
     }
 }
 
@@ -119,15 +126,16 @@ impl GatewayComponents for ModelInvokeComponent {
         if a.role == ModelRole::Embed {
             return Err(refused("not_implemented"));
         }
-        let request: serde_json::Map<String, Value> = a.request.into_iter().collect();
-        if has_tool_items(&request) {
+        // Home only (ADR 0117): the profile is the home profile, never another one.
+        if (self.home)().is_none_or(|h| h != a.profile) {
             return Err(refused("invalid_args"));
         }
+        let request: serde_json::Map<String, Value> = a.request.into_iter().collect();
+        // A plain chat request only. No `input`, no tools, no other field.
+        let body = responses::from_chat_request(&request).ok_or_else(|| refused("invalid_args"))?;
         let model = (self.model)()
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ORCHESTRATOR_MODEL.to_owned());
-        // The brain's router request is in chat shape; the wire is the Responses API.
-        let body = responses::from_chat_request(&request);
         let reply = self
             .client
             .chat_tagged(
@@ -136,13 +144,17 @@ impl GatewayComponents for ModelInvokeComponent {
                     model: &model,
                     body: Value::Object(body),
                     deadline: deadline_of(&a.role, a.deadline_ms),
-                    cancel: None,
+                    cancel: Some(&self.stop),
                 },
                 a.tags,
             )
             .map_err(ipc_code)?;
         // The brain reads the chat-completions shape: one translation point (`{json: ...}`).
-        Ok(json!({ "json": responses::to_chat_reply(&reply) }))
+        let chat = responses::to_chat_reply(&reply).ok_or(CoreError::Unavailable {
+            component: ID,
+            reason: "bad_reply",
+        })?;
+        Ok(json!({ "json": chat }))
     }
 }
 
@@ -154,12 +166,22 @@ mod tests {
 
     const ROUTE: &str = "mlflow.responses";
 
-    fn comp(h: &Arc<ScriptedHttp>, model: Option<&str>) -> ModelInvokeComponent {
+    fn comp_home(
+        h: &Arc<ScriptedHttp>,
+        model: Option<&str>,
+        home: Option<&str>,
+    ) -> ModelInvokeComponent {
         let m = model.map(str::to_owned);
+        let home = home.map(str::to_owned);
         ModelInvokeComponent::new(
             Arc::new(GatewayChatClient::new(h.clone(), "unused")),
             Arc::new(move || m.clone()),
+            Arc::new(move || home.clone()),
         )
+    }
+
+    fn comp(h: &Arc<ScriptedHttp>, model: Option<&str>) -> ModelInvokeComponent {
+        comp_home(h, model, Some("home"))
     }
 
     fn args(extra: Value) -> Value {
@@ -223,12 +245,18 @@ mod tests {
             let e = comp(&h, None).call("model_invoke", a).unwrap_err();
             assert_eq!(e.code(), "invalid_args", "{tool}");
         }
-        // A Responses body: tools as fields, and tool items inside `input`.
+        // A Responses body, tool fields in any case, other fields and non-text parts.
+        let m = json!([{"role": "user", "content": "x"}]);
         for request in [
             json!({"input": [], "tools": [{"type": "function", "name": "x"}]}),
             json!({"input": [], "tool_choice": "auto"}),
             json!({"input": [{"type": "function_call", "call_id": "c", "name": "n"}]}),
             json!({"input": [{"type": "function_call_output", "call_id": "c", "output": "o"}]}),
+            json!({"messages": m, "Tools": []}),
+            json!({"messages": m, "prompt": {"id": "p"}}),
+            json!({"messages": m, "previous_response_id": "r"}),
+            json!({"messages": [{"role": "user", "content": [{"type": "mcp_call"}]}]}),
+            json!({"messages": [{"role": "user", "content": [{"type": "input_image"}]}]}),
         ] {
             let e = comp(&h, None)
                 .call("model_invoke", args(json!({"request": request})))
@@ -260,7 +288,7 @@ mod tests {
     #[test]
     fn adr_0122_model_invoke_deadline_defaults_and_clamps() {
         let ms = |r, d| deadline_of(&r, d).as_millis();
-        assert_eq!(ms(ModelRole::Router, None), 900);
+        assert_eq!(ms(ModelRole::Router, None), 1500);
         assert_eq!(ms(ModelRole::Router, Some(400)), 400);
         assert_eq!(ms(ModelRole::Writer, None), 30_000);
         assert_eq!(ms(ModelRole::Router, Some(0)), 1);
@@ -284,5 +312,48 @@ mod tests {
             .call("model_invoke", args(json!({})))
             .unwrap_err();
         assert_eq!(e.code(), "auth_expired");
+    }
+
+    #[test]
+    fn adr_0122_model_invoke_serves_only_the_home_profile() {
+        let h = Arc::new(ScriptedHttp::new());
+        h.json(ROUTE, 200, reply());
+        for home in [None, Some("other")] {
+            let e = comp_home(&h, None, home)
+                .call("model_invoke", args(json!({})))
+                .unwrap_err();
+            assert_eq!(e.code(), "invalid_args");
+        }
+        assert!(h.seen().is_empty());
+        assert!(comp(&h, None).call("model_invoke", args(json!({}))).is_ok());
+    }
+
+    #[test]
+    fn adr_0122_model_invoke_a_reply_that_is_not_one_plain_answer_is_bad_reply() {
+        let msg = json!({"type": "message", "content": [{"type": "output_text", "text": "a"}]});
+        let refusal = json!({"type": "message", "content": [{"type": "refusal", "refusal": "no"}]});
+        for r in [
+            json!({"output": [msg, msg]}),
+            json!({"output": [refusal]}),
+            json!({"status": "incomplete", "output": [msg]}),
+        ] {
+            let h = Arc::new(ScriptedHttp::new());
+            h.json(ROUTE, 200, r);
+            let e = comp(&h, None)
+                .call("model_invoke", args(json!({})))
+                .unwrap_err();
+            assert_eq!(e.code(), "bad_reply");
+        }
+    }
+
+    #[test]
+    fn adr_0122_model_invoke_stop_flag_refuses_calls() {
+        let h = Arc::new(ScriptedHttp::new());
+        let c = comp(&h, None);
+        c.stop_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let e = c.call("model_invoke", args(json!({}))).unwrap_err();
+        assert_eq!(e.code(), "host_failed");
+        assert!(h.seen().is_empty());
     }
 }

@@ -475,6 +475,13 @@ impl WorkspaceStore {
         }
     }
 
+    /// The home profile, read only. `None` when there is none or the file cannot be read. It
+    /// never picks a home (ADR 0117, FLAG 5).
+    pub fn home(&self) -> Option<ProfileName> {
+        let _g = self.guard();
+        self.load().ok()?.home
+    }
+
     /// `workspace_list`.
     pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
         let data = {

@@ -32,13 +32,13 @@ use serde_json::Value;
 
 use super::host_policy::AllowlistEgressPolicy;
 use super::rate_bucket::{parse_retry_after, retry_after_from_body, CallClass, RateBucket};
-use super::rate_limit::acquire;
+use super::rate_limit::{acquire, acquire_within};
 use super::routes::{self, Method};
 use super::{outbound_headers, route_call_kind, HttpTransport, ID};
 use crate::egress_policy::TokenEgressPolicy;
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::JsonObject;
-use crate::recording_cloud::http::{RecordingHttp, Reply, ReplyBody, ReqBody};
+use crate::recording_cloud::http::{CallBounds, RecordingHttp, Reply, ReplyBody, ReqBody};
 use crate::request_identity::{BottleIdentity, CallKind, RequestDecorator};
 use crate::token_broker::{ScimMe, TokenBroker, TokenLease};
 use crate::token_guard::scrub_json;
@@ -501,7 +501,9 @@ impl ReqwestHttpTransport {
         params: &JsonObject,
         body: ReqBody<'_>,
         tags: Option<&Tags>,
+        bounds: Option<CallBounds<'_>>,
     ) -> CoreResult<Reply> {
+        let started = std::time::Instant::now();
         let route = routes::recording_route(route_id)?;
         let class = CallClass::Ask;
         let model = routes::RECORDING_MODEL_ROUTES.contains(&route_id);
@@ -535,7 +537,7 @@ impl ReqwestHttpTransport {
         };
         let limits = Limits {
             timeout: if model {
-                Some(MODEL_TIMEOUT)
+                Some(bounds.map_or(MODEL_TIMEOUT, |b| b.budget.min(MODEL_TIMEOUT)))
             } else {
                 matches!(body, ReqBody::Bytes(_)).then_some(UPLOAD_TIMEOUT)
             },
@@ -549,7 +551,24 @@ impl ReqwestHttpTransport {
         let mut retried_401 = false;
         let mut hops = 0u8;
         loop {
-            self.wait_for_bucket(profile, class);
+            match bounds {
+                // ADR 0122: the bucket wait ends at the budget, and an abandoned call is not sent.
+                Some(b) => {
+                    let left = b.budget.saturating_sub(started.elapsed());
+                    let got = acquire_within(
+                        &*self.seams.bucket,
+                        &*self.seams.pause,
+                        profile,
+                        class,
+                        left,
+                        &mut |_| {},
+                    );
+                    if got.is_none() || b.abandoned.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(err(TIMEOUT));
+                    }
+                }
+                None => self.wait_for_bucket(profile, class),
+            }
             let (raw, lease) =
                 self.send_once(profile, &host, method, &url, &headers, (send_body, limits))?;
             if (300..400).contains(&raw.status) {
@@ -637,7 +656,19 @@ impl RecordingHttp for ReqwestHttpTransport {
         body: ReqBody<'_>,
         tags: Option<&Tags>,
     ) -> CoreResult<Reply> {
-        self.recording_raw(profile, route_id, params, body, tags)
+        self.recording_raw(profile, route_id, params, body, tags, None)
+    }
+
+    fn send_bounded(
+        &self,
+        profile: &str,
+        route_id: &str,
+        params: &JsonObject,
+        body: ReqBody<'_>,
+        tags: Option<&Tags>,
+        bounds: CallBounds<'_>,
+    ) -> CoreResult<Reply> {
+        self.recording_raw(profile, route_id, params, body, tags, Some(bounds))
     }
 }
 
