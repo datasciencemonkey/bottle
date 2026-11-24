@@ -36,7 +36,7 @@ const KNOWN: &[(&str, &str, bool)] = &[
         true,
     ),
     ("system.ai.gpt-5-4-mini", "GPT 5.4 mini", true),
-    ("system.ai.gemini-3-x-flash", "Gemini 3 Flash", true),
+    ("system.ai.gemini-3-8-flash", "Gemini 3 Flash", true),
 ];
 
 /// The eval record: the models that have an eval run. Both are `false` until the eval runs; a

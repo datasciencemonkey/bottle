@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::client::GatewayChatClient;
 use super::responses;
@@ -51,6 +51,21 @@ fn has_tool_items(request: &serde_json::Map<String, Value>) -> bool {
                 )
             })
         })
+}
+
+/// The client's fine-grained code as a code that already crosses IPC (`ERROR_CODES`):
+/// `signed_out` is `auth_expired`; `model_not_found`, `refused` and `cancelled` are
+/// `host_failed`. The rest keep their codes. The fine codes stay inside Rust.
+fn ipc_code(e: CoreError) -> CoreError {
+    let reason = match e.code() {
+        "signed_out" => "auth_expired",
+        "model_not_found" | "refused" | "cancelled" => "host_failed",
+        _ => return e,
+    };
+    CoreError::Unavailable {
+        component: ID,
+        reason,
+    }
 }
 
 /// The deadline of a call.
@@ -113,15 +128,21 @@ impl GatewayComponents for ModelInvokeComponent {
             .unwrap_or_else(|| DEFAULT_ORCHESTRATOR_MODEL.to_owned());
         // The brain's router request is in chat shape; the wire is the Responses API.
         let body = responses::from_chat_request(&request);
-        self.client.chat_tagged(
-            ChatRequest {
-                profile: &a.profile,
-                model: &model,
-                body: Value::Object(body),
-                deadline: deadline_of(&a.role, a.deadline_ms),
-            },
-            a.tags,
-        )
+        let reply = self
+            .client
+            .chat_tagged(
+                ChatRequest {
+                    profile: &a.profile,
+                    model: &model,
+                    body: Value::Object(body),
+                    deadline: deadline_of(&a.role, a.deadline_ms),
+                    cancel: None,
+                },
+                a.tags,
+            )
+            .map_err(ipc_code)?;
+        // The brain reads the chat-completions shape: one translation point (`{json: ...}`).
+        Ok(json!({ "json": responses::to_chat_reply(&reply) }))
     }
 }
 
@@ -165,7 +186,11 @@ mod tests {
         let out = comp(&h, Some("system.ai.gpt-oss-20b"))
             .call("model_invoke", args(json!({})))
             .unwrap();
-        assert_eq!(out, reply());
+        assert_eq!(
+            out,
+            json!({"json": {"choices": [{"message": {
+            "role": "assistant", "content": "{}"}}]}})
+        );
         let seen = &h.seen()[0];
         assert_eq!(
             seen.json.as_ref().unwrap()["model"],
@@ -253,6 +278,11 @@ mod tests {
         let e = comp(&h, None)
             .call("model_invoke", args(json!({})))
             .unwrap_err();
-        assert_eq!(e.code(), "model_not_found");
+        assert_eq!(e.code(), "host_failed");
+        h.json(ROUTE, 401, json!({}));
+        let e = comp(&h, None)
+            .call("model_invoke", args(json!({})))
+            .unwrap_err();
+        assert_eq!(e.code(), "auth_expired");
     }
 }

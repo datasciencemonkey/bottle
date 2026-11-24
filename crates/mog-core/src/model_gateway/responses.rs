@@ -4,7 +4,7 @@
 //!   `POST /ai-gateway/mlflow/v1/responses`.
 //! - [`from_chat_request`] turns a chat-completions request of the router into a Responses body
 //!   (the brain's router request is in chat shape): `messages` become `input`,
-//!   `response_format` becomes `text.format`, and `max_tokens` becomes `max_output_tokens`.
+//!   `response_format` becomes a line of `instructions`, and `max_tokens` becomes `max_output_tokens`.
 //!   Tool fields are never translated: the caller refuses them first.
 
 use serde_json::{json, Map, Value};
@@ -104,24 +104,30 @@ fn chat_text(content: &Value) -> String {
     }
 }
 
-/// The `text.format` of a chat `response_format`, or `None` for one that Bottle does not send.
-fn text_format(rf: &Value) -> Option<Value> {
+/// The instruction line of a chat `response_format`, or `None` for a plain text one. Structured
+/// output (`text.format`) is refused by newer Anthropic models, so the schema goes into the
+/// instructions and the brain's router step validates the reply.
+fn format_instruction(rf: &Value) -> Option<String> {
     match rf.get("type").and_then(Value::as_str)? {
-        "text" => Some(json!({"type": "text"})),
-        "json_object" => Some(json!({"type": "json_object"})),
+        "json_object" => Some("Return only a JSON object.".to_owned()),
         "json_schema" => {
-            let js = rf.get("json_schema")?;
-            let mut f = Map::new();
-            f.insert("type".to_owned(), json!("json_schema"));
-            for k in ["name", "schema", "strict"] {
-                if let Some(v) = js.get(k) {
-                    f.insert(k.to_owned(), v.clone());
-                }
-            }
-            Some(Value::Object(f))
+            let schema = rf.get("json_schema")?.get("schema")?;
+            Some(format!(
+                "Return only a JSON object that matches this schema: {schema}"
+            ))
         }
         _ => None,
     }
+}
+
+/// The chat-completions shape of a Responses reply: `{choices:[{message:{content:<text>}}]}`.
+/// The brain reads `model_invoke` replies in this shape (`messageContent`). A reply with no text
+/// gives empty content.
+pub fn to_chat_reply(reply: &Value) -> Value {
+    json!({"choices": [{"message": {
+        "role": "assistant",
+        "content": output_text(reply).unwrap_or_default(),
+    }}]})
 }
 
 /// The Responses body of a router request. A request that has `input` is already a Responses body
@@ -160,9 +166,6 @@ pub fn from_chat_request(request: &Map<String, Value>) -> Map<String, Value> {
         }
     }
     out.insert("input".to_owned(), Value::Array(input));
-    if !instructions.is_empty() {
-        out.insert("instructions".to_owned(), json!(instructions.join("\n\n")));
-    }
     if let Some(n) = request
         .get("max_completion_tokens")
         .or_else(|| request.get("max_tokens"))
@@ -174,8 +177,11 @@ pub fn from_chat_request(request: &Map<String, Value>) -> Map<String, Value> {
             out.insert(k.to_owned(), v.clone());
         }
     }
-    if let Some(f) = request.get("response_format").and_then(text_format) {
-        out.insert("text".to_owned(), json!({ "format": f }));
+    if let Some(line) = request.get("response_format").and_then(format_instruction) {
+        instructions.push(line);
+    }
+    if !instructions.is_empty() {
+        out.insert("instructions".to_owned(), json!(instructions.join("\n\n")));
     }
     out
 }
@@ -253,7 +259,7 @@ mod tests {
         assert_eq!(
             Value::Object(r),
             json!({
-                "instructions": "be brief",
+                "instructions": "be brief\n\nReturn only a JSON object that matches this schema: {\"type\":\"object\"}",
                 "input": [
                     {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
                     {"role": "assistant", "content": [{"type": "output_text", "text": "hello"}]},
@@ -261,8 +267,6 @@ mod tests {
                 ],
                 "max_output_tokens": 120,
                 "temperature": 0,
-                "text": {"format": {"type": "json_schema", "name": "r",
-                    "schema": {"type": "object"}, "strict": true}},
             })
         );
     }
@@ -274,7 +278,8 @@ mod tests {
             "response_format": {"type": "json_object"},
             "max_completion_tokens": 5,
         })));
-        assert_eq!(r["text"], json!({"format": {"type": "json_object"}}));
+        assert_eq!(r["instructions"], "Return only a JSON object.");
+        assert!(r.get("text").is_none());
         assert_eq!(r["max_output_tokens"], 5);
         let own = from_chat_request(&obj(
             json!({"model": "m", "input": [], "max_output_tokens": 9}),
@@ -282,6 +287,20 @@ mod tests {
         assert_eq!(
             Value::Object(own),
             json!({"input": [], "max_output_tokens": 9})
+        );
+    }
+
+    #[test]
+    fn adr_0122_responses_to_chat_reply_wraps_the_text() {
+        let r = json!({"output": [{"type": "message", "content": [
+            {"type": "output_text", "text": "{\"a\":1}"}]}]});
+        assert_eq!(
+            to_chat_reply(&r)["choices"][0]["message"]["content"],
+            "{\"a\":1}"
+        );
+        assert_eq!(
+            to_chat_reply(&json!({"output": []}))["choices"][0]["message"]["content"],
+            ""
         );
     }
 }

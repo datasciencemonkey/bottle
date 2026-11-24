@@ -10,7 +10,9 @@
 //! transport's own content-free code.
 
 use serde_json::Value;
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use super::{ChatClient, ChatRequest};
 use crate::error::{CoreError, CoreResult};
@@ -19,8 +21,10 @@ use crate::recording_cloud::http::{RecordingHttp, ReqBody};
 use crate::types::{TagApp, TagOp, Tags};
 
 const ID: &str = "model_gateway";
-/// The route ID of the Unity AI Gateway chat call.
-pub const CHAT_ROUTE: &str = "mlflow.responses";
+/// How often a waiting call looks at the cancel flag.
+const CANCEL_POLL: Duration = Duration::from_millis(20);
+/// The route ID of the Unity AI Gateway Responses call.
+pub const RESPONSES_ROUTE: &str = "mlflow.responses";
 
 /// The sign-in is missing or expired.
 pub const SIGNED_OUT: &str = "signed_out";
@@ -34,6 +38,8 @@ pub const RATE_LIMITED: &str = "rate_limited";
 pub const TIMEOUT: &str = "timeout";
 /// The gateway is not reachable.
 pub const OFFLINE: &str = "offline";
+/// The caller set the cancel flag (Stop, Wipe, session end). Stays inside Rust.
+pub const CANCELLED: &str = "cancelled";
 /// The reply is not a Responses reply.
 pub const BAD_REPLY: &str = "bad_reply";
 
@@ -46,6 +52,7 @@ pub const CODES: &[&str] = &[
     TIMEOUT,
     OFFLINE,
     BAD_REPLY,
+    CANCELLED,
 ];
 
 fn err(reason: &'static str) -> CoreError {
@@ -110,6 +117,7 @@ impl GatewayChatClient {
             return Err(err(REFUSED));
         };
         body.insert("model".to_owned(), Value::String(req.model.to_owned()));
+        body.insert("store".to_owned(), Value::Bool(false));
         let body = Value::Object(body);
         let profile = req.profile.to_owned();
         let http = Arc::clone(&self.http);
@@ -122,7 +130,7 @@ impl GatewayChatClient {
             .spawn(move || {
                 let r = http.send(
                     &profile,
-                    CHAT_ROUTE,
+                    RESPONSES_ROUTE,
                     &JsonObject::new(),
                     ReqBody::Json(&body),
                     Some(&tags),
@@ -130,10 +138,21 @@ impl GatewayChatClient {
                 let _ = tx.send(r);
             })
             .map_err(|_| err(OFFLINE))?;
-        let reply = match rx.recv_timeout(req.deadline) {
-            Ok(r) => r.map_err(|e| from_transport(&e))?,
-            Err(mpsc::RecvTimeoutError::Timeout) => return Err(err(TIMEOUT)),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(err(OFFLINE)),
+        // Wait in short slices so a cancel is seen promptly.
+        let end = Instant::now() + req.deadline;
+        let reply = loop {
+            if req.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                return Err(err(CANCELLED));
+            }
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(err(TIMEOUT));
+            }
+            match rx.recv_timeout(left.min(CANCEL_POLL)) {
+                Ok(r) => break r.map_err(|e| from_transport(&e))?,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(err(OFFLINE)),
+            }
         };
         if !reply.ok() {
             return Err(from_status(reply.status, reply.error_code()));
@@ -163,7 +182,7 @@ mod tests {
     use super::*;
     use crate::recording_cloud::http::{Reply, ReplyBody, ScriptedHttp};
     use serde_json::json;
-    use std::time::Duration;
+    use std::sync::atomic::AtomicBool;
 
     fn client(h: &Arc<ScriptedHttp>) -> GatewayChatClient {
         GatewayChatClient::new(h.clone(), "orchestrator")
@@ -175,6 +194,7 @@ mod tests {
             model: "system.ai.claude-haiku-5-5",
             body,
             deadline: Duration::from_millis(ms),
+            cancel: None,
         }
     }
 
@@ -185,7 +205,7 @@ mod tests {
     #[test]
     fn adr_0122_gateway_chat_sends_model_in_body_on_the_gateway_route() {
         let h = Arc::new(ScriptedHttp::new());
-        h.json(CHAT_ROUTE, 200, ok_reply());
+        h.json(RESPONSES_ROUTE, 200, ok_reply());
         let out = client(&h)
             .chat(req(
                 json!({"messages": [{"role": "user", "content": "x"}]}),
@@ -198,6 +218,7 @@ mod tests {
         assert_eq!(seen[0].route, "mlflow.responses");
         let body = seen[0].json.clone().unwrap();
         assert_eq!(body["model"], "system.ai.claude-haiku-5-5");
+        assert_eq!(body["store"], false);
         assert!(body["messages"].is_array());
         let tags = seen[0].tags.clone().unwrap();
         assert_eq!((tags.mog.as_str(), tags.op), ("orchestrator", TagOp::Agent));
@@ -218,7 +239,7 @@ mod tests {
         for (status, code, want) in cases {
             let h = Arc::new(ScriptedHttp::new());
             h.json(
-                CHAT_ROUTE,
+                RESPONSES_ROUTE,
                 status,
                 json!({"error_code": code, "message": "SECRET PROMPT TEXT"}),
             );
@@ -245,7 +266,7 @@ mod tests {
         for (reason, want) in cases {
             let h = Arc::new(ScriptedHttp::new());
             h.on(
-                CHAT_ROUTE,
+                RESPONSES_ROUTE,
                 Err(CoreError::Unavailable {
                     component: "R7",
                     reason,
@@ -261,13 +282,13 @@ mod tests {
     fn adr_0122_gateway_chat_refuses_a_reply_that_is_not_a_chat_completion() {
         for body in [json!({"choices": []}), json!({"x": 1}), json!("text")] {
             let h = Arc::new(ScriptedHttp::new());
-            h.json(CHAT_ROUTE, 200, body);
+            h.json(RESPONSES_ROUTE, 200, body);
             let e = client(&h).chat(req(json!({}), 1000)).unwrap_err();
             assert_eq!(e.code(), BAD_REPLY);
         }
         let h = Arc::new(ScriptedHttp::new());
         h.on(
-            CHAT_ROUTE,
+            RESPONSES_ROUTE,
             Ok(Reply {
                 status: 200,
                 body: ReplyBody::Empty,
@@ -309,6 +330,26 @@ mod tests {
         let c = GatewayChatClient::new(Arc::new(Stuck(std::sync::Mutex::new(wait))), "m");
         let e = c.chat(req(json!({}), 30)).unwrap_err();
         assert_eq!(e.code(), TIMEOUT);
+        drop(release);
+    }
+
+    #[test]
+    fn adr_0122_gateway_chat_cancel_returns_promptly() {
+        let (release, wait) = mpsc::channel();
+        let c = GatewayChatClient::new(Arc::new(Stuck(std::sync::Mutex::new(wait))), "m");
+        let flag = AtomicBool::new(false);
+        let started = Instant::now();
+        let e = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::SeqCst);
+            });
+            let mut r = req(json!({}), 60_000);
+            r.cancel = Some(&flag);
+            c.chat(r).unwrap_err()
+        });
+        assert_eq!(e.code(), CANCELLED);
+        assert!(started.elapsed() < Duration::from_secs(5));
         drop(release);
     }
 }
