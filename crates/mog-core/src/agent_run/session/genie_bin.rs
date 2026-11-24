@@ -1,9 +1,11 @@
 //! Find the Genie Code binary and check it against the pin (plan Amendment 2, A7; v1 2.2).
 //!
 //! Bottle looks in its own bin folder first, then on `PATH`, then at `~/.local/bin/genie`. It
-//! resolves symlinks and runs `genie --version` with a 5 s cap. It accepts only
-//! [`GENIE_PINNED`] with the SHA-256 of [`GENIE_DIGESTS`]. The answer is cached by
-//! `(realpath, size, mtime)`, so a changed file is checked again.
+//! resolves symlinks, checks the SHA-256 against the pin FIRST, and runs `genie --version` (5 s
+//! cap) only on a file with the pinned digest, so Bottle never runs a binary that it did not
+//! pin. The helper binary of the release is required when its digest is pinned. A relative
+//! `PATH` entry is skipped. The answer is cached by `(realpath, size, mtime)` of `genie` and of
+//! the helper, so a changed file is checked again.
 
 use std::fs;
 use std::io::Read;
@@ -115,8 +117,18 @@ struct Cached {
     real: PathBuf,
     size: u64,
     mtime: Option<SystemTime>,
+    /// Size and mtime of the helper binary next to it, if any.
+    helper: Option<(u64, Option<SystemTime>)>,
     info: BinInfo,
 }
+
+/// The size and mtime of the helper binary next to `real`.
+fn helper_stamp(real: &Path) -> Option<(u64, Option<SystemTime>)> {
+    let m = fs::metadata(real.parent()?.join(HELPER)).ok()?;
+    Some((m.len(), m.modified().ok()))
+}
+
+const HELPER: &str = "genie-code-mode-host";
 
 /// The finder and checker.
 pub struct GenieBin {
@@ -148,7 +160,8 @@ impl GenieBin {
         if let Some(d) = own_bin {
             c.push(d.join("genie"));
         }
-        for d in path_var.split(':').filter(|d| !d.is_empty()) {
+        // A relative entry would make the result depend on the working folder: skip it.
+        for d in path_var.split(':').filter(|d| d.starts_with('/')) {
             c.push(Path::new(d).join("genie"));
         }
         if let Some(h) = home {
@@ -184,11 +197,12 @@ impl GenieBin {
 
     fn verify_cached(&self, real: &Path, meta: &fs::Metadata, recheck: bool) -> BinInfo {
         let (size, mtime) = (meta.len(), meta.modified().ok());
+        let helper = helper_stamp(real);
         if !recheck {
             let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(c) = cache
                 .iter()
-                .find(|c| c.real == real && c.size == size && c.mtime == mtime)
+                .find(|c| c.real == real && c.size == size && c.mtime == mtime && c.helper == helper)
             {
                 return c.info.clone();
             }
@@ -200,35 +214,36 @@ impl GenieBin {
             real: real.to_path_buf(),
             size,
             mtime,
+            helper,
             info: info.clone(),
         });
         info
     }
 
     fn verify(&self, real: &Path) -> BinInfo {
-        let version = self.probe.version(real);
         let wrong = |v: Option<String>| BinInfo {
             state: GenieCodeBinary::WrongVersion,
             version: v,
             path: None,
         };
+        // The digest first: a file that is not the pinned one is never run.
+        let want = pinned_digest(&self.target, "genie");
+        if want.is_none() || self.probe.sha256_hex(real).as_deref() != want {
+            return wrong(None);
+        }
+        // The helper binary of the same release must be there and match, if its digest is pinned.
+        if let Some(want_host) = pinned_digest(&self.target, HELPER) {
+            let host = real.parent().map(|d| d.join(HELPER));
+            let ok = host
+                .filter(|h| h.exists())
+                .is_some_and(|h| self.probe.sha256_hex(&h).as_deref() == Some(want_host));
+            if !ok {
+                return wrong(None);
+            }
+        }
+        let version = self.probe.version(real);
         if version.as_deref() != Some(GENIE_PINNED) {
             return wrong(version);
-        }
-        let want = pinned_digest(&self.target, "genie");
-        let have = self.probe.sha256_hex(real);
-        if want.is_none() || have.as_deref() != want {
-            return wrong(version);
-        }
-        // The helper binary of the same release, if it sits next to `genie`.
-        if let (Some(dir), Some(want_host)) = (
-            real.parent(),
-            pinned_digest(&self.target, "genie-code-mode-host"),
-        ) {
-            let host = dir.join("genie-code-mode-host");
-            if host.exists() && self.probe.sha256_hex(&host).as_deref() != Some(want_host) {
-                return wrong(version);
-            }
         }
         BinInfo {
             state: GenieCodeBinary::Ready,
@@ -285,9 +300,14 @@ mod tests {
         p
     }
 
+    /// A file, and the helper binary next to it (it is required while its digest is pinned).
     fn touch(d: &Path, name: &str) -> PathBuf {
         let p = d.join(name);
         fs::write(&p, b"bin").unwrap();
+        let h = d.join(HELPER);
+        if !h.exists() {
+            fs::write(h, b"helper").unwrap();
+        }
         p
     }
 
@@ -335,13 +355,53 @@ mod tests {
         }
         let d = dir();
         let g = touch(&d, "genie");
-        touch(&d, "genie-code-mode-host");
         let b = GenieBin::new(
             vec![g],
             "aarch64-apple-darwin",
             Arc::new(BadHelper(probe(GENIE_PINNED))),
         );
         assert_eq!(b.check(false).state, GenieCodeBinary::WrongVersion);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_missing_helper_is_wrong_version_and_a_wrong_digest_is_never_run() {
+        let d = dir();
+        let g = d.join("genie");
+        fs::write(&g, b"bin").unwrap();
+        let p = probe(GENIE_PINNED);
+        let b = GenieBin::new(vec![g.clone()], "aarch64-apple-darwin", p.clone());
+        assert_eq!(b.check(false).state, GenieCodeBinary::WrongVersion);
+        assert_eq!(p.runs.load(Ordering::SeqCst), 0, "no helper: never run");
+        fs::write(d.join(HELPER), b"h").unwrap();
+        let p = probe(GENIE_PINNED);
+        *p.sha.lock().unwrap() = "0".repeat(64);
+        let b = GenieBin::new(vec![g], "aarch64-apple-darwin", p.clone());
+        let i = b.check(false);
+        assert_eq!((i.state, i.version), (GenieCodeBinary::WrongVersion, None));
+        assert_eq!(p.runs.load(Ordering::SeqCst), 0, "a wrong digest is never run");
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_relative_path_entry_is_skipped() {
+        let b = GenieBin::system(None, None, "bin:/usr/bin::.:/opt/x");
+        assert_eq!(
+            b.candidates,
+            vec![PathBuf::from("/usr/bin/genie"), PathBuf::from("/opt/x/genie")]
+        );
+    }
+
+    #[test]
+    fn a_changed_helper_is_checked_again() {
+        let d = dir();
+        let g = touch(&d, "genie");
+        let p = probe(GENIE_PINNED);
+        let b = GenieBin::new(vec![g], "aarch64-apple-darwin", p.clone());
+        b.check(false);
+        fs::write(d.join(HELPER), b"a different helper").unwrap();
+        b.check(false);
+        assert_eq!(p.runs.load(Ordering::SeqCst), 2);
         let _ = fs::remove_dir_all(d);
     }
 
