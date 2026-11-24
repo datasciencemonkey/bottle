@@ -121,10 +121,16 @@ describe('stacked pill and pop-up: the window fit (UX slice 1)', () => {
     // The answer lands: the card shows it again.
     await tauri.emitTo(`card-${ID}`, 'card:update', {
       mogId: ID,
-      blurbs: [{ id: G, text: 'Churn was 4.2%.', pinned: false, completed: true }],
+      // The real stack keeps the older pop-up blurb, under the newest one.
+      blurbs: [
+        { id: G, text: 'Churn was 4.2%.', pinned: false, completed: true },
+        { id: 'd1', text: 'Quick update', completed: true },
+      ],
       chips: [],
       sections: [{ id: 'answer', md: 'Churn was 4.2%.' }],
     });
+    // The answer card is the newest blurb: it shows alone, the old pop-up does not.
     expect(r.el.querySelector('[data-genie="answer"]')).not.toBeNull();
+    expect(r.el.querySelector('[data-popup]')).toBeNull();
   });
 });

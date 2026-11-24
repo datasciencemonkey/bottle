@@ -826,7 +826,9 @@ describe('Genie card links (#523)', () => {
       expect(document.activeElement).not.toBe(close);
       await act(async () => void close.click());
       // The pill goes at once. Only the card is done, for this request; no cancel, no Conversations.
-      expect(clicks().map((c) => c.payload)).toEqual([{ target: 'card_done', requestId: OP }]);
+      expect(clicks().map((c) => c.payload)).toEqual([
+        { target: 'card_done', phase: 'working', requestId: OP },
+      ]);
     });
 
     it('has the same close control on the ready pill', async () => {

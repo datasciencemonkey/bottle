@@ -979,6 +979,31 @@ fn follow_a_card_that_is_absent_hidden_closing_or_unknown_makes_and_changes_noth
 }
 
 #[test]
+fn follow_needs_a_move_only_when_the_place_differs_by_half_a_pixel() {
+    use bottle_lib::window_host::needs_move;
+    let at = g(100.0, 50.0, 340.0, 64.0);
+    assert!(!needs_move((100.0, 50.0), &at, 1.0));
+    assert!(!needs_move((200.0, 100.0), &at, 2.0), "a 2x screen");
+    assert!(!needs_move((100.4, 50.4), &at, 1.0), "under half a pixel");
+    assert!(needs_move((100.5, 50.0), &at, 1.0));
+    assert!(needs_move((100.0, 52.0), &at, 1.0));
+    assert!(needs_move((100.0, 50.0), &at, 2.0), "the scale matters");
+    assert!(
+        !needs_move((100.0, 50.0), &at, 0.0),
+        "a bad scale counts as 1"
+    );
+}
+
+#[test]
+fn follow_the_title_changes_only_when_the_side_changes() {
+    use bottle_lib::window_host::title_changes;
+    assert!(!title_changes(Some("Bottle card (right)"), CardSide::Right));
+    assert!(title_changes(Some("Bottle card (right)"), CardSide::Left));
+    assert!(title_changes(None, CardSide::Left));
+    assert!(title_changes(Some("something else"), CardSide::Right));
+}
+
+#[test]
 fn follow_the_app_hooks_the_mog_moved_event_to_follow_mog() {
     // The event hook is in the app setup, which a mock app does not run: check it is wired.
     let lib = code_of("src/lib.rs");

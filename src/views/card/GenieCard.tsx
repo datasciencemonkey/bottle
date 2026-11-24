@@ -733,6 +733,8 @@ export function GenieCard({
             if (!stacked)
               void emitView(mogId, 'click', {
                 target: CARD_DONE,
+                // The brain hides only, even if the answer lands just after this click.
+                ...(ready ? {} : { phase: 'working' }),
                 ...(opId ? { requestId: opId } : {}),
               }).catch(() => undefined);
             else if (ready)

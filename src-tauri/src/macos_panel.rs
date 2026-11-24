@@ -271,6 +271,28 @@ where
     R: tauri::Runtime,
     F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
 {
+    on_main_with(window, true, f)
+}
+
+/// [`on_main`] for a step that must never destroy the window when it fails off the main thread
+/// (the child-window steps of a card: a failed attach or detach leaves a working card).
+fn on_main_keep<R, F>(window: &tauri::WebviewWindow<R>, f: F) -> Result<(), WindowError>
+where
+    R: tauri::Runtime,
+    F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
+{
+    on_main_with(window, false, f)
+}
+
+fn on_main_with<R, F>(
+    window: &tauri::WebviewWindow<R>,
+    destroy_on_fail: bool,
+    f: F,
+) -> Result<(), WindowError>
+where
+    R: tauri::Runtime,
+    F: FnOnce(&NSWindow) -> Result<(), WindowError> + Send + 'static,
+{
     fn run<R: tauri::Runtime>(
         w: &tauri::WebviewWindow<R>,
         f: impl FnOnce(&NSWindow) -> Result<(), WindowError>,
@@ -287,7 +309,7 @@ where
     let w = window.clone();
     window
         .run_on_main_thread(move || {
-            if run(&w, f).is_err() {
+            if run(&w, f).is_err() && destroy_on_fail {
                 let _ = w.destroy();
             }
         })
@@ -344,7 +366,7 @@ impl<R: tauri::Runtime> NativeWindowStyle<R> for MacPanelStyle {
     fn hide(&self, window: &tauri::WebviewWindow<R>, kind: &WindowKind) -> Result<(), WindowError> {
         if matches!(kind, WindowKind::Card(_)) {
             // Leave the MOG first: a child window hides and shows with its parent otherwise.
-            on_main(window, |ns| {
+            on_main_keep(window, |ns| {
                 if let Some(parent) = ns.parentWindow() {
                     parent.removeChildWindow(ns);
                 }
@@ -369,7 +391,8 @@ fn card_parent<R: tauri::Runtime>(
         .get_webview_window(&WindowKind::mog(id)?.label())
 }
 
-/// Called on the main thread at the end of each MOG drag (`LeftMouseUp` on a MOG panel).
+/// Called on the main thread at the end of each MOG drag (a `LeftMouseUp` on a MOG panel that
+/// ends a drag; a plain click does not call it).
 static DRAG_END: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 /// Set the function that runs at the end of a MOG drag. The app uses it to put the card of each
@@ -458,8 +481,11 @@ fn handle(ev: &NSEvent) -> Option<()> {
         NSEventType::LeftMouseDown => PRESS.with(|p| *p.borrow_mut() = Some(ev.retain())),
         NSEventType::LeftMouseUp => {
             PRESS.with(|p| *p.borrow_mut() = None);
-            if let Some(f) = DRAG_END.get() {
-                f();
+            // `Swallow` on an up is the end of a drag (see below); a plain click moves nothing.
+            if verdict == Verdict::Swallow {
+                if let Some(f) = DRAG_END.get() {
+                    f();
+                }
             }
         }
         _ => {}

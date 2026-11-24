@@ -692,7 +692,7 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         };
         // The side goes into the title first, and only when it changes, so the view reads the new
         // side when the move event comes (`watchCardSide`).
-        if w.title().ok().as_deref() != Some(windows::card_title(side).as_str()) {
+        if title_changes(w.title().ok().as_deref(), side) {
             set_side_title(&w, Some(side));
         }
         // On macOS the card is a child window of its MOG and has moved with it already.
@@ -813,16 +813,24 @@ fn set_side_title<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, side: Option<w
     }
 }
 
-/// True if the window `w` is at the place of `g` already (within half a logical pixel).
+/// True if a window at the physical position `pos` is not at the logical place of `at` yet
+/// (half a logical pixel is the same place). `scale` is the scale factor of its monitor.
+pub fn needs_move(pos: (f64, f64), at: &Geometry, scale: f64) -> bool {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    (pos.0 / scale - at.x).abs() >= 0.5 || (pos.1 / scale - at.y).abs() >= 0.5
+}
+
+/// True if the title of the card window must change to tell the view this `side`.
+pub fn title_changes(old: Option<&str>, side: windows::CardSide) -> bool {
+    old != Some(windows::card_title(side).as_str())
+}
+
+/// True if the window `w` is at the place of `g` already.
 fn same_place<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>, g: &Geometry) -> bool {
-    let Ok(scale) = w.scale_factor() else {
+    let (Ok(scale), Ok(pos)) = (w.scale_factor(), w.outer_position()) else {
         return false;
     };
-    let Ok(pos) = w.outer_position() else {
-        return false;
-    };
-    let p = pos.to_logical::<f64>(scale);
-    (p.x - g.x).abs() < 0.5 && (p.y - g.y).abs() < 0.5
+    !needs_move((f64::from(pos.x), f64::from(pos.y)), g, scale)
 }
 
 /// The logical `(width, height)` of `w`, if the platform gives it.

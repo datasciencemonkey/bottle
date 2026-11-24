@@ -90,8 +90,8 @@ function rig(held = false) {
     openConversations: () => undefined,
     closeMog: () => undefined,
     changeHome: () => undefined,
-    isWorking: (id) => send.isWorking(id),
-    closePending: (id) => send.close(id),
+    isWorking: (m, id) => send.isWorking(m as never, id),
+    closePending: (m, id) => send.close(m, id),
   });
   const closeClick = (n0: number, extra: object = {}) =>
     bus.dispatch({
@@ -182,7 +182,7 @@ describe('close of the Genie pill (owner decision: pop back with the answer)', (
     await flush();
     r.events[0]?.(ANSWER);
     await flush();
-    expect(r.send.isWorking('00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(r.send.isWorking(MOG as never, '00000000-0000-4000-8000-000000000001')).toBe(false);
     r.closeClick(1);
     expect(r.log).toEqual(['hide', 'clear', 'forget']);
     r.release();
@@ -202,5 +202,82 @@ describe('close of the Genie pill (owner decision: pop back with the answer)', (
     r.release();
     await done;
     expect(r.log).not.toContain('show');
+  });
+  it('a late answer of request 1 shows no card after the pill of request 2 was closed', async () => {
+    const r = rig();
+    const d1 = r.send(turn());
+    const d2 = r.send(turn());
+    await flush();
+    r.closeClick(2);
+    expect(r.log).toEqual(['hide']);
+    r.events[0]?.(ANSWER);
+    await d1;
+    // No empty or foreign card window pops up; the blurb of request 1 still ends.
+    expect(r.log).toEqual(['hide']);
+    expect(r.last()?.blurbs.some((b) => b.completed && b.text === 'Churn was 4.2%.')).toBe(true);
+    r.events[1]?.(ANSWER);
+    await d2;
+    expect(r.log).toEqual(['hide', 'show']);
+  });
+
+  it('a request whose submit throws never takes the card from the one that works', async () => {
+    const r = rig();
+    const sends = createGenieDirectSend({
+      genie: {
+        submit: () => {
+          throw new Error('not sent');
+        },
+      },
+      cardFor: () => r.stack,
+      newOpId: () => 'op-x',
+    });
+    const d1 = r.send(turn());
+    await flush();
+    expect(() => sends(turn())).toThrow('not sent');
+    r.events[0]?.(ANSWER);
+    await d1;
+    // Request 1 is still the newest sent request, so its sections reach the card.
+    expect(r.last()?.sections).toBeDefined();
+  });
+
+  it('a close of the ready pill takes its early sections away when the hold ends', async () => {
+    const r = rig(true);
+    const done = r.send(turn());
+    await flush();
+    r.events[0]?.(ANSWER);
+    await flush();
+    expect(r.last()?.sections).toBeDefined();
+    r.closeClick(1, { pillOnly: true });
+    r.release();
+    await done;
+    expect(r.last()?.sections).toBeUndefined();
+  });
+
+  it('the working state is per MOG: another MOG cannot close or hide a request of this one', async () => {
+    const r = rig(true);
+    const done = r.send(turn());
+    await flush();
+    const op = '00000000-0000-4000-8000-000000000001';
+    expect(r.send.isWorking(MOG as never, op)).toBe(true);
+    expect(r.send.isWorking('other-mog' as never, op)).toBe(false);
+    r.send.close('other-mog' as never, op);
+    r.events[0]?.(ANSWER);
+    await flush();
+    r.release();
+    await done;
+    // The foreign close marked nothing: the card shows as usual.
+    expect(r.log).toEqual(['show']);
+  });
+
+  it('a working close that lands after the answer applied still only hides', async () => {
+    const r = rig();
+    const done = r.send(turn());
+    await flush();
+    r.events[0]?.(ANSWER);
+    await done;
+    expect(r.log).toEqual(['show']);
+    r.closeClick(1, { phase: 'working' });
+    // Hide only: no clear, no forget.
+    expect(r.log).toEqual(['show', 'hide']);
   });
 });
