@@ -69,7 +69,7 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
   const build = (notice?: HubAgentView['notice']): HubAgentView => {
     // L5: with no status yet (a read that failed) the panel still draws, with a placeholder.
     const genieCode = deps.genieCode() ?? PLACEHOLDER;
-    return { ...deps.client.panel(), genieCode, ...(notice ? { notice } : {}) };
+    return { ...deps.client.panel(), genieCode, threads: [], ...(notice ? { notice } : {}) };
   };
   const push = async (notice?: HubAgentView['notice']): Promise<void> => {
     try {

@@ -39,6 +39,7 @@ const view = {
   waiting: [{ ...turn, turnId: T2, state: 'queued', position: 1, calls: [], parts: [] }],
   earlier: [turn],
   genieCode,
+  threads: [{ turnId: T1, threadId: '0b5c1c58-6a0e-4f0e-9b62-1d2f3a4b5c6d' }],
 };
 
 describe('hub-agent shape checks (slice 2a)', () => {
@@ -75,6 +76,7 @@ describe('hub-agent shape checks (slice 2a)', () => {
       session: { state: 'none', agentProfile: null, turns: 0, queued: 0, tokens: 0 },
       waiting: [],
       earlier: [],
+      threads: [],
       genieCode: { ...genieCode, binary: 'not_installed', agentProfile: null },
     };
     expect(asHubAgentView({ ...empty, version: 'x' })).toEqual(empty);
@@ -127,6 +129,15 @@ describe('hub-agent shape checks (slice 2a)', () => {
       kind: 'info',
       text: 'x',
     });
+  });
+
+  it('checks the thread links', () => {
+    expect(asHubAgentView({ ...view, threads: [{ turnId: T1, threadId: 'x' }] })).toBeUndefined();
+    expect(
+      asHubAgentView({ ...view, threads: [{ turnId: 'x', threadId: view.threads[0]?.threadId }] }),
+    ).toBeUndefined();
+    expect(asHubAgentView({ ...view, threads: 'x' })).toBeUndefined();
+    expect(asHubAgentView({ ...view, threads: undefined })).toBeUndefined();
   });
 
   it('checks the Genie Code status', () => {

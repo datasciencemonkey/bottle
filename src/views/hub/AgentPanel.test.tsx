@@ -50,6 +50,7 @@ const view = (o: Partial<HubAgentView> = {}): HubAgentView => ({
   waiting: [],
   earlier: [],
   genieCode: READY,
+  threads: [],
   ...o,
 });
 const busy = view({
