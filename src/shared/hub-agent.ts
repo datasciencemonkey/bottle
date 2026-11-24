@@ -108,18 +108,18 @@ export function asAgentAction(p: unknown): AgentAction | undefined {
 
 function asSession(v: unknown): AgentSessionState | undefined {
   if (!isObj(v)) return undefined;
-  const { state, sessionId, startedAt, homeProfile, turns, queued, tokens } = v;
+  const { state, sessionId, startedAt, agentProfile, turns, queued, tokens } = v;
   if (!isSessionState(state) || !isCount(turns) || !isCount(queued) || !isCount(tokens)) {
     return undefined;
   }
-  if (homeProfile !== null && !isProfile(homeProfile)) return undefined;
+  if (agentProfile !== null && !isProfile(agentProfile)) return undefined;
   if (sessionId !== undefined && !isTurnId(sessionId)) return undefined;
   if (startedAt !== undefined && !isNum(startedAt)) return undefined;
   return {
     state,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
-    homeProfile,
+    agentProfile,
     turns,
     queued,
     tokens,

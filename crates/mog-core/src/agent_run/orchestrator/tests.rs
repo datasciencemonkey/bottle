@@ -17,7 +17,7 @@ use crate::clock::{SimClock, SimWallClock};
 use crate::error::{CoreError, CoreResult};
 use crate::ipc::AgentTurnSubmitArgs;
 use crate::mcp_transport::{McpCall, McpReply, McpTransport};
-use crate::model_gateway::{ChatClient, ChatRequest};
+use crate::model_gateway::{client, ChatClient, ChatRequest};
 use crate::types::{
     AgentAnswerKind, AgentCallState, AgentRefusal, AgentSessionEndReason, AgentSessionEvent,
     AgentSessionPhase, AgentTurnEvent, AgentTurnOutcome, Tags,
@@ -349,10 +349,16 @@ impl FakeNet {
     }
 }
 
-struct Ws(Mutex<Snapshot>);
+/// The snapshot, and a switch that makes the read of the settings fail.
+struct Ws(Mutex<Snapshot>, AtomicBool);
 
 impl WorkspaceView for Ws {
     fn snapshot(&self) -> CoreResult<Snapshot> {
+        if self.1.load(Ordering::SeqCst) {
+            return Err(CoreError::IpcRefused {
+                code: "workspace_storage_failed",
+            });
+        }
         Ok(self.0.lock().unwrap().clone())
     }
 }
@@ -365,11 +371,15 @@ impl Approvals for AllowAll {
     }
 }
 
-struct Env(Mutex<OrchStatus>);
+/// The status of the probe, and how often `clear` ran.
+struct Env(Mutex<OrchStatus>, std::sync::atomic::AtomicUsize);
 
 impl OrchEnv for Env {
     fn probe(&self, _: &str, _: &str) -> OrchStatus {
         *self.0.lock().unwrap()
+    }
+    fn clear(&self) {
+        self.1.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -430,8 +440,8 @@ fn rig(d1: bool, budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
     );
     let net = Arc::new(FakeNet::default());
     let clock = SimClock::default();
-    let ws = Arc::new(Ws(Mutex::new(snapshot(d1, budget))));
-    let env = Arc::new(Env(Mutex::new(OrchStatus::Ready)));
+    let ws = Arc::new(Ws(Mutex::new(snapshot(d1, budget)), AtomicBool::new(false)));
+    let env = Arc::new(Env(Mutex::new(OrchStatus::Ready), 0.into()));
     let host = OrchestratorHost::new(
         OrchDeps {
             guard: guard.clone(),
@@ -883,13 +893,109 @@ fn a_model_error_ends_the_turn_as_failed_and_a_sign_out_as_signed_out() {
         false,
         10,
         FakeR8::answering(by_profile),
-        Box::new(|_, _| {
-            Err(CoreError::IpcRefused {
-                code: "login_required",
-            })
-        }),
+        Box::new(|_, _| Err(gw_err(client::SIGNED_OUT))),
     );
     assert_eq!(r.run("q").1, AgentTurnOutcome::SignedOut);
+}
+
+/// An error of the real `GatewayChatClient`, with the code that it returns.
+fn gw_err(code: &'static str) -> CoreError {
+    CoreError::Unavailable {
+        component: "model_gateway",
+        reason: code,
+    }
+}
+
+#[test]
+fn the_codes_of_the_real_chat_client_map_to_the_turn_outcomes() {
+    for (code, want) in [
+        (client::SIGNED_OUT, AgentTurnOutcome::SignedOut),
+        (client::OFFLINE, AgentTurnOutcome::Offline),
+        (client::TIMEOUT, AgentTurnOutcome::Timeout),
+        (client::RATE_LIMITED, AgentTurnOutcome::Failed),
+        (client::MODEL_NOT_FOUND, AgentTurnOutcome::Failed),
+        (client::REFUSED, AgentTurnOutcome::Failed),
+        (client::BAD_REPLY, AgentTurnOutcome::Failed),
+    ] {
+        let r = rig(
+            false,
+            10,
+            FakeR8::answering(by_profile),
+            Box::new(move |_, _| Err(gw_err(code))),
+        );
+        assert_eq!(r.run("q").1, want, "{code}");
+    }
+}
+
+/// The client says `offline` while the network watch still says online (it has no source yet).
+#[test]
+fn an_offline_code_ends_the_turn_offline_while_the_net_watch_says_online() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| Err(gw_err(client::OFFLINE))),
+    );
+    assert!(r.net.online());
+    assert_eq!(r.run("q").1, AgentTurnOutcome::Offline);
+}
+
+fn incomplete(items: Vec<Value>) -> CoreResult<Value> {
+    Ok(json!({"status": "incomplete", "output": items}))
+}
+
+#[test]
+fn an_incomplete_reply_with_a_whole_submit_answer_is_accepted() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| incomplete(vec![final_item(json!({"answer": "long", "sources": []}))])),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(
+        r.host.turn_result(&tid).unwrap().answer.as_deref(),
+        Some("long")
+    );
+}
+
+#[test]
+fn an_incomplete_reply_without_a_whole_submit_answer_fails_the_turn() {
+    let cut = json!({"type": "function_call", "call_id": "toolu_final", "name": "submit_answer",
+                     "arguments": "{\"answer\": \"cut o"});
+    let text = json!({"type": "message", "role": "assistant",
+                      "content": [{"type": "output_text", "text": "half an ans"}]});
+    for items in [
+        vec![cut.clone()],
+        vec![text],
+        vec![ask_item("fc0", "sales")],
+        vec![
+            final_item(json!({"answer": "a", "sources": []})),
+            ask_item("fc1", "sales"),
+        ],
+    ] {
+        let r = rig(
+            false,
+            10,
+            FakeR8::answering(by_profile),
+            Box::new(move |_, _| incomplete(items.clone())),
+        );
+        assert_eq!(r.run("q").1, AgentTurnOutcome::Failed);
+        assert_eq!(r.r8.count("genie_ask"), 0);
+    }
+}
+
+#[test]
+fn the_ask_loop_allows_a_long_answer_in_one_step() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| no_source_final()),
+    );
+    r.run("q");
+    assert_eq!(r.chat.body(0)["max_output_tokens"], 4096);
 }
 
 // ---------- stop, timeout, wipe, follow-up, queue ----------
@@ -1145,6 +1251,62 @@ fn status_is_ready_or_the_reason_and_submit_maps_it_to_a_code() {
     assert_eq!(r.host.status(false), OrchStatus::NoHome);
     assert_eq!(r.submit("q").unwrap_err(), "agent_profile_unsupported");
     assert_eq!(r.chat.calls(), 0);
+}
+
+/// M3: the check makes no model call, so it also runs when a session is open.
+#[test]
+fn submit_checks_the_status_with_an_open_session_too() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| no_source_final()),
+    );
+    r.run("q");
+    assert_eq!(r.host.session_state().state, AgentSessionPhase::Idle);
+    let calls = r.chat.calls();
+    *r.env.0.lock().unwrap() = OrchStatus::Unreachable;
+    assert_eq!(r.submit("again").unwrap_err(), "agent_offline");
+    *r.env.0.lock().unwrap() = OrchStatus::SignedOut;
+    assert_eq!(r.submit("again").unwrap_err(), "agent_signed_out");
+    assert_eq!(r.chat.calls(), calls, "no model call for the check");
+}
+
+/// M2: `recheck` clears the cached failure of the env; a plain status and a submit do not.
+#[test]
+fn a_recheck_clears_the_cached_failure_and_a_plain_status_does_not() {
+    use crate::ipc_gateway::GatewayComponents;
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| no_source_final()),
+    );
+    let cleared = || r.env.1.load(Ordering::SeqCst);
+    r.host.call("orchestrator_status", json!({})).unwrap();
+    r.host
+        .call("orchestrator_status", json!({"recheck": false}))
+        .unwrap();
+    r.run("q");
+    assert_eq!(cleared(), 0);
+    r.host
+        .call("orchestrator_status", json!({"recheck": true}))
+        .unwrap();
+    assert_eq!(cleared(), 1);
+}
+
+/// L4: a settings file that cannot be read is a fault of the host, not a missing home.
+#[test]
+fn a_snapshot_error_is_unreachable_not_no_home() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| no_source_final()),
+    );
+    r.ws.1.store(true, Ordering::SeqCst);
+    assert_eq!(r.host.status(false), OrchStatus::Unreachable);
+    assert_eq!(r.submit("q").unwrap_err(), "agent_offline");
 }
 
 #[test]

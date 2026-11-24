@@ -619,7 +619,7 @@ export interface AgentSessionState {
   sessionId?: string;
   startedAt?: number;
   /** The home profile, whose AI Gateway runs the orchestrator model. */
-  homeProfile: ProfileName | null;
+  agentProfile: ProfileName | null;
   turns: number;
   queued: number;
   tokens: number;

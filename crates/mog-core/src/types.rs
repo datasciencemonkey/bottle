@@ -1162,7 +1162,7 @@ pub struct AgentSessionState {
     pub started_at: Option<u64>,
     /// The home profile, whose AI Gateway runs the orchestrator model. Required and nullable.
     #[serde(deserialize_with = "nullable")]
-    pub home_profile: Option<ProfileName>,
+    pub agent_profile: Option<ProfileName>,
     pub turns: u32,
     pub queued: u32,
     pub tokens: u64,

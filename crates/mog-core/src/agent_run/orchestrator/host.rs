@@ -31,6 +31,7 @@ use crate::ipc::{
     AgentAskMode, AgentSessionEndArgs, AgentTurnCallArgs, AgentTurnResultArgs, AgentTurnStopArgs,
     AgentTurnSubmitArgs, OrchestratorStatusArgs,
 };
+use crate::model_gateway::client;
 use crate::model_gateway::models::list_orchestrator_models;
 use crate::model_gateway::{ChatClient, ChatRequest, DEFAULT_ORCHESTRATOR_MODEL};
 use crate::types::{
@@ -106,6 +107,9 @@ impl OrchStatus {
 /// implements the real probe. It may block.
 pub trait OrchEnv: Send + Sync {
     fn probe(&self, profile: &str, model: &str) -> OrchStatus;
+    /// Forget the cached result of earlier failed calls, so that the next `probe` starts clean
+    /// (`orchestrator_status` with `recheck`).
+    fn clear(&self) {}
 }
 
 /// The guard as the host sees it: the seam of the session, plus the in-process `ask_genie`.
@@ -397,7 +401,7 @@ impl Engine {
                 state: AgentSessionPhase::None,
                 session_id: None,
                 started_at: None,
-                home_profile: profile,
+                agent_profile: profile,
                 turns: 0,
                 queued: 0,
                 tokens: 0,
@@ -410,7 +414,7 @@ impl Engine {
                 },
                 session_id: Some(s.id.clone()),
                 started_at: u64::try_from(s.started_wall_ms).ok(),
-                home_profile: s.fp.profile.clone(),
+                agent_profile: s.fp.profile.clone(),
                 turns: s.turns,
                 queued: u32::try_from(self.waiting.len()).unwrap_or(u32::MAX),
                 tokens: s.tokens,
@@ -979,8 +983,9 @@ fn tools() -> Value {
     }])
 }
 
-/// The most output tokens of one model step.
-const MAX_OUTPUT_TOKENS: u32 = 2048;
+/// The most output tokens of one model step. The final `submit_answer` holds the whole answer
+/// and its sources, so the cap leaves room for a long one.
+const MAX_OUTPUT_TOKENS: u32 = 4096;
 
 fn user_item(text: &str) -> Value {
     json!({ "role": "user", "content": [{ "type": "input_text", "text": text }] })
@@ -1012,14 +1017,26 @@ pub(super) struct Reply1 {
     pub(super) text: Option<String>,
 }
 
-/// Read a Responses reply. `None` when the reply is not a finished answer: a failed or
-/// incomplete reply, one with no `output` array, or one with a call that has no `call_id`.
+/// Read a Responses reply. `None` when the reply is not a finished answer: a failed reply, one
+/// with no `output` array, or one with a call that has no `call_id`. An `incomplete` reply (the
+/// token cap cut it off) counts only when its one call is a whole `submit_answer`.
 pub(super) fn parse_reply(resp: &Value) -> Option<Reply1> {
-    if resp["error"].is_object() || matches!(resp["status"].as_str(), Some("failed" | "incomplete"))
-    {
+    if resp["error"].is_object() || resp["status"].as_str() == Some("failed") {
         return None;
     }
     let items = resp["output"].as_array()?;
+    if resp["status"].as_str() == Some("incomplete") {
+        let mut calls = items.iter().filter(|i| i["type"] == "function_call");
+        let (Some(c), None) = (calls.next(), calls.next()) else {
+            return None;
+        };
+        let args = c["arguments"].as_str().unwrap_or("");
+        if c["name"].as_str() != Some(SUBMIT_TOOL)
+            || !serde_json::from_str::<Value>(args).is_ok_and(|v| v.is_object())
+        {
+            return None;
+        }
+    }
     let mut calls = Vec::new();
     let mut text = String::new();
     let mut has_text = false;
@@ -1177,11 +1194,13 @@ fn run_loop(mut ctx: LoopCtx) -> LoopOut {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
+                // The codes of the real chat client (`model_gateway::client`). `login_required`
+                // and the like never reach this point: the client maps them to `signed_out`.
                 let o = match e.code() {
-                    "cancelled" => return end(&ctx, LoopStop::Cancelled, usage),
-                    "login_required" | "auth_expired" | "token_unusable" => {
-                        AgentTurnOutcome::SignedOut
-                    }
+                    client::CANCELLED => return end(&ctx, LoopStop::Cancelled, usage),
+                    client::SIGNED_OUT => AgentTurnOutcome::SignedOut,
+                    client::OFFLINE => AgentTurnOutcome::Offline,
+                    client::TIMEOUT => AgentTurnOutcome::Timeout,
                     _ if !ctx.net.online() => AgentTurnOutcome::Offline,
                     _ => AgentTurnOutcome::Failed,
                 };
@@ -1427,9 +1446,13 @@ impl OrchestratorHost {
     }
 
     /// Whether an ask can run now: the home profile, its sign-in, the model and the gateway.
-    pub fn status(&self, _recheck: bool) -> OrchStatus {
+    pub fn status(&self, recheck: bool) -> OrchStatus {
+        if recheck {
+            self.env.clear();
+        }
+        // A settings file that cannot be read is a fault, not a missing home.
         let Ok(snap) = self.workspaces.snapshot() else {
-            return OrchStatus::NoHome;
+            return OrchStatus::Unreachable;
         };
         match snap.home_profile {
             None => OrchStatus::NoHome,
@@ -1493,15 +1516,14 @@ impl OrchestratorHost {
         if mode == AgentAskMode::FollowUp && !peek.has_session {
             return Err("agent_session_unavailable");
         }
-        if !peek.has_session {
-            // The cheap refusals come first: they do not use up an approval.
-            match self.status(false) {
-                OrchStatus::Ready => {}
-                OrchStatus::NoHome => return Err("agent_profile_unsupported"),
-                OrchStatus::SignedOut => return Err("agent_signed_out"),
-                OrchStatus::NoModel => return Err("agent_not_eligible"),
-                OrchStatus::Unreachable => return Err("agent_offline"),
-            }
+        // The cheap refusals come first: they do not use up an approval. The check makes no model
+        // call, so it runs with an open session too.
+        match self.status(false) {
+            OrchStatus::Ready => {}
+            OrchStatus::NoHome => return Err("agent_profile_unsupported"),
+            OrchStatus::SignedOut => return Err("agent_signed_out"),
+            OrchStatus::NoModel => return Err("agent_not_eligible"),
+            OrchStatus::Unreachable => return Err("agent_offline"),
         }
         if !self
             .approvals
@@ -1528,7 +1550,7 @@ impl OrchestratorHost {
             state: AgentSessionPhase::None,
             session_id: None,
             started_at: None,
-            home_profile: None,
+            agent_profile: None,
             turns: 0,
             queued: 0,
             tokens: 0,

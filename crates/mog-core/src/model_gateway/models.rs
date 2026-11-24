@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::client::{BAD_REPLY, MODEL_NOT_FOUND, OFFLINE, REFUSED, SIGNED_OUT, TIMEOUT};
+use super::client::{MODEL_NOT_FOUND, OFFLINE, REFUSED, SIGNED_OUT, TIMEOUT};
 
 /// One model of the picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +106,7 @@ pub fn orchestrator_status(
     if !set(model) || last_error == Some(MODEL_NOT_FOUND) {
         return OrchestratorStatus::NoModel;
     }
-    if matches!(last_error, Some(OFFLINE | TIMEOUT | REFUSED | BAD_REPLY)) {
+    if matches!(last_error, Some(OFFLINE | TIMEOUT | REFUSED)) {
         return OrchestratorStatus::Unreachable;
     }
     OrchestratorStatus::Ready
@@ -168,6 +168,11 @@ mod tests {
         );
         assert_eq!(
             orchestrator_status(Some("h"), ok, Some("rate_limited")),
+            OrchestratorStatus::Ready
+        );
+        // The gateway answered, so a bad reply is no fault of the link.
+        assert_eq!(
+            orchestrator_status(Some("h"), ok, Some("bad_reply")),
             OrchestratorStatus::Ready
         );
         assert_eq!(OrchestratorStatus::NoHome.as_str(), "no_home");

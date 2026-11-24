@@ -207,10 +207,14 @@ impl GatewayChatClient {
             return Err(from_status(reply.status, reply.error_code()));
         }
         let json = reply.json();
-        // A Responses reply has an `output` array and ends with status `completed` (or none).
+        // A Responses reply has an `output` array and a status other than `failed` or
+        // `cancelled`. An `incomplete` reply (the token cap) is passed on with its status: the
+        // gateway answered, so it is no fault of the link. The caller decides whether a cut-off
+        // reply is enough (`responses::checked_text` refuses it; the ask loop takes a whole
+        // `submit_answer`).
         let finished = !matches!(
             json.get("status").and_then(Value::as_str),
-            Some("incomplete" | "failed" | "cancelled")
+            Some("failed" | "cancelled")
         );
         match json.get("output").and_then(Value::as_array) {
             Some(_) if finished => Ok(json.clone()),
@@ -397,6 +401,30 @@ mod tests {
     }
 
     #[test]
+    fn adr_0122_gateway_chat_two_clients_over_one_transport_have_separate_caps() {
+        let (release, wait) = mpsc::channel();
+        let http = Arc::new(Stuck(std::sync::Mutex::new(wait)));
+        let (ask, dictation) = (
+            GatewayChatClient::new(http.clone(), "m"),
+            GatewayChatClient::new(http, "m"),
+        );
+        // Calls that gave up still hold a slot until their worker ends.
+        for _ in 0..MAX_IN_FLIGHT {
+            assert_eq!(ask.chat(req(json!({}), 10)).unwrap_err().code(), TIMEOUT);
+        }
+        assert_eq!(
+            ask.chat(req(json!({}), 10)).unwrap_err().code(),
+            RATE_LIMITED
+        );
+        // The other client still has its own slots.
+        assert_eq!(
+            dictation.chat(req(json!({}), 10)).unwrap_err().code(),
+            TIMEOUT
+        );
+        drop(release);
+    }
+
+    #[test]
     fn adr_0122_gateway_chat_cancel_returns_promptly() {
         let (release, wait) = mpsc::channel();
         let c = GatewayChatClient::new(Arc::new(Stuck(std::sync::Mutex::new(wait))), "m");
@@ -520,16 +548,26 @@ mod tests {
     }
 
     #[test]
-    fn adr_0122_gateway_chat_an_incomplete_reply_is_bad_reply() {
+    fn adr_0122_gateway_chat_an_incomplete_reply_is_passed_on_and_a_failed_one_is_bad_reply() {
         let h = Arc::new(ScriptedHttp::new());
         h.json(
             RESPONSES_ROUTE,
             200,
             json!({"status": "incomplete", "output": []}),
         );
-        assert_eq!(
-            client(&h).chat(req(json!({}), 1000)).unwrap_err().code(),
-            BAD_REPLY
-        );
+        let r = client(&h).chat(req(json!({}), 1000)).unwrap();
+        assert_eq!(r["status"], "incomplete");
+        for status in ["failed", "cancelled"] {
+            let h = Arc::new(ScriptedHttp::new());
+            h.json(
+                RESPONSES_ROUTE,
+                200,
+                json!({"status": status, "output": []}),
+            );
+            assert_eq!(
+                client(&h).chat(req(json!({}), 1000)).unwrap_err().code(),
+                BAD_REPLY
+            );
+        }
     }
 }
