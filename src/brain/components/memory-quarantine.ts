@@ -46,7 +46,12 @@ const ZERO_WIDTH = new RegExp(
 );
 
 function normalize(text: string): string {
-  return text.normalize('NFKC').replace(ZERO_WIDTH, '').toLowerCase().replace(/\s+/g, ' ');
+  return text
+    .normalize('NFKC')
+    .replace(/[‹〈❮˂ᐸ]/g, '<')
+    .replace(ZERO_WIDTH, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 /** The reasons to quarantine `text`, in a fixed order. Empty for clean text. */

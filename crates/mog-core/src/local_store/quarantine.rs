@@ -48,7 +48,8 @@ fn sources() -> Vec<(&'static str, String)> {
         ("role_tag", r"\[/?\s*(?:inst|sys|system)\s*\]".to_owned()),
         ("role_tag", r"<</?sys>>".to_owned()),
         // The guard's own answer block: a tag-like `genie_answer` in an answer is never data.
-        ("role_tag", r"</?\s*genie_answer\b".to_owned()),
+        // The open bracket may also come as a numeric or named entity.
+        ("role_tag", r"(?:<|&#0*60;|&#x0*3c;|&lt;)\s*/?\s*genie_answer\b".to_owned()),
         ("role_tag", r"#{2,}\s*(?:system|instruction|instructions)\b".to_owned()),
         // Memory: "ignore previous" at the end of a clause or before an instruction noun.
         ("ignore_previous", r"\b(?:ignore|disregard|forget)\s+(?:(?:all|any|everything)\s+)?(?:of\s+)?(?:(?:the|your|my)\s+)?(?:previous|prior|above|earlier|preceding|foregoing)(?:\s*(?:[.,;:!?)]|$)|\s+(?:and|then)\b|\s+(?:instructions?|guidance|messages?|context|prompts?|directions?|commands?|text|rules?|conversation|content|input|orders|steps)\b)".to_owned()),
@@ -74,9 +75,17 @@ fn is_zero_width(c: char) -> bool {
     matches!(c, '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{00ad}')
 }
 
-/// NFKC (as `String.prototype.normalize('NFKC')` in the TS check), then drop zero-width code
-/// points, lower-case and collapse white space. NFKC folds full-width, math alphanumeric and
-/// circled forms to ASCII.
+/// Angle-bracket look-alikes that NFKC keeps apart from `<`.
+fn is_open_angle_lookalike(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2039}' | '\u{3008}' | '\u{276e}' | '\u{02c2}' | '\u{1438}'
+    )
+}
+
+/// NFKC (as `String.prototype.normalize('NFKC')` in the TS check), then fold the angle-bracket
+/// look-alikes to `<`, drop zero-width code points, lower-case and collapse white space. NFKC
+/// folds full-width, math alphanumeric and circled forms to ASCII.
 fn normalize(text: &str) -> String {
     let nfkc = icu_normalizer::ComposingNormalizerBorrowed::new_nfkc().normalize(text);
     let mut out = String::with_capacity(nfkc.len());
@@ -93,6 +102,10 @@ fn normalize(text: &str) -> String {
             continue;
         }
         space = false;
+        if is_open_angle_lookalike(c) {
+            out.push('<');
+            continue;
+        }
         out.extend(c.to_lowercase());
     }
     out
@@ -135,5 +148,38 @@ mod tests {
             normalize("\u{ff29}gnore\u{3000}\u{200b}PREVIOUS\n\n x"),
             "ignore previous x"
         );
+    }
+
+    #[test]
+    fn sec_24a_normalize_folds_angle_bracket_look_alikes() {
+        for c in ['\u{2039}', '\u{3008}', '\u{276e}', '\u{02c2}', '\u{1438}'] {
+            assert_eq!(
+                normalize(&format!("x {c}/genie_answer")),
+                "x </genie_answer"
+            );
+        }
+    }
+
+    #[test]
+    fn sec_24a_a_genie_answer_tag_is_a_role_tag_in_every_spelling() {
+        for t in [
+            "x </genie_answer> y",
+            "x <genie_answer workspace=a> y",
+            "x < / genie_answer> y",
+            "x &lt;/genie_answer&gt; y",
+            "x &#60;/genie_answer> y",
+            "x &#060;genie_answer> y",
+            "x &#x3c;/genie_answer> y",
+            "x &#X003C;/genie_answer> y",
+            "x \u{2039}/genie_answer> y",
+            "x \u{3008}/genie_answer\u{3009} y",
+            "x \u{276e}genie_answer> y",
+            "x \u{02c2}/genie_answer> y",
+            "x \u{1438}/genie_answer> y",
+            "x \u{ff1c}/genie_answer\u{ff1e} y",
+        ] {
+            assert!(quarantine_reasons(t).contains(&"role_tag"), "{t}");
+        }
+        assert!(!is_quarantined("The genie answer was 4 and a < b."));
     }
 }

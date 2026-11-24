@@ -63,6 +63,8 @@ const PATTERNS: Record<InjectionCategory, readonly RegExp[]> = {
     /<\/?\s*(?:system|assistant|developer|user|instructions?|utterance|router_input|prompt)\s*>/,
     /\[\/?\s*(?:inst|sys|system)\s*\]/,
     /<<\/?sys>>/,
+    // The guard's own answer block. The open bracket may also be a numeric or named entity.
+    /(?:<|&#0*60;|&#x0*3c;|&lt;)\s*\/?\s*genie_answer\b/,
     /#{2,}\s*(?:system|instruction|instructions)\b/,
   ],
 };
@@ -82,7 +84,12 @@ const ZERO_WIDTH = new RegExp(
 
 /** NFKC folds full-width forms; zero-width characters go; case and spaces fold. */
 function normalize(text: string): string {
-  return text.normalize('NFKC').replace(ZERO_WIDTH, '').toLowerCase().replace(/\s+/g, ' ');
+  return text
+    .normalize('NFKC')
+    .replace(/[‹〈❮˂ᐸ]/g, '<')
+    .replace(ZERO_WIDTH, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 /** The RTR-INJ categories that `text` matches, in table order. */
