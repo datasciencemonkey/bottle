@@ -64,6 +64,25 @@
         "name": "Finance",
         "colorVariant": "amber"
       }
+    ],
+    "citations": [
+      {
+        "n": 1,
+        "callId": "c-0123abcd",
+        "workspace": {
+          "name": "Sales",
+          "colorVariant": "teal"
+        },
+        "deepLink": "https://example.cloud.databricks.com/genie/rooms/1"
+      },
+      {
+        "n": 2,
+        "callId": "c-4567ef01",
+        "workspace": {
+          "name": "Finance",
+          "colorVariant": "amber"
+        }
+      }
     ]
   },
   "notice": "Still working…",

@@ -123,6 +123,25 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(asHubAgentView(undefined)).toBeUndefined();
   });
 
+  it('keeps summary citations, drops their unknown fields and refuses bad ones (ADR 0122)', () => {
+    const cite = { n: 1, callId: 'c-0123abcd', workspace: chip };
+    const withCites = (citations: unknown) =>
+      asAgentTurnView({ ...turn, summary: { ...turn.summary, citations } });
+    expect(withCites(undefined)?.summary).not.toHaveProperty('citations');
+    expect(withCites([])?.summary?.citations).toEqual([]);
+    const deepLink = 'https://example.cloud.databricks.com/genie/rooms/1';
+    expect(
+      withCites([cite, { ...cite, n: 2, deepLink, raw: 'x', workspace: { ...chip, z: 1 } }])
+        ?.summary?.citations,
+    ).toEqual([cite, { ...cite, n: 2, deepLink }]);
+    expect(withCites('x')).toBeUndefined();
+    expect(withCites([null])).toBeUndefined();
+    expect(withCites([{ ...cite, n: '1' }])).toBeUndefined();
+    expect(withCites([{ ...cite, callId: 5 }])).toBeUndefined();
+    expect(withCites([{ ...cite, workspace: { name: 5 } }])).toBeUndefined();
+    expect(withCites([{ ...cite, deepLink: 5 }])).toBeUndefined();
+  });
+
   it('drops a bad notice instead of failing', () => {
     expect(asHubAgentView({ ...view, notice: { kind: 'bad', text: 'x' } })?.notice).toBeUndefined();
     expect(asHubAgentView({ ...view, notice: { kind: 'info', text: 'x' } })?.notice).toEqual({

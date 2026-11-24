@@ -95,6 +95,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("workspace_settings_write", &[B]),
         ("genie_code_status", &[B]),
         ("genie_code_install", &[B]),
+        ("orchestrator_models", &[B]),
+        ("orchestrator_status", &[B]),
         ("agent_turn_submit", &[B]),
         ("agent_turn_stop", &[B]),
         ("agent_turn_call", &[B]),

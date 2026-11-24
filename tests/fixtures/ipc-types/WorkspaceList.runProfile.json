@@ -6,7 +6,8 @@
     "crossWorkspaceData": true,
     "crossWorkspaceLocked": false,
     "genieCallBudget": 20,
-    "endpoint": "databricks-claude-sonnet-5-5",
+    "endpoint": "system.ai.gpt-oss-20b",
+    "cleanDictation": false,
     "runProfile": "finance"
   }
 }
