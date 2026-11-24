@@ -64,7 +64,10 @@ fn no_shim_process_is_left_after_the_app_server_is_terminated() {
     let _io = proc.take_io();
     let start = Instant::now();
     while !connected.load(Ordering::SeqCst) {
-        assert!(start.elapsed() < Duration::from_secs(10), "the shim did not connect");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the shim did not connect"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(left(&marker), "the shim runs before the end");

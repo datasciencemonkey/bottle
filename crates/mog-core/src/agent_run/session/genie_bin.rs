@@ -200,10 +200,9 @@ impl GenieBin {
         let helper = helper_stamp(real);
         if !recheck {
             let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(c) = cache
-                .iter()
-                .find(|c| c.real == real && c.size == size && c.mtime == mtime && c.helper == helper)
-            {
+            if let Some(c) = cache.iter().find(|c| {
+                c.real == real && c.size == size && c.mtime == mtime && c.helper == helper
+            }) {
                 return c.info.clone();
             }
         }
@@ -379,7 +378,11 @@ mod tests {
         let b = GenieBin::new(vec![g], "aarch64-apple-darwin", p.clone());
         let i = b.check(false);
         assert_eq!((i.state, i.version), (GenieCodeBinary::WrongVersion, None));
-        assert_eq!(p.runs.load(Ordering::SeqCst), 0, "a wrong digest is never run");
+        assert_eq!(
+            p.runs.load(Ordering::SeqCst),
+            0,
+            "a wrong digest is never run"
+        );
         let _ = fs::remove_dir_all(d);
     }
 
@@ -388,7 +391,10 @@ mod tests {
         let b = GenieBin::system(None, None, "bin:/usr/bin::.:/opt/x");
         assert_eq!(
             b.candidates,
-            vec![PathBuf::from("/usr/bin/genie"), PathBuf::from("/opt/x/genie")]
+            vec![
+                PathBuf::from("/usr/bin/genie"),
+                PathBuf::from("/opt/x/genie")
+            ]
         );
     }
 

@@ -252,7 +252,11 @@ mod tests {
         let (out, _) = text_block("c-1", "sales", &o);
         let v: Value = serde_json::from_str(&out.text).unwrap();
         let a = v["answer"].as_str().unwrap();
-        assert_eq!(a.to_ascii_lowercase().matches("</genie_answer").count(), 1, "{a}");
+        assert_eq!(
+            a.to_ascii_lowercase().matches("</genie_answer").count(),
+            1,
+            "{a}"
+        );
     }
 
     #[test]
