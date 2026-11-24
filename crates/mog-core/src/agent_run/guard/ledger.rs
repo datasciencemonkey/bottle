@@ -62,6 +62,8 @@ pub(crate) struct Slot {
 
 pub(crate) struct TurnRec {
     pub budget: u8,
+    /// The user's question of the turn (memory only, never logged).
+    pub user_question: String,
     pub used: u32,
     pub refusals: u32,
     pub stop: Option<StopWhy>,
@@ -233,6 +235,7 @@ impl SessionGuard for AgentGuard {
             turn.turn_id,
             TurnRec {
                 budget: turn.budget,
+                user_question: turn.user_question,
                 used: 0,
                 refusals: 0,
                 stop: None,

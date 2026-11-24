@@ -320,7 +320,11 @@ export interface AgentClient {
     inProgress: boolean;
     shown: boolean;
   }[];
-  /** Whether the open session holds a turn of this thread (a reply is a `follow_up`). */
+  /**
+   * Whether a reply in this thread is a `follow_up`: the open session's model history is this
+   * thread (the thread of the newest new ask). A reply in an older thread is a new ask, so the
+   * model never answers it with the context of a later thread.
+   */
   inSession(threadId: string): boolean;
   /** Delete: forget the finished turns of a thread (an in-progress turn stays). */
   forgetThread(threadId: string): void;
@@ -336,6 +340,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let stale = false;
   /** The thread of the newest answered turn: a ⌥G follow-up continues it (R-13). */
   let lastAnswered: string | undefined;
+  /**
+   * The thread whose turns the core holds as its model history: the thread of the newest new ask
+   * (the core clears the history on a new ask). Undefined with no session.
+   */
+  let currentThread: string | undefined;
   /**
    * A brain-side Wipe fence (security L3): it counts the Wipes this brain saw. A write notes the
    * number when it starts and refuses to save when the number moved by the time it is ready.
@@ -868,13 +877,17 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         fellBack: false,
         // A new ask starts a thread (its root is this turn); a follow-up joins one.
         threadId:
-          threadId ?? (mode === 'follow_up' ? lastAnswered : undefined) ?? uuidOfTurn(a.turnId),
+          threadId ??
+          (mode === 'follow_up' ? (currentThread ?? lastAnswered) : undefined) ??
+          uuidOfTurn(a.turnId),
         recorded: false,
         rowIds: new Map(),
         noRecord: false,
         settled: false,
       };
       recs.set(a.turnId, rec);
+      // A new ask replaces the model history of the session with its own thread (`pump`).
+      if (mode !== 'follow_up') currentThread = rec.threadId;
       deps.phase?.(turn.mogId, 'working');
       update(rec);
       void refresh();
@@ -906,6 +919,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       }
       deps.followUp?.reset();
       lastAnswered = undefined;
+      currentThread = undefined;
       // A Wipe leaves nothing on disk: no turn, ended or not, writes a row after it, and a write
       // that is already in flight finds the fence moved.
       if (e.reason === 'wipe') fenceWrites();
@@ -989,7 +1003,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       }));
     },
     inSession: (threadId) =>
-      session.state !== 'none' && [...recs.values()].some((r) => r.threadId === threadId),
+      session.state !== 'none' &&
+      threadId === currentThread &&
+      [...recs.values()].some((r) => r.threadId === threadId),
     forgetThread(threadId) {
       // A deleted thread gets no row from a lift.
       for (const r of [...deferredTurns.keys()])
@@ -999,6 +1015,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         if (r.threadId === threadId) deferredRows.delete(again);
       for (const [id, r] of recs) if (r.threadId === threadId && r.settled) forget(id, r);
       if (lastAnswered === threadId) lastAnswered = undefined;
+      if (currentThread === threadId) currentThread = undefined;
       changed();
     },
   };

@@ -1163,6 +1163,28 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     expect(r.client.inSession(uuidOfTurn(T3))).toBe(false);
   });
 
+  it('a reply in an older thread is a new ask: only the newest new ask thread is in session', async () => {
+    const r = rig();
+    await ask(r, T1, 'Thread A?');
+    await ask(r, T2, 'Thread B?');
+    // The core holds only thread B as model history now.
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(false);
+    expect(r.client.inSession(uuidOfTurn(T2))).toBe(true);
+    // The reply to A goes as a new ask in thread A (index.ts picks the mode from inSession).
+    await ask(r, T3, 'Reply to A?', 'ask', uuidOfTurn(T1));
+    expect(r.calls.filter((c) => c.startsWith('submit:'))).toEqual([
+      'submit:ask:op',
+      'submit:ask:op',
+      'submit:ask:op',
+    ]);
+    expect(turnRows(r).at(-1)?.threadId).toBe(uuidOfTurn(T1));
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(true);
+    expect(r.client.inSession(uuidOfTurn(T2))).toBe(false);
+    // A session end leaves no thread in session.
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'quit' });
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(false);
+  });
+
   it('[AC-C5] a follow-up with no thread id goes to the thread of the last answered turn', async () => {
     const r = rig();
     await ask(r, T1, 'First?');

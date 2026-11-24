@@ -597,6 +597,7 @@ impl Engine {
                 &sid,
                 TurnSpec {
                     turn_id: turn_id.clone(),
+                    user_question: question.clone(),
                     budget,
                 },
             )
@@ -1340,6 +1341,11 @@ fn build_result(
             call_id: cid.to_owned(),
             turn_id: c.turn_id.clone(),
         });
+    }
+    // An empty answer means "show the Genie answer as it is" (the prompt's one-workspace rule):
+    // it needs a validated source to show.
+    if answer.trim().is_empty() && out.is_empty() {
+        return hidden;
     }
     let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
     let aliases: Vec<&str> = out.iter().map(|s| s.workspace_id.as_str()).collect();

@@ -57,4 +57,5 @@ After the 0.1.6 test, the owner found these problems:
 - Bottle owns a tool loop, so its step cap, time cap and tool list are security controls and need tests.
 - A new tool-enabled model call exists only in Rust, and only for ⌥G. The IPC `model_invoke` command still refuses tools.
 - Dictation text goes to the home workspace's AI Gateway for cleanup. It always did by design (CAP-47a, the router step); now it actually happens. Settings gets a "Clean up dictation" switch.
+- The answer quarantine is a set of regular expressions. It does not fully cover homoglyphs or encoded text such as base64. The guard check of each model-written `ask_genie` question (no new link, no send-elsewhere order) is the backstop.
 - Every model change needs an eval record (NFR-22a). The model picker shows "Not tested" for models with no record.

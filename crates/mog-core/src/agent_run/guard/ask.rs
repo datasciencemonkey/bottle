@@ -19,9 +19,10 @@
 //! The third refusal of a turn stops it (`refusals`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use regex::Regex;
 use serde_json::Value;
 
 use super::genie_poll::{self, is_terminal, PollEnd, PollEnv};
@@ -34,6 +35,7 @@ use crate::agent_guard::AUDIT_UNAVAILABLE;
 use crate::agent_run::seam::{AgentEvent, StopWhy};
 use crate::error::CoreError;
 use crate::ipc::JsonObject;
+use crate::local_store::quarantine::quarantine_reasons;
 use crate::mcp_transport::agent_asks::ASK_GIVEN_UP;
 use crate::mcp_transport::McpCall;
 use crate::types::{
@@ -74,6 +76,36 @@ fn parse_args(args: &Value) -> Option<(String, String)> {
         return None;
     }
     Some((w.to_owned(), q.to_owned()))
+}
+
+/// The links of a text: `http(s)://…` and `www.…`, lower case, trailing punctuation cut.
+fn links_of(text: &str) -> Vec<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // The pattern is a constant; a test runs it.
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"'`)\]]+"#).expect("link pattern")
+    });
+    re.find_iter(text)
+        .map(|m| {
+            m.as_str()
+                .trim_end_matches(['.', ',', ';', ':', '!', '?'])
+                .to_lowercase()
+        })
+        .collect()
+}
+
+/// Check 2b (defence in depth): a model-written `ask_genie` question that has a link the user's
+/// question does not have, or an order to send data elsewhere that the user did not give.
+fn question_reaches_out(question: &str, user_question: &str) -> bool {
+    let user = user_question.to_lowercase();
+    if links_of(question)
+        .iter()
+        .any(|l| !user.contains(l.as_str()))
+    {
+        return true;
+    }
+    let sends = |t: &str| quarantine_reasons(t).contains(&"send_elsewhere");
+    sends(question) && !sends(user_question)
 }
 
 fn state_of_code(code: &str) -> AgentCallState {
@@ -186,6 +218,17 @@ impl AgentGuard {
         let Some((alias, question)) = parse_args(args) else {
             return Err(self.refuse(sid, &turn_id, AgentRefusal::InvalidArgs));
         };
+        // 2b: the model wrote this question. It may not reach out further than the user did.
+        let user_q = self
+            .lock()
+            .sessions
+            .get(sid)
+            .and_then(|s| s.turns.get(&turn_id))
+            .map(|t| t.user_question.clone())
+            .unwrap_or_default();
+        if question_reaches_out(&question, &user_q) {
+            return Err(self.refuse(sid, &turn_id, AgentRefusal::InvalidArgs));
+        }
         // 3, 4, 5 on one lock: the reservation is atomic with the checks.
         enum Verdict {
             Stopped(&'static str),

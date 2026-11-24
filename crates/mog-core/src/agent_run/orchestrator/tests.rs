@@ -593,6 +593,41 @@ fn a_responses_reply_is_read_into_calls_and_text() {
 // ---------- the loop ----------
 
 #[test]
+fn an_empty_answer_needs_a_validated_source() {
+    // With a source: the view shows that Genie answer as it is.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            _ => {
+                let (w, c) = results_in(body).remove(0);
+                reply_of(vec![final_item(
+                    json!({"answer": "", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, _) = r.run("news today?");
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Note);
+    assert_eq!(res.answer.as_deref(), Some(""));
+    assert_eq!(res.sources.len(), 1);
+    // With no source: nothing to show, the answer is hidden.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|_, _| reply_of(vec![final_item(json!({"answer": " ", "sources": []}))])),
+    );
+    let (tid, _) = r.run("news today?");
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Hidden);
+    assert!(res.answer.is_none());
+}
+
+#[test]
 fn one_workspace_answers_with_a_note_and_one_source() {
     let r = rig(
         false,
@@ -1143,6 +1178,34 @@ fn a_new_ask_in_an_open_session_sends_no_earlier_thread() {
 }
 
 #[test]
+fn a_reply_to_an_older_thread_sent_as_a_new_ask_carries_no_later_thread() {
+    // D1 on: no taint, one session for all three turns.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        ask_then_cite(&["sales"]),
+    );
+    let (a, _) = r.run("thread A question");
+    assert!(r.host.turn_result(&a).is_some());
+    *r.chat.script.lock().unwrap() = ask_then_cite(&["sales"]);
+    let (b, _) = r.run("thread B question");
+    assert!(r.host.turn_result(&b).is_some());
+    *r.chat.script.lock().unwrap() = Box::new(|_, _| no_source_final());
+    let before = r.chat.calls();
+    let c = r.host.submit(&args("reply to A", None)).unwrap();
+    assert!(!c.new_session);
+    r.wait_outcome(&c.turn_id);
+    let text = r.chat.body(before)["input"].to_string();
+    assert!(text.contains("reply to A"), "{text}");
+    assert!(!text.contains("thread B question"), "{text}");
+    assert!(
+        !text.contains("function_call_output"),
+        "no Genie text of B: {text}"
+    );
+}
+
+#[test]
 fn wipe_drops_every_history_and_the_guard_ledger() {
     let r = rig(
         false,
@@ -1541,6 +1604,7 @@ fn a_call_of_a_stopped_turn_cannot_spend_the_budget_of_the_next_turn() {
     .unwrap();
     let turn = |id: &str| TurnSpec {
         turn_id: id.into(),
+        user_question: "fake question".into(),
         budget: 5,
     };
     g.begin_turn("s1", turn("t1")).unwrap();
