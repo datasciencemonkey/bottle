@@ -43,6 +43,13 @@ export function createLifecycleTranscriber(
    * ADR 0123: the Settings choice "Dictation engine: Databricks". When it is on and the
    * transcript came from the local model, the cloud call failed (offline, timeout, refusal), so
    * the MOG shows a short notice. The text is the local text and goes on as usual.
+   *
+   * This reads the *current* setting, not necessarily the one in effect when the hold began:
+   * Rust decides whether to call the cloud at commit time, moments before this resolves, so the
+   * two are the setting at nearly the same instant. A user flip in that narrow window can show
+   * (or skip) the notice for a take that did not itself race the flip; the transcript text is
+   * never wrong either way, only the notice. Accepted (owner review, ADR 0123): a contract
+   * change (a per-take flag from Rust) is not worth it for a cosmetic, narrow-window miss.
    */
   cloudDictation: () => boolean = () => false,
 ): (seg: SegmentRef) => Promise<Transcribed> {

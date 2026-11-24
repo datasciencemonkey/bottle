@@ -630,6 +630,7 @@ fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
     let s = Scratch::new();
     let w = ready(&s);
     assert!(!w.cloud_dictation());
+    assert!(!w.cloud_dictation_fast());
     assert!(!w.list(false).unwrap().agent.cloud_dictation);
     for v in [json!("yes"), json!(1), json!(null), json!([])] {
         let bad = w.call("workspace_settings_write", json!({"cloudDictation": v}));
@@ -640,11 +641,15 @@ fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
         .unwrap();
     assert_eq!(l["agent"]["cloudDictation"], true);
     assert!(w.cloud_dictation());
+    // The fast atomic read follows the write with no extra load (ADR 0123).
+    assert!(w.cloud_dictation_fast());
     // A later write of another field keeps it.
     w.call("workspace_settings_write", json!({"cleanDictation": false}))
         .unwrap();
     assert!(w.cloud_dictation());
-    // An old file with no field reads as off.
+    assert!(w.cloud_dictation_fast());
+    // An old file with no field reads as off. The fast flag is stale until the next `load()`
+    // (a cache-clearing disk write, same as `cloud_dictation()`'s own read-through).
     let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
     data["agent"]
         .as_object_mut()
@@ -652,6 +657,7 @@ fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
         .remove("cloudDictation");
     write_file(&w, &s, &data);
     assert!(!w.cloud_dictation());
+    assert!(!w.cloud_dictation_fast());
 }
 
 /// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other

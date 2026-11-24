@@ -54,7 +54,9 @@ pub use vad::{
 use crate::audio_device::normalize::normalize_peak;
 use crate::audio_device::ptt_buffer::{cap_samples, Utterance, UtteranceSink};
 use crate::audio_device::sink::{FrameSink, MicFrame, SinkEvent};
-use crate::capture::{parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped};
+use crate::capture::{
+    parse_lease, CaptureEvents, Lease, LeaseNo, StopReason, Stopped, HOLD_MAX_MS,
+};
 use crate::clock::{MonotonicClock, SystemClock};
 use crate::cloud_dictation::{self, CloudStt};
 use crate::stt::{LOCAL_STT_MODEL, LOCAL_STT_RUNTIME};
@@ -475,13 +477,17 @@ struct Take {
     texts: Vec<String>,
     samples: u64,
     failed: Option<&'static str>,
-    /// Cloud dictation (ADR 0123): the whole PTT or hands-free take at 16 kHz, kept in RAM for
-    /// one upload. `None` when the Databricks engine is off and for a take over the cap of its
-    /// mode (the buffer never grows). Zeroed when it drops.
+    /// Cloud dictation (ADR 0123): the whole take at 16 kHz, kept in RAM for one upload. `None`
+    /// when the Databricks engine is off and for a take over [`CLOUD_MAX_SAMPLES`] (the buffer
+    /// never grows). Zeroed when it drops.
     kept: Option<Wiped>,
     /// A closed segment held sound (the cloud model never hears silence).
     heard: bool,
 }
+
+/// The longest take that goes to the cloud (ADR 0123), for every capture mode: the PTT hold cap
+/// (CAP-04a), regardless of whether the take is PTT or hands-free.
+const CLOUD_MAX_SAMPLES: usize = (HOLD_MAX_MS as usize) * STT_SAMPLE_RATE as usize / 1_000;
 
 impl Take {
     fn new(lease: LeaseNo, mog_id: MogId, mode: CaptureMode, parts: &Shared) -> Self {
@@ -503,7 +509,11 @@ impl Take {
             texts: Vec::new(),
             samples: 0,
             failed: None,
+            // The cap is the PTT hold cap (CAP-04a) for every mode, not the mode's own, longer
+            // cap (hands-free is 5 min): a 5-min buffer would be about 19 MB, most of it unused
+            // on the common, short take. A take over the cap uses the local text (no upload).
             kept: cap_samples(mode, STT_SAMPLE_RATE)
+                .map(|n| n.min(CLOUD_MAX_SAMPLES))
                 .filter(|_| parts.cloud.as_ref().is_some_and(|c| c.enabled()))
                 .map(Wiped::with_capacity),
             heard: false,
@@ -853,15 +863,25 @@ impl Worker {
             result,
         };
         match (kept, self.shared.cloud.as_ref()) {
-            (Some(audio), Some(cloud)) => self.finish_in_cloud(done, audio, Arc::clone(cloud), at),
+            // Re-checked here, not only at key-down: a mid-take switch to "On this Mac" must
+            // not upload (ADR 0123).
+            (Some(audio), Some(cloud)) if cloud.enabled() => {
+                self.finish_in_cloud(done, audio, Arc::clone(cloud), at);
+            }
             _ => deliver(&self.shared.out, done),
         }
     }
 
     /// Cloud dictation (ADR 0123): on a thread of its own, send the whole take to the cloud and
-    /// give the cloud text as the result. On any error the local result goes out unchanged
-    /// (the take was decoded locally during speech), so the user sees no gap. A cancel (Wipe,
-    /// zero buffers) gives no result. The audio is zeroed when the thread ends.
+    /// give the cloud text as the result. On any error, including a panic, the local result
+    /// goes out unchanged (the take was decoded locally during speech), so the user sees no
+    /// gap. A cancel (Wipe, zero buffers) gives no result. The audio is zeroed when the thread
+    /// ends.
+    ///
+    /// The job's entry in `cloud_jobs` is removed, and its cancel flag read, under the one lock
+    /// that [`Self::cancel_cloud`] also takes: a cancel set in the instant between the call
+    /// returning and this thread taking that lock is still seen, so a result from a call that
+    /// was cancelled a moment before it finished is never delivered.
     fn finish_in_cloud(&self, done: SttDone, audio: Wiped, cloud: Arc<dyn CloudStt>, at: Duration) {
         let lease = done.lease_id;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -881,11 +901,18 @@ impl Worker {
                     let Some((mut done, mut audio)) = lock(&job).take() else {
                         return;
                     };
-                    let result = cloud.transcribe(&mut audio.0, &cancel);
+                    // A panic in the cloud call is an error like any other: the local text
+                    // stands. `audio` is still zeroed below either way.
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| cloud.transcribe(&mut audio.0, &cancel)))
+                            .unwrap_or(Err("stt_engine_failed"));
                     drop(audio);
-                    lock(&jobs).retain(|(_, c)| !Arc::ptr_eq(c, &cancel));
+                    let mut jobs = lock(&jobs);
+                    jobs.retain(|(_, c)| !Arc::ptr_eq(c, &cancel));
+                    if cancel.load(Ordering::SeqCst) {
+                        return;
+                    }
                     match result {
-                        Err("cancelled") => {}
                         Ok(text) => {
                             let latency = clock.now().saturating_sub(at);
                             done.result = Ok(Transcript {
@@ -903,6 +930,7 @@ impl Worker {
                         }
                         Err(_) => deliver(&out, done),
                     }
+                    drop(jobs);
                 }
             });
         if spawned.is_err() {

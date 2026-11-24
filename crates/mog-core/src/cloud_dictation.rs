@@ -7,8 +7,15 @@
 //! transcribes: the filler pre-pass, the cleanup model and the word check stay in the brain.
 //!
 //! Live facts (DEFAULT, 2026-11-24, synthetic clips): a 3 s clip takes 1.5 to 2.4 s and a 10 s
-//! clip 1.8 to 2.5 s. `audio_url` data URLs work on the chat route; the Responses route takes the
-//! same audio as an `input_file`; `input_audio` is refused.
+//! clip 1.8 to 2.5 s (the worst run seen was 2.5 s). `audio_url` data URLs work on the chat
+//! route; the Responses route takes the same audio as an `input_file`; `input_audio` is refused.
+//!
+//! The deadline ([`DEADLINE`]) is 3.5 s, not the ADR 0122 ask-loop budget: the brain's arrival
+//! gate (`arrival-gate.ts`, `ARRIVAL_CAP_MS`) holds Ask Genie arrivals for a pasting hold for at
+//! most 5 s after key-up. [`DEADLINE`] plus the 1.5 s dictation cleanup budget
+//! (`DICTATION_CLEANUP_DEADLINE_MS`) must stay at or under that cap, or a slow cloud call can let
+//! an arrival move the card before the paste lands. 3.5 s + 1.5 s = 5 s, with headroom over the
+//! 2.5 s worst probed latency.
 //!
 //! Privacy: the home profile only (Bottle never picks one), no audio, text, prompt or token in a
 //! log, a `Debug` or an error. Every error is a content-free code. The caller falls back to the
@@ -21,14 +28,15 @@ use std::time::Duration;
 
 use crate::audio_device::normalize::normalize_peak;
 use crate::model_gateway::client::GatewayChatClient;
-use crate::recording_capture::flac::FlacWriter;
+use crate::recording_capture::flac::{FlacWriter, BLOCK_SIZE};
 use crate::recording_cloud::model::{audio_chat_body, reply_text};
 use crate::types::{TagApp, TagOp, Tags, RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT};
 
 /// The model of cloud dictation: the recording transcribe model (one Gemini default).
 pub const MODEL: &str = RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT;
-/// The deadline of one cloud transcription. Past it, Bottle uses the local text.
-pub const DEADLINE: Duration = Duration::from_secs(6);
+/// The deadline of one cloud transcription. Past it, Bottle uses the local text. Fits the
+/// arrival gate's 5 s cap alongside the 1.5 s dictation cleanup budget (see the module doc).
+pub const DEADLINE: Duration = Duration::from_millis(3_500);
 /// `max_tokens` of the call (120 s of speech is about 400 words).
 pub const MAX_TOKENS: u32 = 2_000;
 /// The runtime that `Transcript.runtime` shows for a cloud transcript.
@@ -45,7 +53,8 @@ pub trait CloudStt: Send + Sync {
     /// The user chose "Databricks" as the dictation engine.
     fn enabled(&self) -> bool;
     /// The text of 16 kHz mono `samples` (peak-normalised in place), or a content-free code. It
-    /// returns `cancelled` soon after `cancel` is set and `timeout` at [`DEADLINE`].
+    /// returns `off` when [`Self::enabled`] is false, `cancelled` soon after `cancel` is set and
+    /// `timeout` at [`DEADLINE`].
     fn transcribe(&self, samples: &mut [f32], cancel: &AtomicBool) -> Result<String, &'static str>;
 }
 
@@ -82,11 +91,25 @@ impl GatewayCloudStt {
     }
 }
 
+/// An upper bound on the FLAC size of `len` 16-bit samples. The largest subframe (VERBATIM) is
+/// the raw 16-bit samples of the frame, so a bound of 2 bytes a sample plus a small, fixed
+/// header on top of every [`BLOCK_SIZE`]-sample frame, and on the file, never undercounts.
+/// Pre-sizing the output buffer to this bound means `encode` never reallocates it: the PCM take
+/// buffer and the FLAC buffer are zeroed when the caller is done with them (CAP-34), and a
+/// reallocation would leave an unwiped copy of either one in freed memory.
+fn flac_capacity_bound(len: usize) -> usize {
+    const FRAME_HEADER_BYTES: usize = 32;
+    const FILE_HEADER_BYTES: usize = 64;
+    let frames = len.div_ceil(BLOCK_SIZE).max(1);
+    len * 2 + frames * FRAME_HEADER_BYTES + FILE_HEADER_BYTES
+}
+
 /// `samples` as FLAC (16 kHz mono 16-bit), peak-normalised in place like the local decode
-/// (CAP-20). The caller owns `samples` and zeroes them (CAP-34).
+/// (CAP-20). The caller owns `samples` and the returned buffer, and zeroes both (CAP-34).
 fn encode(samples: &mut [f32]) -> Option<Vec<u8>> {
     normalize_peak(samples);
-    let mut w = FlacWriter::new(Cursor::new(Vec::new())).ok()?;
+    let out = Vec::with_capacity(flac_capacity_bound(samples.len()));
+    let mut w = FlacWriter::new(Cursor::new(out)).ok()?;
     w.write(samples).ok()?;
     w.finish().ok().map(Cursor::into_inner)
 }
@@ -97,6 +120,11 @@ impl CloudStt for GatewayCloudStt {
     }
 
     fn transcribe(&self, samples: &mut [f32], cancel: &AtomicBool) -> Result<String, &'static str> {
+        // Re-checked here too (ADR 0123): the engine re-checks `enabled()` before it calls in,
+        // but a caller that does not is still refused, with no upload, if the choice is off.
+        if !(self.on)() {
+            return Err("off");
+        }
         let profile = (self.home)().ok_or("no_home")?;
         let mut flac = encode(samples).ok_or("bad_audio")?;
         let body = audio_chat_body(MODEL, PROMPT, &flac, MAX_TOKENS).map_err(|_| "bad_audio");
@@ -148,6 +176,36 @@ mod tests {
     }
 
     #[test]
+    fn adr_0123_the_flac_capacity_bound_covers_the_real_encode_for_every_length_tried() {
+        // Noisy, non-repeating samples defeat the FIXED predictors, so some frames fall back to
+        // VERBATIM (raw 16-bit): the case the bound must cover. CONSTANT (silence) and short,
+        // partial-block inputs are covered too.
+        for len in [
+            0usize,
+            1,
+            100,
+            BLOCK_SIZE - 1,
+            BLOCK_SIZE,
+            BLOCK_SIZE + 1,
+            3 * BLOCK_SIZE + 17,
+        ] {
+            let mut noisy: Vec<f32> = (0..len)
+                .map(|i| ((i as f32 * 12_345.678).sin() * 0.9).fract())
+                .collect();
+            let encoded = encode(&mut noisy).expect("every length encodes");
+            assert!(
+                encoded.len() <= flac_capacity_bound(len),
+                "len {len}: encoded {} > bound {}",
+                encoded.len(),
+                flac_capacity_bound(len)
+            );
+            let mut silent = vec![0.0f32; len];
+            let encoded = encode(&mut silent).expect("every length encodes");
+            assert!(encoded.len() <= flac_capacity_bound(len));
+        }
+    }
+
+    #[test]
     fn adr_0123_cloud_dictation_sends_one_flac_audio_request_to_the_home_gateway() {
         let h = Arc::new(ScriptedHttp::new());
         h.json(CHAT_COMPLETIONS_ROUTE, 200, reply("  hello there \n"));
@@ -170,6 +228,17 @@ mod tests {
         assert_eq!((tags.mog.as_str(), tags.op), ("dictation", TagOp::Asr));
         // No `databricks-` serving endpoint, ever.
         assert!(!b.to_string().contains("databricks-"));
+    }
+
+    #[test]
+    fn adr_0123_cloud_dictation_refuses_to_send_when_the_choice_is_off() {
+        // The engine re-checks `enabled()` before it calls in, but `GatewayCloudStt` itself
+        // refuses too, so no other caller can upload while the choice is off.
+        let h = Arc::new(ScriptedHttp::new());
+        let no = AtomicBool::new(false);
+        let r = stt(&h, Some("HOME"), false).transcribe(&mut clip(), &no);
+        assert_eq!(r, Err("off"));
+        assert!(h.seen().is_empty());
     }
 
     #[test]

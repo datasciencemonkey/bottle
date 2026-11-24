@@ -67,6 +67,11 @@ enum Mode {
     Fail(&'static str),
     /// Wait for the cancel flag (at most 5 s), then say `cancelled`.
     UntilCancel,
+    /// Wait for the cancel flag (at most 5 s), then say `Ok` anyway: the race where the HTTP
+    /// call finishes just as a cancel arrives.
+    OkAfterCancel,
+    /// Panic, after counting the call.
+    Panic,
 }
 
 struct FakeCloud {
@@ -88,6 +93,19 @@ impl FakeCloud {
             cancelled: AtomicBool::new(false),
         })
     }
+
+    /// Flips the Settings choice, as `workspace_settings_write` would mid-take.
+    fn set_on(&self, v: bool) {
+        self.on.store(v, Ordering::SeqCst);
+    }
+
+    /// Waits for `cancel`, up to 5 s.
+    fn wait_for_cancel(cancel: &AtomicBool) {
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && !cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
 }
 
 impl CloudStt for FakeCloud {
@@ -101,13 +119,16 @@ impl CloudStt for FakeCloud {
             Mode::Text => Ok("cloud words".to_owned()),
             Mode::Fail(code) => Err(code),
             Mode::UntilCancel => {
-                let end = Instant::now() + Duration::from_secs(5);
-                while Instant::now() < end && !cancel.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(2));
-                }
+                Self::wait_for_cancel(cancel);
                 self.cancelled.store(true, Ordering::SeqCst);
                 Err("cancelled")
             }
+            Mode::OkAfterCancel => {
+                Self::wait_for_cancel(cancel);
+                self.cancelled.store(true, Ordering::SeqCst);
+                Ok("cloud words".to_owned())
+            }
+            Mode::Panic => panic!("adr_0123 fake cloud panic"),
         }
     }
 }
@@ -242,6 +263,84 @@ fn adr_0123_a_wipe_cancels_the_call_and_gives_no_result() {
 }
 
 #[test]
-fn adr_0123_the_cloud_deadline_is_six_seconds() {
-    assert_eq!(cloud_dictation::DEADLINE, Duration::from_secs(6));
+fn adr_0123_an_ok_reply_that_arrives_just_after_a_cancel_is_never_delivered() {
+    // The race: the HTTP call finishes with a reply (Ok) in the instant after a cancel is set,
+    // not before it (that case is `adr_0123_a_wipe_cancels_the_call_and_gives_no_result`). The
+    // fix reads the cancel flag again, under the lock `cancel_cloud` also takes, right before
+    // delivery; it must win even though the call itself returned `Ok`.
+    let cloud = FakeCloud::new(true, Mode::OkAfterCancel);
+    let (engine, out) = rig(&cloud);
+    hold(&engine, CaptureMode::Ptt, &tone(1_600));
+    let end = Instant::now() + Duration::from_secs(5);
+    while cloud.calls.load(Ordering::SeqCst) == 0 && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    engine.discard_all();
+    engine.sync();
+    while !cloud.cancelled.load(Ordering::SeqCst) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        cloud.cancelled.load(Ordering::SeqCst),
+        "the call saw the cancel and still returned Ok"
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        out.now().is_empty(),
+        "no transcript after a cancel, even with an Ok reply"
+    );
+}
+
+#[test]
+fn adr_0123_a_panicking_cloud_call_still_delivers_the_local_text_and_the_engine_keeps_working() {
+    let cloud = FakeCloud::new(true, Mode::Panic);
+    let (engine, out) = rig(&cloud);
+    hold(&engine, CaptureMode::Ptt, &tone(1_600));
+    let done = out.wait(1);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_ref().unwrap().text, "local words");
+    assert_eq!(cloud.calls.load(Ordering::SeqCst), 1);
+    // A second take still runs, and its job entry did not leak: the cloud call is attempted and
+    // the local fallback is delivered again, with no second thread or lock left stuck.
+    hold(&engine, CaptureMode::Ptt, &tone(1_600));
+    let done = out.wait(2);
+    assert_eq!(done.len(), 2);
+    assert_eq!(done[1].result.as_ref().unwrap().text, "local words");
+    assert_eq!(cloud.calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn adr_0123_switching_to_on_this_mac_mid_take_uploads_nothing() {
+    let cloud = FakeCloud::new(true, Mode::Text);
+    let (engine, out) = rig(&cloud);
+    engine.begin(7, "mog-a", CaptureMode::Ptt);
+    feed(&engine, &tone(1_600));
+    // The user switches "Dictation engine" to "On this Mac" partway through the hold.
+    cloud.set_on(false);
+    engine.commit(7, StopReason::Released);
+    engine.sync();
+    let done = out.wait(1);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_ref().unwrap().text, "local words");
+    assert_eq!(cloud.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn adr_0123_a_hands_free_take_over_the_120s_ptt_cap_uses_the_local_text_with_no_upload() {
+    let cloud = FakeCloud::new(true, Mode::Text);
+    let (engine, out) = rig(&cloud);
+    // 121 s of hands-free audio: over the 120 s cap that every mode shares (ADR 0123), even
+    // though hands-free itself allows up to 5 min.
+    hold(&engine, CaptureMode::HandsFree, &tone(121_000));
+    let done = out.wait(1);
+    assert_eq!(done.len(), 1);
+    let t = done[0].result.as_ref().expect("the local transcript");
+    assert!(t.text.contains("local words"), "{}", t.text);
+    assert_eq!(cloud.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn adr_0123_the_cloud_deadline_fits_the_arrival_gate_cap_with_the_cleanup_budget() {
+    // 3.5 s (DEADLINE) + 1.5 s (the dictation cleanup budget) = 5 s, the arrival gate's cap.
+    assert_eq!(cloud_dictation::DEADLINE, Duration::from_millis(3_500));
 }

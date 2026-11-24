@@ -92,7 +92,7 @@ impl WorkspacesHost {
     /// store is set: dictation then stays on this Mac.
     pub fn cloud_dictation_source(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let store = self.store.clone();
-        Arc::new(move || store.get().is_some_and(|s| s.cloud_dictation()))
+        Arc::new(move || store.get().is_some_and(|s| s.cloud_dictation_fast()))
     }
 
     /// Bind R6 to the store, for the sign-in column and the probe.

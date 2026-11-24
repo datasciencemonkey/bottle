@@ -43,19 +43,59 @@ asks for the words as spoken. The existing pre-pass, cleanup model and word chec
 2. **Route.** Bottle uses chat completions with an `audio_url` data URL. This is the recording request, in one
    shared function (`recording_cloud::model::audio_chat_body`). The audio is FLAC, 16 kHz mono, from RAM. The call
    uses the home profile only, through `GatewayChatClient` (R7, token broker, tags, shared rate bucket).
-3. **Deadline and cancel.** The call has a 6 s deadline and no retry. Wipe and the zero-buffer event cancel it. A
-   cancel gives no transcript.
+3. **Deadline and cancel.** The deadline is 3.5 s, not the probed worst case (2.5 s) plus margin, and not the
+   ADR 0122 ask-loop budget. The brain's arrival gate (`arrival-gate.ts`) holds Ask Genie arrivals for a pasting
+   hold for at most 5 s after key-up (`ARRIVAL_CAP_MS`). The cloud deadline (3.5 s) plus the dictation cleanup
+   budget (1.5 s, ADR 0122) must stay at or under that 5 s cap, so a slow cloud call cannot let an arrival move
+   the card before the paste lands. No retry. Wipe and the zero-buffer event cancel the call; a cancel gives no
+   transcript, enforced even if the HTTP call itself returns a reply in the same instant (see "Races" below).
 4. **Local audio stays the fallback.** R4 still decodes the take with Parakeet during speech. It also keeps the
-   whole take in RAM, only when the choice is on. On any cloud error, R4 gives the local text. The MOG shows
-   "Databricks dictation was not available. I used this Mac." A take with no sound never goes to the cloud.
+   take in RAM, up to a 120 s cap (the PTT hold cap, CAP-04a) and only when the choice is on, re-checked at both
+   key-down and key-up (see "Races" below). On any cloud error, including a panic inside the cloud call, R4
+   gives the local text. The MOG shows "Databricks dictation was not available. I used this Mac." A take with no
+   sound never goes to the cloud.
 5. **Same pipeline.** The cloud text is the transcript text. The filler pre-pass, the "Clean up dictation"
-   switch, the word check and the paste work as before. A PTT take and a hands-free take go to the cloud. A
-   session take does not.
+   switch, the word check and the paste work as before. A PTT take and a hands-free take go to the cloud, both
+   capped at 120 s (decision 4): hands-free itself allows up to 5 min, but R4 pre-sizes its cloud buffer to the
+   smaller, shared cap, so it never reserves the 19 MB a 5-min buffer would take for the common, short hold. A
+   session take does not go to the cloud. A PTT overlay take during a call recording (the talk key's own
+   behaviour, ADR 0118) may go to the cloud like any other PTT take; this is accepted, not a new decision.
 6. **The T4 chain.** The brain still asks R4 for `local_parakeet`. T4 accepts a `dbx_gemini` reply to that
-   request. The reply names its real provider, so the STT badge shows it.
+   request. The reply names its real provider, so the STT badge shows it. The MOG's fallback notice
+   (`stt-wiring.ts`) reads the *current* Settings choice when the transcript resolves, not necessarily the one
+   in effect when the hold began (Rust decides at commit time, an instant earlier); a user flip in that narrow
+   window can show or skip the notice for a take that did not itself race the flip. Accepted: the transcript
+   text is never wrong, only the notice, and a per-take flag from Rust is not worth a contract change for it.
 7. **Call recording.** The defaults are now `system.ai.gemini-3-8-flash` (transcribe) and
    `system.ai.claude-sonnet-5-5` (notes). The endpoint rule accepts a dot. A saved value that is exactly an old
    default id reads as the new default. Any other saved value stays. A retry of an old job also uses the new ids.
+8. **Settings read at key-down.** `cloud_dictation` is cached in one `AtomicBool`, kept by every file load and by
+   `workspace_settings_write`. A key-down reads that atomic, not the file-backed settings cache: no lock, no
+   clone, no disk.
+
+## Races
+
+A cloud call runs on its own thread, started at key-up (commit) and tracked in a small in-memory list of
+(lease, cancel-flag) pairs so Wipe or the zero-buffer event can cancel it. Two races matter:
+
+- **A cancel that lands right as the call finishes.** The HTTP wait loop checks the cancel flag every 20 ms; a
+  cancel set in the gap between its last check and the reply arriving could, in the first cut of this feature,
+  still be delivered as a successful cloud transcript. The fix: the call's own thread removes its list entry and
+  re-reads the cancel flag under the one lock that cancelling also takes, and only then decides whether to
+  deliver. Either the cancel is observed there (no delivery, matching a true cancel), or the thread's removal of
+  its own entry happens first (the cancel request, if any, arrives too late to find an entry to flag, same as a
+  cancel that was always going to be too late). A regression test sends a cloud reply that waits for the cancel
+  flag and then still returns success, and asserts no transcript is delivered.
+- **The choice switched off mid-hold.** The take decides whether to buffer audio for the cloud at key-down. R4
+  re-checks the choice again at key-up, right before it would start the upload, so a user who switches to "On
+  this Mac" partway through a hold gets no upload for that hold. `GatewayCloudStt` also refuses to call out
+  (`off`) when asked anyway, as a second, independent gate.
+
+A panicking cloud call is caught (`catch_unwind`) and treated as any other failure: the local text is delivered,
+and the call's list entry is still removed. Uncaught, a panic would both skip delivery (the user sees no
+transcript for that hold) and leak the list entry.
+
+## Contract changes
 
 ## Contract changes
 
@@ -72,5 +112,7 @@ or token.
 
 ## Consequences
 
-- With "Databricks", R4 holds up to 2 min (PTT) or 5 min (hands-free) of audio in RAM. R4 zeroes it after the call.
-- A cloud call adds about 2 s after key-up. The user can switch back to "On this Mac".
+- With "Databricks", R4 holds up to 2 min of audio in RAM for a PTT or a hands-free take alike (decision 5). R4
+  zeroes it after the call.
+- A cloud call adds up to about 2.5 s after key-up (the probed worst case), bounded by the 3.5 s deadline. The
+  user can switch back to "On this Mac".

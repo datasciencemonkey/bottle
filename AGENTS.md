@@ -37,7 +37,7 @@ Binding decisions for the MVP:
     the local text. The setting "Clean up dictation" switches this off.
   - **Dictation engine (ADR 0123, owner decision 2026-11-24).** The setting "Dictation engine" is "On this Mac" (the
     default) or "Databricks". With Databricks, the audio of the talk-key hold goes to `system.ai.gemini-3-8-flash` on
-    the home AI Gateway (chat completions, FLAC, 6 s deadline). The text then goes through the same pre-pass, cleanup
+    the home AI Gateway (chat completions, FLAC, 3.5 s deadline). The text then goes through the same pre-pass, cleanup
     switch, word check and paste. On any error, Bottle uses the local Parakeet text of the same audio and the MOG shows
     a short notice. Local Parakeet stays the default and the fallback.
   - **Ask (⌥G):** the model runs a tool loop in Rust (`agent_run::orchestrator`). It has two tools:
