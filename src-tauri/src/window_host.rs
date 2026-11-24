@@ -664,6 +664,36 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         shown
     }
 
+    /// The MOG window moved (the user dragged the lamp): a card that is on screen goes with it,
+    /// to the same place beside the MOG, keeping its size. This runs on the main thread (a
+    /// window event), so it takes no `op` guard and never builds or waits for a window. If the
+    /// ledger is busy, it skips this step: the next move event comes at once. A card that is
+    /// hidden, absent or closing stays where it is; its next show places it.
+    pub fn follow_mog(&self, mog_id: &str) {
+        let Ok(ledger) = self.ledger.try_lock() else {
+            return;
+        };
+        let state = ledger.card_state(mog_id);
+        drop(ledger);
+        if !card_follows_mog(state) {
+            return;
+        }
+        let Some(kind) = WindowKind::card(mog_id) else {
+            return;
+        };
+        let Some(w) = self.window(&kind) else {
+            return;
+        };
+        let Some(size) = logical_size(&w) else {
+            return;
+        };
+        let Some((at, side)) = self.card_geometry(mog_id, Some(size)) else {
+            return;
+        };
+        let _ = move_to(&w, Some(&at));
+        set_side_title(&w, Some(side));
+    }
+
     /// #559: the card place beside the MOG window of `mog_id`, in logical units, on the MOG's
     /// monitor. `None` if the MOG window or its geometry is not there.
     /// `kept` is the `(width, height)` of a card that keeps its size (#573); `None` is one line.
@@ -748,6 +778,11 @@ impl<R: tauri::Runtime> TauriWindowHost<R> {
         }
         reaped
     }
+}
+
+/// True if a card in this state goes with its MOG when the lamp moves: only a card on screen.
+pub fn card_follows_mog(state: Option<CardState>) -> bool {
+    state == Some(CardState::Shown)
 }
 
 /// Tell the card view which side of its MOG it is on, in the window title (`windows::card_title`).

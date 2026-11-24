@@ -897,3 +897,43 @@ fn lamp_alive_the_card_title_tells_the_view_its_side() {
     assert_eq!(card_title(CardSide::Left), "Bottle card (left)");
     assert_eq!(card_title(CardSide::Right), "Bottle card (right)");
 }
+
+// ---------- The card follows the lamp when the user drags it ----------
+
+#[test]
+fn follow_only_a_card_that_is_on_screen_goes_with_the_lamp() {
+    use bottle_lib::window_host::card_follows_mog;
+    assert!(card_follows_mog(Some(CardState::Shown)));
+    assert!(!card_follows_mog(Some(CardState::Absent)));
+    assert!(!card_follows_mog(Some(CardState::Hidden(Instant::now()))));
+    assert!(!card_follows_mog(Some(CardState::Closing)));
+    assert!(!card_follows_mog(None));
+}
+
+#[test]
+fn follow_the_card_keeps_its_offset_and_size_when_the_lamp_moves() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    let (a, side_a) =
+        card_beside_sized(&g(300.0, 200.0, 160.0, 168.0), Some(&screen), 340.0, 120.0);
+    let (b, side_b) =
+        card_beside_sized(&g(420.0, 260.0, 160.0, 168.0), Some(&screen), 340.0, 120.0);
+    assert_eq!((side_a, side_b), (CardSide::Right, CardSide::Right));
+    assert_eq!((b.x - a.x, b.y - a.y), (120.0, 60.0));
+    assert_eq!((b.width, b.height), (340.0, 120.0));
+}
+
+#[test]
+fn follow_the_card_stays_on_screen_and_flips_to_the_facing_side_at_the_edge() {
+    let screen = g(0.0, 0.0, 1440.0, 900.0);
+    let (c, side) = card_beside_sized(&g(1250.0, 850.0, 160.0, 168.0), Some(&screen), 340.0, 120.0);
+    assert_eq!(side, CardSide::Left);
+    assert!(c.x >= 0.0 && c.x + c.width <= 1440.0);
+    assert!(c.y >= 0.0 && c.y + c.height <= 900.0);
+}
+
+#[test]
+fn follow_the_app_hooks_the_mog_moved_event_to_follow_mog() {
+    let lib = code_of("src/lib.rs");
+    assert!(lib.contains("WindowEvent::Moved"));
+    assert!(lib.contains("follow_mog("));
+}

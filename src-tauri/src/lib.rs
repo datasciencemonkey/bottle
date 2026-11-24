@@ -373,6 +373,16 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+            // The lamp moved: a card that is on screen goes with it, at the same place beside it.
+            if let tauri::WindowEvent::Moved(_) = event {
+                if let Some(windows::WindowKind::Mog(id)) =
+                    windows::WindowKind::from_label(window.label())
+                {
+                    if let Some(host) = window.try_state::<TauriWindowHost<tauri::Wry>>() {
+                        host.follow_mog(&id);
+                    }
+                }
+            }
             // R11: a window that closes outside the host frees its ledger slot.
             if let tauri::WindowEvent::Destroyed = event {
                 // ADR 0118: a closed MOG keeps no paste target.
