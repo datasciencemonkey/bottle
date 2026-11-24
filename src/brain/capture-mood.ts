@@ -280,6 +280,11 @@ export function createCaptureMood(deps: CaptureMoodDeps): CaptureMood {
     callRecording(on, mogIds = []) {
       for (const id of mogIds) known.add(id);
       callRec = on;
+      // ADR 0118: a note that waits for its timer must not outlive the recording.
+      if (!on) {
+        for (const cancel of notes.values()) cancel();
+        notes.clear();
+      }
       for (const id of known) publish(id);
     },
     hold(mogId, on) {

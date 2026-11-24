@@ -1,5 +1,6 @@
 import type { CaptureState } from '../../shared/interfaces';
 import {
+  CALL_ONLY_BADGE,
   backendLabel,
   mapBadges,
   sttBadgeText,
@@ -338,10 +339,13 @@ describe('UX-39b: badges are orthogonal to the mood', () => {
     expect(mapMood(A, src, T).mood).toBe('idle');
   });
 
-  it('[ADR-0118] [AC-6.15] "Call only" shows while the talk key is held in a recording, with a label', () => {
+  it('[ADR-0118] "Call only" has text, a label that starts with it, and is not hover-only', () => {
+    expect(CALL_ONLY_BADGE).toMatchObject({
+      kind: 'call_only',
+      text: 'Call only',
+      hoverOnly: false,
+    });
+    expect(CALL_ONLY_BADGE.label.startsWith(CALL_ONLY_BADGE.text)).toBe(true);
     expect(kinds(mapBadges(home))).not.toContain('call_only');
-    const b = byKind(mapBadges({ ...home, callOnly: true }), 'call_only');
-    expect(b).toMatchObject({ text: 'Call only', hoverOnly: false });
-    expect(b?.label.startsWith(b.text)).toBe(true);
   });
 });

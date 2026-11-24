@@ -302,6 +302,19 @@ describe('capture mood: the talk key during a call recording (ADR 0118)', () => 
     expect(last(A)?.badges).toBeUndefined();
   });
 
+  it('the end of the recording clears a waiting note and its timer', async () => {
+    const { s, cm, last } = setup();
+    cm.callRecording(true, [A]);
+    cm.heldNote(A);
+    cm.callRecording(false);
+    expect(last(A)?.badges).toBeUndefined();
+    // A new recording starts before the old timer would have run: no stale note comes back.
+    cm.callRecording(true, [A]);
+    expect(last(A)?.badges).toBeUndefined();
+    await s.runUntil(1000 + HELD_NOTE_MS);
+    expect(last(A)?.badges).toBeUndefined();
+  });
+
   it('a refusal and the "Call only" badge show together', () => {
     const { cm, last } = setup();
     cm.callRecording(true, [A]);

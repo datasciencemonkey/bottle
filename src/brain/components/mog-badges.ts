@@ -71,8 +71,6 @@ export interface BadgeSources {
   };
   lifecycle: Lifecycle;
   sync?: 'off' | 'on' | 'paused';
-  /** ADR 0118: the talk key is held during a call recording. */
-  callOnly?: boolean;
 }
 
 /** UX-15: "Genie One", "Genie: <agent>" or "<app name>". */
@@ -105,7 +103,10 @@ function sttLabel(stt: SttUse): string {
       : 'Speech to text runs on Databricks';
 }
 
-/** ADR 0118: the badge while the talk key is held during a call recording. Not hover-only. */
+/**
+ * ADR 0118: the badge while the talk key is held during a call recording. `capture-mood.ts`
+ * sends it in `mog.view_state`; the view shows it as the recording overlay, not in the badge row.
+ */
 export const CALL_ONLY_BADGE: MogBadge = {
   kind: 'call_only',
   text: 'Call only',
@@ -113,7 +114,7 @@ export const CALL_ONLY_BADGE: MogBadge = {
   hoverOnly: false,
 };
 
-/** The badges of one MOG, in a fixed order: identity, STT, hop, offline, sync, call only. */
+/** The badges of one MOG, in a fixed order: identity, STT, hop, offline. */
 export function mapBadges(src: BadgeSources): MogBadge[] {
   const hop = src.hop;
   const profile = hop?.profile ?? src.profile;
@@ -166,6 +167,5 @@ export function mapBadges(src: BadgeSources): MogBadge[] {
       action: 'open_setup',
     });
   }
-  if (src.callOnly) out.push(CALL_ONLY_BADGE);
   return out;
 }

@@ -44,6 +44,10 @@ export const defaultMascot = (): MascotRenderer => new RiveMascot();
  */
 const VIEW_MIC_LEVELS: MicLevelSource = viewMicLevels();
 
+/** ADR 0118: the name of the recording overlay while the talk key is held in a recording. */
+const CALL_ONLY_LABEL =
+  'Call only. The call recording gets silence from your mic while you hold the talk key';
+
 export function MogView({
   mogId,
   createMascot = defaultMascot,
@@ -203,6 +207,8 @@ export function MogView({
 
   // TODO(#83): poke, click-to-listen and drag rules; the brain decides what input means.
   // The hover flag is on the whole view, so moving onto a badge keeps the hover badges open.
+  const callOnly = state?.badges?.some((b) => b.kind === 'call_only') ?? false;
+  const callNote = state?.badges?.find((b) => b.kind === 'call_note');
   return (
     <div
       style={{ '--mog-id-color': accent.hex } as CSSProperties}
@@ -263,7 +269,19 @@ export function MogView({
       )}
       {/* The visual "?" cue is the renderer's (UX-03); this empty span is the accessible badge. */}
       {state?.overlays.attention && <span data-overlay="attention" aria-label="Needs attention" />}
-      {state?.overlays.recording && <span data-overlay="recording">REC</span>}
+      {state?.overlays.recording && (
+        // ADR 0118: during a hold, "Call only" takes the place of REC.
+        <span
+          data-overlay="recording"
+          {...(callOnly ? { 'data-call-only': '', 'aria-label': CALL_ONLY_LABEL } : {})}
+        >
+          {callOnly ? 'Call only' : 'REC'}
+        </span>
+      )}
+      {/* ADR 0118: always mounted, so a screen reader hears the note when its text arrives. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {callNote?.label ?? ''}
+      </span>
       {/* A payload with no badge list shows the 4.7 offline overlay; with one, the list wins. */}
       {state?.overlays.offline && state.badges === undefined && (
         <span data-overlay="offline">Offline</span>
@@ -272,6 +290,7 @@ export function MogView({
       {state?.badges && (
         <div className="badges">
           {state.badges
+            .filter((b) => b.kind !== 'call_only')
             .filter((b) => hovered || !b.hoverOnly)
             .map((b, i) => {
               const body = (
@@ -294,10 +313,11 @@ export function MogView({
               ) : (
                 <span
                   key={key}
-                  // ADR 0118: the one-time held note is announced when it appears.
-                  role={b.kind === 'call_note' ? 'status' : 'note'}
+                  role="note"
                   data-badge={b.kind}
                   aria-label={b.label}
+                  // The note is read once, by the live region, not twice.
+                  aria-hidden={b.kind === 'call_note' ? true : undefined}
                 >
                   {body}
                 </span>
