@@ -46,7 +46,6 @@ export type AgentAction =
   | { action: 'agent.ready' }
   | { action: 'agent.stop'; turnId: string }
   | { action: 'agent.remove_queued'; turnId: string }
-  | { action: 'agent.new_session' }
   | { action: 'agent.open_settings' };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -95,7 +94,6 @@ export function asAgentAction(p: unknown): AgentAction | undefined {
   if (!isObj(p)) return undefined;
   switch (p['action']) {
     case 'agent.ready':
-    case 'agent.new_session':
     case 'agent.open_settings':
       return { action: p['action'] };
     case 'agent.stop':

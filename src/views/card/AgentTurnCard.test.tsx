@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /** Slice 2a: the card of an agent turn, and its body (shared with the hub panel). Fake values. */
 import { act } from 'react';
+import { WITHHELD_TEXT } from '../../shared/agent-answer-rule';
 import type { AgentTurnView } from '../../shared/ipc';
 import { inputEmits, render, tauri } from '../test-tauri';
 import {
@@ -144,8 +145,9 @@ describe('AgentTurnCard', () => {
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     const note = el.querySelector('[data-agent-note]') as HTMLElement;
-    expect(note.querySelector('.agent-note-label')?.textContent).toBe('Combined by your MOG');
+    expect(note.querySelector('.agent-note-label')).toBeNull();
     expect(note.textContent).not.toContain('Note from your MOG');
+    expect(note.textContent).not.toContain('Combined by your MOG');
     expect(note.className).not.toContain('agent-note--after');
     const chipNames = [...note.querySelectorAll('[data-agent-chip]')].map((n) => n.textContent);
     expect(chipNames).toEqual(['Finance', 'Sales']);
@@ -217,8 +219,8 @@ describe('AgentTurnCard', () => {
   it('names the list of a combined fold "Workspace answers"', async () => {
     const t = view({
       state: 'done',
-      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
-      parts: [partOf('c-00000001')],
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin, sales] },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     expect(el.querySelector('[data-agent-note-chips]')?.getAttribute('role')).toBe('group');
@@ -227,24 +229,150 @@ describe('AgentTurnCard', () => {
     expect(list?.getAttribute('aria-label')).toBe('Workspace answers');
   });
 
-  it('[AC-2b.6] a note with D1 off says "Note from your MOG" and has no fold of its own', async () => {
+  it('[owner bug] a summary is the main answer: markdown, a trusted link, Open in Databricks, chips, no "Note from your MOG"', async () => {
+    const host = 'sales.cloud.databricks.test';
+    const link = `https://${host}/one/chat/threads/x`;
     const t = view({
       state: 'done',
-      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [fin] },
-      parts: [partOf('c-00000001')],
+      summary: {
+        md: `## Revenue\n\n**Up 4%** [1]. See [the dashboard](https://${host}/sql/dashboards/d1) or [evil](https://evil.example/x).`,
+        kind: 'note',
+        workspaces: [sales],
+        citations: [
+          { n: 1, callId: 'c-00000001', workspace: sales, deepLink: link, workspaceHost: host },
+        ],
+      },
+      parts: [partOf('c-00000001', { workspace: sales }), partOf('c-00000002')],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
-    const note = el.querySelector('[data-agent-note]') as HTMLElement;
-    expect(note.textContent).toContain('Note from your MOG');
-    expect(note.textContent).not.toContain('Combined');
-    expect(note.querySelector('[data-agent-chip]')).toBeNull();
+    const main = el.querySelector('[data-agent-summary]') as HTMLElement;
+    expect(main.textContent).not.toContain('Note from your MOG');
+    expect(main.querySelector('strong')?.textContent).toBe('Revenue');
+    expect([...main.querySelectorAll('strong')].map((s) => s.textContent)).toContain('Up 4%');
+    expect(main.querySelector('[data-agent-cite="1"]')).not.toBeNull();
+    const anchors = [...main.querySelectorAll<HTMLAnchorElement>('a')];
+    expect(anchors.map((a) => a.getAttribute('href'))).toContain(
+      `https://${host}/sql/dashboards/d1`,
+    );
+    expect(anchors.map((a) => a.getAttribute('href'))).not.toContain('https://evil.example/x');
+    const open = main.querySelector('[data-action="open-in-databricks"]');
+    expect(open?.textContent).toBe('Open in Databricks');
+    // The answer comes first; the part folds under it.
+    expect(el.querySelector('.agent-part-title')).toBeNull();
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('2 workspace answers');
+    expect(el.querySelector('.agent-note-label')).toBeNull();
+  });
+
+  it('[owner rule] exactly one answered call shows that Genie answer as it is, not the text of the model', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'note', workspaces: [sales] },
+      parts: [partOf('c-00000001', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(el.querySelector('[data-agent-summary]')).toBeNull();
+    expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
+    expect(el.textContent).toContain('Answer c-00000001');
     expect(el.querySelector('[data-action="fold"]')).toBeNull();
   });
 
-  it('[owner bug] with the cross-workspace answer off the workspace answers come first, open, each under "Answer from <workspace>"', async () => {
+  it('[owner rule] one answered call plus one withheld call still shows the answered one as it is', async () => {
     const t = view({
       state: 'done',
-      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [] },
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'combined', workspaces: [fin, sales] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', {
+          workspace: sales,
+          notShownToAgent: true,
+          sections: [{ id: 'answer' as const, md: WITHHELD_TEXT }],
+        }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+    expect(el.textContent).toContain('Answer c-00000001');
+  });
+
+  it('[owner rule] an earlier-turn part does not count: one new answered call shows as it is', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-PARAPHRASE', kind: 'note', workspaces: [fin] },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { fromEarlier: true })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.textContent).not.toContain('MODEL-PARAPHRASE');
+  });
+
+  it('[owner rule] with no answered call the text of the model stays the answer', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-TEXT', kind: 'note', workspaces: [] },
+      parts: [],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
+  });
+
+  it('[owner rule] with D1 off a receipt part stays in view next to the text of the model', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'MODEL-TEXT', kind: 'note', workspaces: [fin, sales] },
+      parts: [
+        partOf('c-00000001'),
+        partOf('c-00000002', { workspace: sales, notShownToAgent: true }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('MODEL-TEXT');
+    const rec = el.querySelector('[data-agent-part="c-00000002"]') as HTMLElement;
+    expect(rec.closest('[hidden]')).toBeNull();
+  });
+
+  it('the footer links of the summary are one for each URL, and none that the text carries', async () => {
+    const host = 'sales.cloud.databricks.test';
+    const a = `https://${host}/one/chat/threads/a`;
+    const b = `https://${host}/one/chat/threads/b`;
+    const cite = (n: number, callId: string, deepLink: string) => ({
+      n,
+      callId,
+      workspace: sales,
+      deepLink,
+      workspaceHost: host,
+    });
+    const t = view({
+      state: 'done',
+      summary: {
+        md: `Text with [link](${a}).`,
+        kind: 'combined',
+        workspaces: [sales, fin],
+        citations: [cite(1, 'c-00000001', a), cite(2, 'c-00000002', b), cite(3, 'c-00000003', b)],
+      },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const links = [
+      ...el.querySelectorAll('[data-agent-summary] [data-action="open-in-databricks"]'),
+    ];
+    expect(links.map((l) => l.getAttribute('href'))).toEqual([b]);
+  });
+
+  it('[owner rule] two answered calls show the combined answer first and fold both answers', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'COMBINED-TEXT', kind: 'combined', workspaces: [fin, sales] },
+      parts: [partOf('c-00000001'), partOf('c-00000002', { workspace: sales })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('[data-agent-summary]')?.textContent).toContain('COMBINED-TEXT');
+    expect(el.querySelector('[data-action="fold"]')?.textContent).toBe('2 workspace answers');
+  });
+
+  it('[owner bug] with no summary text the workspace answers come first, open, each under "Answer from <workspace>"', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: '', kind: 'note', workspaces: [] },
       parts: [
         partOf('c-00000001', { workspace: sales }),
         // No source cites it, so it was folded before: it shows now, and it says it is not the agent's.
@@ -259,11 +387,8 @@ describe('AgentTurnCard', () => {
     // No fold hides an answer, and the parts list is not hidden.
     expect(el.querySelector('[data-action="fold"]')).toBeNull();
     expect((el.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
-    // The note comes after the answers, as one small muted block.
-    const note = el.querySelector('[data-agent-note]') as HTMLElement;
-    expect(note.className).toContain('agent-note--after');
-    const parts = el.querySelector('.agent-parts') as HTMLElement;
-    expect(parts.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // An empty summary draws no box at all.
+    expect(el.querySelector('[data-agent-note]')).toBeNull();
     expect(el.textContent).toContain(NOT_SHOWN_COPY);
   });
 

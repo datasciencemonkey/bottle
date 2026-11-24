@@ -3,7 +3,7 @@
  *
  * The brain keeps the content of the panel in memory (`agent-run.ts`) and sends a `HubAgentView`
  * to the hub window only (ARC-5). The hub sends `agent.ready` when it opens, and one action for
- * each click: Stop, remove a waiting question, New session, open Settings. Only the hub window,
+ * each click: Stop, remove a waiting question, open Settings. Only the hub window,
  * with the hub scope, can run an action. The view in memory is what the live session holds: a new
  * session, quit or Wipe clears it (the client does that on `agent:session`). The turns also live
  * in Conversations (ADR 0121): `threads` links each turn to its thread. There is no Agent area:
@@ -73,7 +73,7 @@ export function clearingAgentPanel(
 }
 
 export interface HubAgentWiringDeps {
-  client: Pick<AgentClient, 'panel' | 'stop' | 'newSession' | 'refreshSession'>;
+  client: Pick<AgentClient, 'panel' | 'stop' | 'refreshSession'>;
   /** Send the panel to the hub window only. */
   send(view: HubAgentView): Promise<unknown>;
   /** Show the hub on Settings → Workspace. */
@@ -104,8 +104,6 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
       case 'agent.stop':
       case 'agent.remove_queued':
         return void deps.client.stop(a.turnId).then(() => push());
-      case 'agent.new_session':
-        return void deps.client.newSession().then(() => push());
       case 'agent.open_settings':
         return deps.openSettings();
     }

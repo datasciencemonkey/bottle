@@ -32,7 +32,8 @@ import type {
   AgentWsChip,
   CardSection,
 } from '../../shared/ipc';
-import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { isLoneAnswer, summaryFooterLinks, WITHHELD_TEXT } from '../../shared/agent-answer-rule';
+import { LINK_OPEN, bareHost, openInDatabricksUrl } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
 import { SafeMarkdown } from './safe-markdown';
@@ -41,8 +42,6 @@ import type { CSSProperties, ReactNode } from 'react';
 export const QUEUED_LABEL = 'Queued';
 export const WAITING_COPY = 'Sends when the answer above lands';
 export const SLOW_COPY = 'Still working…';
-export const NOTE_LABEL = 'Note from your MOG';
-export const COMBINED_LABEL = 'Combined by your MOG';
 export const OPEN_IN_DATABRICKS = 'Open in Databricks';
 export const CLOSE_LABEL = 'Close';
 export const FROM_EARLIER_COPY = 'From an earlier answer';
@@ -335,6 +334,36 @@ function Part({
   );
 }
 
+/** "Open in Databricks" under the answer of the MOG: one link for each workspace it names. */
+export function SummaryFooter({
+  links,
+  onOpenLink,
+}: {
+  links: { url: string; name: string }[];
+  onOpenLink: (url: string) => void;
+}) {
+  return (
+    <>
+      {links.map((l) => (
+        <a
+          key={l.url}
+          className="genie-toggle agent-databricks"
+          href={l.url}
+          rel="noopener noreferrer"
+          data-action="open-in-databricks"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenLink(l.url);
+          }}
+        >
+          {links.length > 1 ? `${OPEN_IN_DATABRICKS}: ${l.name}` : OPEN_IN_DATABRICKS}
+        </a>
+      ))}
+    </>
+  );
+}
+
 /** The parts of a turn: the cited ones, then the fold "1 more answer". */
 export function TurnParts({
   turn,
@@ -350,8 +379,8 @@ export function TurnParts({
   /** Every answer shows open under "Answer from <workspace>"; none folds. */
   answersFirst?: boolean;
   /**
-   * The note is a combined answer (D1 on): the parts of the workspaces fold under it, except a
-   * part that was withheld from the agent, which stays in view with its tag.
+   * The text of the model is the main answer: the parts of the workspaces fold under it, except
+   * a part that the agent did not see (a receipt, or withheld), which stays in view with its tag.
    */
   combined?: boolean;
 }) {
@@ -477,12 +506,27 @@ function CallsOf({ turn, now }: { turn: AgentTurnView; now: number }) {
 }
 
 /**
- * The workspace answers come first, open, when the agent has no combined note of them: the turn
- * has no summary, or the summary is the agent's own note (the cross-workspace answer is off).
- * Else (D1 on) the combined note comes first and the parts fold under it.
+ * The workspace answers come first, open, when the model's text is not the answer: the turn has
+ * no summary text, or exactly one Genie answer is the answer (the owner rule). Else the text of
+ * the model comes first and the parts fold under it.
  */
 export const answersFirstOf = (turn: AgentTurnView): boolean =>
-  turn.parts.length > 0 && (turn.summary === undefined || turn.summary.kind !== 'combined');
+  turn.parts.length > 0 && !hasSummaryText(turn);
+
+/**
+ * The text of the model is the main answer: it has text, and the turn does not have exactly one
+ * answered, not withheld part of its own (`isLoneAnswer`). Then that Genie answer shows as it is.
+ */
+export const hasSummaryText = (turn: AgentTurnView): boolean =>
+  turn.summary !== undefined &&
+  turn.summary.md.trim() !== '' &&
+  !isLoneAnswer(
+    turn.parts.map((p) => ({
+      answered: true,
+      withheld: sectionOf(p.sections, 'answer')?.md === WITHHELD_TEXT,
+      fromEarlier: p.fromEarlier === true,
+    })),
+  );
 
 /** The first line of the first answer of a turn, for a list: never the note of the agent. */
 export function firstAnswerLine(turn: AgentTurnView): string {
@@ -542,11 +586,34 @@ export function TurnBody({
   // On an ended turn the answer comes before the process.
   const answerFirst = !isOpenState(turn.state) && turn.state !== 'needs_you';
   const answersFirst = answersFirstOf(turn);
-  const combined = turn.summary?.kind === 'combined';
-  const note = turn.summary && (
-    <div className={answersFirst ? 'agent-note agent-note--after' : 'agent-note'} data-agent-note>
-      <p className="agent-note-label">{combined ? COMBINED_LABEL : NOTE_LABEL}</p>
-      {combined && turn.summary.workspaces.length > 0 && (
+  const combined = hasSummaryText(turn);
+  // Links in the answer must lead to a workspace of this turn: a part host or a cited host.
+  const summaryTrust = useMemo(() => {
+    const hosts = [
+      ...turn.parts.map((p) => sectionOf(p.sections, 'footer')?.workspaceHost ?? ''),
+      ...(turn.summary?.citations ?? []).map((c) => c.workspaceHost ?? ''),
+    ].map(bareHost);
+    return {
+      profileHost: '',
+      allowedAppUrls: [...new Set(hosts)].filter((h) => h !== '').map((h) => `https://${h}`),
+    };
+  }, [turn.parts, turn.summary]);
+  // "Open in Databricks" of each cited workspace, unless the answer carries that link already.
+  const footerLinks = useMemo(
+    () =>
+      summaryFooterLinks(
+        turn.summary?.md ?? '',
+        (turn.summary?.citations ?? []).map((c) => ({
+          name: c.workspace?.name ?? '',
+          deepLink: c.deepLink,
+          workspaceHost: c.workspaceHost,
+        })),
+      ),
+    [turn.summary],
+  );
+  const note = turn.summary && combined && (
+    <div className="agent-summary" data-agent-summary data-agent-note>
+      {turn.summary.workspaces.length > 1 && (
         <div
           className="agent-note-chips"
           role="group"
@@ -575,14 +642,15 @@ export function TurnBody({
           })}
         </div>
       )}
-      <div className="agent-note-body">
+      <div className="agent-part-body" data-answer>
         <SafeMarkdown
           text={turn.summary.md}
-          trust={{ profileHost: '', allowedAppUrls: [] }}
+          trust={summaryTrust}
           {...(onOpenLink ? { onOpenLink } : {})}
           renderMarker={renderMarker}
         />
       </div>
+      {onOpenLink && <SummaryFooter links={footerLinks} onOpenLink={onOpenLink} />}
     </div>
   );
   return (
@@ -615,7 +683,6 @@ export function TurnBody({
         combined={combined}
         reveal={reveal}
       />
-      {answersFirst && note}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
     </div>

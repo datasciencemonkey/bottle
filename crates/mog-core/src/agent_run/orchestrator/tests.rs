@@ -856,14 +856,14 @@ fn an_unknown_source_makes_the_answer_hidden() {
 }
 
 #[test]
-fn the_answer_is_cut_to_twelve_hundred_chars() {
+fn the_answer_is_cut_to_eight_thousand_chars() {
     let r = rig(
         false,
         10,
         FakeR8::answering(by_profile),
         Box::new(|_, _| {
             reply_of(vec![final_item(
-                json!({"answer": "a".repeat(5000), "sources": []}),
+                json!({"answer": "a".repeat(9000), "sources": []}),
             )])
         }),
     );
@@ -876,7 +876,7 @@ fn the_answer_is_cut_to_twelve_hundred_chars() {
             .unwrap()
             .chars()
             .count(),
-        1200
+        8000
     );
 }
 
@@ -1820,9 +1820,34 @@ fn stop_during_a_blocking_model_call_lets_the_queued_turn_run() {
 fn markers_outside_the_sources_are_removed_from_the_answer() {
     assert_eq!(
         host::strip_bad_markers("a [1] b [2] c [3] [0] [x]", 2),
-        "a [1] b [2] c   [x]"
+        "a [1] b [2] c [x]"
     );
-    assert_eq!(host::strip_bad_markers("a [1] b", 0), "a  b");
+    assert_eq!(host::strip_bad_markers("a [1] b", 0), "a b");
+    // A markdown link whose text is a number is not a marker.
+    assert_eq!(
+        host::strip_bad_markers("see [7](https://h/x) and [8]", 0),
+        "see [7](https://h/x) and"
+    );
+    // A long answer is cut back to the last line break, not inside a link.
+    let line = format!("{}\n", "x".repeat(99));
+    let long = format!("{}[link](https://h/very/long/url)", line.repeat(100));
+    let cut = host::cut_answer(&long);
+    assert!(cut.chars().count() <= host::ANSWER_MAX_CHARS);
+    assert!(!cut.contains("[link]"));
+    assert!(cut.ends_with('x'));
+    // An early line break (one leading newline, then one long paragraph) must not throw away
+    // almost the whole answer: the cut falls back to the limit, not the early break.
+    let early = format!("line one\n{}", "y".repeat(host::ANSWER_MAX_CHARS * 2));
+    let cut = host::cut_answer(&early);
+    assert_eq!(cut.chars().count(), host::ANSWER_MAX_CHARS);
+    assert!(!cut.is_empty());
+    // A leading newline alone must never cut the answer to nothing.
+    let leading = format!("\n{}", "z".repeat(host::ANSWER_MAX_CHARS * 2));
+    assert!(!host::cut_answer(&leading).is_empty());
+    assert_eq!(
+        host::strip_bad_markers("Ukraine [3]; Wednesday [4]. End [5]", 0),
+        "Ukraine; Wednesday. End"
+    );
     let r = rig(
         false,
         10,
@@ -1836,7 +1861,7 @@ fn markers_outside_the_sources_are_removed_from_the_answer() {
     let (tid, _) = r.run("q");
     assert_eq!(
         r.host.turn_result(&tid).unwrap().answer.as_deref(),
-        Some("fact  and ")
+        Some("fact and")
     );
 }
 

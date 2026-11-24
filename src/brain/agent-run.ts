@@ -721,7 +721,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     const citations = citationsOf(res.answer, res.sources, r.parts);
     const summary: NonNullable<AgentTurnView['summary']> = {
       md: res.answer,
-      // Only D1 on can combine: with D1 off the label stays "Note from your MOG" (AC-2b.6).
+      // Only D1 on can combine: with D1 off the kind stays "note" (AC-2b.6; the owner rule of the answer supersedes its label: the view shows no note label).
       kind: r.crossWorkspace ? res.answerKind : 'note',
       workspaces,
       ...(citations.length > 0 ? { citations } : {}),
