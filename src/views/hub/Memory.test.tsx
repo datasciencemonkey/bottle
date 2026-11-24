@@ -8,7 +8,13 @@
 import { act } from 'react';
 import { render } from '../test-tauri';
 import { deriveTitle } from './MemoryForm';
-import { MemoryArea, type MemoryHandlers, type MemorySource } from './Memory';
+import {
+  FILE_FAILED_MESSAGE,
+  FILE_TIMEOUT_MS,
+  MemoryArea,
+  type MemoryHandlers,
+  type MemorySource,
+} from './Memory';
 import {
   asHubMemory,
   filesOf,
@@ -955,6 +961,137 @@ describe('review fixes', () => {
       'Not useful: deletes this memory',
     );
     expect(q(el, '[data-memory-heading]')?.textContent).toBe('Fake fact 1');
+  });
+});
+
+describe('layout: truncation and paths (owner review 2026-11-24)', () => {
+  const LONG = 'I just want you to know a lot of the \\ things I said about the churn mart';
+
+  it('an item title sits in its own ellipsis span; the row has the whole title as a tooltip', async () => {
+    const { src, el } = await setup();
+    const [first, ...rest] = MODEL.folders;
+    if (!first) throw new Error('no folder');
+    await src.list({ ...MODEL, folders: [{ ...first, rows: [mem(1, { title: LONG })] }, ...rest] });
+    const row = options(el)[0] as HTMLElement;
+    expect(row.getAttribute('title')).toBe(LONG);
+    const text = q(row, '.mem-row-title > .mem-row-text');
+    expect(text?.textContent).toBe(LONG);
+    // The title text is not a bare text node of the flex box (no ellipsis there).
+    const title = q(row, '.mem-row-title') as HTMLElement;
+    expect([...title.childNodes].some((n) => n.nodeType === Node.TEXT_NODE)).toBe(false);
+  });
+
+  it('a pinned title keeps the pin outside the ellipsis span', async () => {
+    const { el } = await setup();
+    const title = q(options(el)[0] as HTMLElement, '.mem-row-title') as HTMLElement;
+    expect(q(title, '.mem-pin')).not.toBeNull();
+    expect(q(title, '.mem-row-text .mem-pin')).toBeNull();
+  });
+
+  it('the path can break after each slash and before the #, and its text stays whole', async () => {
+    const { el } = await setup();
+    await click(options(el)[0] ?? null);
+    const path = q(el, '[data-memory-path]') as HTMLElement;
+    expect(path.textContent).toBe(`${TODAY}#fake-fact-1`);
+    // One break chance after each "/" but the first, and one before "#".
+    expect(path.querySelectorAll('wbr')).toHaveLength(5);
+    const chunks = path.innerHTML.split('<wbr>');
+    expect(chunks).toEqual([
+      '/',
+      'memories/',
+      'sales/',
+      'memory/',
+      '2026-11-21.md',
+      '#fake-fact-1',
+    ]);
+  });
+
+  it('a long folder name has its whole name as a tooltip', async () => {
+    const { el } = await setup();
+    expect(q(el, '.mem-tree-folder-name')?.getAttribute('title')).toBe('Sales');
+  });
+});
+
+describe('a file read with no answer (owner review 2026-11-24)', () => {
+  it('shows an error with Try again after FILE_TIMEOUT_MS, and Try again asks again', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    expect(q(el, '[data-memory-file-loading]')).not.toBeNull();
+    const asked = src.actions('memory.file').length;
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS - 1);
+    });
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    const error = q(el, '[data-memory-file-error]');
+    expect(error?.getAttribute('role')).toBe('alert');
+    expect(error?.textContent).toContain(FILE_FAILED_MESSAGE);
+    expect(q(el, '[data-memory-file-loading]')).toBeNull();
+    await click(q(el, '[data-action="retry-file"]'));
+    expect(src.actions('memory.file')).toHaveLength(asked + 1);
+    expect(src.actions('memory.file').at(-1)).toEqual({
+      action: 'memory.file',
+      mogId: MOG_A,
+      path: TODAY,
+    });
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+    expect(q(el, '[data-memory-file-loading]')).not.toBeNull();
+    // The second try is bounded too.
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS);
+    });
+    expect(q(el, '[data-memory-file-error]')).not.toBeNull();
+  });
+
+  it('a late answer still shows the file over the error', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS);
+    });
+    expect(q(el, '[data-memory-file-error]')).not.toBeNull();
+    await view(src, TODAY, '# 2026-11-21: Sales\n\n## Fake fact 1');
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+    expect(q(el, '.mem-doc-body')?.textContent).toContain('Fake fact 1');
+  });
+
+  it('an answer in time never shows the error', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await view(src, TODAY, '# 2026-11-21: Sales');
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS * 2);
+    });
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+  });
+
+  it('a new selection starts a new wait: the error of another file does not show', async () => {
+    vi.useFakeTimers();
+    const { el } = await setup();
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS);
+    });
+    expect(q(el, '[data-memory-file-error]')).not.toBeNull();
+    await click(fileButton(el, YESTERDAY));
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+    expect(q(el, '[data-memory-file-loading]')).not.toBeNull();
+  });
+
+  it('USER.md (no reader yet) never says Loading or shows the error', async () => {
+    vi.useFakeTimers();
+    const { src, el } = await setup();
+    await src.list({ ...MODEL, userItems: 2 });
+    await click(fileButton(el, '/memories/USER.md'));
+    await act(async () => {
+      vi.advanceTimersByTime(FILE_TIMEOUT_MS * 2);
+    });
+    expect(q(el, '[data-memory-file-loading]')).toBeNull();
+    expect(q(el, '[data-memory-file-error]')).toBeNull();
+    expect(q(el, '[data-memory-file]')?.textContent).toContain(
+      'Shared preferences come in a later version.',
+    );
   });
 });
 
