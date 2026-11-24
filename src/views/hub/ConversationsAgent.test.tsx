@@ -240,7 +240,9 @@ describe('agent threads in the list', () => {
     await feed([], [], v);
     const row = el.querySelector('[data-in-progress]') as HTMLElement;
     expect(row.textContent).toContain('Queued');
-    expect(row.textContent).toContain('Sends when the answer above lands');
+    expect(row.textContent).toContain('Sends next');
+    // One line in the list: no wrap onto a second one.
+    expect(row.querySelector('.conv-row-meta')?.textContent).not.toContain('answer above');
     expect(row.querySelector('[data-live-dot]')).toBeNull();
   });
 
@@ -289,26 +291,92 @@ describe('agent threads in the list', () => {
 describe('the agent thread detail', () => {
   beforeEach(() => tauri.reset());
 
-  it('a stored turn shows the question, the note and the parts behind one toggle', async () => {
+  it('[owner bug] a stored turn shows the answers open and first, the note after them as a muted block', async () => {
     const { el } = await mount();
     await feed([thread(THREAD_A, [stored('a')])]);
     const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
     expect(d.querySelector('h2')?.textContent).toBe('Stored question a?');
-    expect(d.querySelector('[data-agent-note]')?.textContent).toContain('Note from your MOG');
-    expect(d.querySelector('[data-agent-note]')?.textContent).toContain('Finance is higher.');
-    const toggle = d.querySelector<HTMLElement>('[data-action="parts"]') as HTMLElement;
-    expect(toggle.textContent).toBe('From each workspace');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    const list = d.querySelector<HTMLElement>(
-      `#${toggle.getAttribute('aria-controls')}`,
-    ) as HTMLElement;
-    expect(list.hidden).toBe(true);
-    await click(toggle);
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const titles = [...d.querySelectorAll('h3.agent-part-title')].map((h) => h.textContent);
+    expect(titles).toEqual(['Answer from Sales', 'Answer from Finance']);
+    const list = d.querySelector<HTMLElement>('.agent-parts') as HTMLElement;
     expect(list.hidden).toBe(false);
     expect(list.textContent).toContain('Answer 1 from a workspace.');
-    expect(list.querySelectorAll('[data-agent-chip]').length).toBeGreaterThanOrEqual(2);
     expect(list.textContent).toContain('$1M bookings');
+    const note = d.querySelector('[data-agent-note]') as HTMLElement;
+    expect(note.className).toContain('agent-note--after');
+    expect(note.textContent).toContain('Note from your MOG');
+    expect(note.textContent).toContain('Finance is higher.');
+    expect(list.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('[P2-8] the answers have a toggle with a chevron and a label that says what it does', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    const toggle = d.querySelector<HTMLElement>('[data-action="parts"]') as HTMLElement;
+    expect(toggle.textContent).toBe('Hide answers');
+    expect(toggle.querySelector('svg')).not.toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const list = d.querySelector<HTMLElement>(`#${toggle.getAttribute('aria-controls')}`);
+    await click(toggle);
+    expect(toggle.textContent).toBe('Answers from 2 workspaces');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(list?.hidden).toBe(true);
+  });
+
+  it('[P2-6] a stored part has its workspace colour stripe', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])]);
+    const parts = [...el.querySelectorAll<HTMLElement>('[data-agent-part]')];
+    expect(parts).toHaveLength(2);
+    for (const p of parts) expect(p.style.getPropertyValue('--agent-ws-color')).toMatch(/^#|rgb/);
+    expect(parts[0]?.style.getPropertyValue('--agent-ws-color')).not.toBe(
+      parts[1]?.style.getPropertyValue('--agent-ws-color'),
+    );
+  });
+
+  it('[P2-7] two parts of one workspace show one chip and no key clash', async () => {
+    const { el } = await mount();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await feed([
+      thread(THREAD_A, [
+        stored('a', {
+          parts: [
+            part(1),
+            part(2, { requestId: '62222222-3333-4444-8555-0000000000ff', workspace: { ...sales } }),
+          ],
+        }),
+      ]),
+    ]);
+    const meta = el.querySelector('.conv-exchange .conv-chips') as HTMLElement;
+    expect(meta.querySelectorAll('[data-agent-chip]')).toHaveLength(1);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('[P3-12] a failed turn with one failed part shows the failure once', async () => {
+    const { el } = await mount();
+    await feed([
+      thread(THREAD_A, [
+        stored('a', {
+          status: 'failed',
+          summaryMd: '',
+          parts: [part(2, { status: 'failed', answerMd: '', keyNumbers: [] })],
+        }),
+      ]),
+    ]);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.querySelectorAll('.agent-tag')).toHaveLength(0);
+    expect(d.querySelector('.conv-meta .conv-chips')).toBeNull();
+    expect(d.textContent).toContain('Genie could not answer this question.');
+  });
+
+  it('[P3-13] a stopped turn with no parts and no note says what happened', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a', { status: 'stopped', summaryMd: '', parts: [] })])]);
+    expect(el.querySelector('[data-conversation-detail]')?.textContent).toContain(
+      'You stopped this question before an answer came.',
+    );
   });
 
   it('a turn with no note shows its parts open, with no toggle', async () => {
@@ -337,6 +405,21 @@ describe('the agent thread detail', () => {
     expect([...d.querySelectorAll('h2')].map((h) => h.textContent)).toEqual(['First?', 'Second?']);
     expect(d.textContent).toContain('Genie could not answer this question.');
     expect(d.getAttribute('aria-labelledby')).toBe(d.querySelector('h2')?.id);
+  });
+
+  it('[M4] a session open for another thread does not say "This session ended"', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')]), thread(THREAD_B, [stored('b')])], [], {
+      ...view({ session: SESSION }),
+      earlier: [memTurn('e')],
+      threads: [{ turnId: T('e'), threadId: THREAD_B }],
+    });
+    // THREAD_A is selected (newest first): it is not in the open session.
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.getAttribute('data-agent-thread')).toBe(THREAD_A);
+    expect(d.querySelector('[data-agent-ended]')).toBeNull();
+    expect(d.textContent).not.toContain('This session ended');
+    expect(d.querySelector('[data-agent-new-session]')).toBeNull();
   });
 
   it('an ended session says so, with no New session button', async () => {
@@ -698,7 +781,7 @@ describe('Delete, Clear failed and Undo', () => {
     const { el } = await mount();
     await feed([], [genieRow(1)]);
     expect(q(el, '[data-action="delete"]')?.getAttribute('title')).toBe(
-      'Deletes it from this Mac. The Genie conversation stays in Genie.',
+      "Deletes it from this Mac. The Genie conversation stays in Genie until you Wipe or Forget with 'Also delete Genie conversations'.",
     );
     expect(q(el, '.conv-toast-live')?.getAttribute('role')).toBe('status');
   });
@@ -726,5 +809,150 @@ describe('the hub has no Agent area (AC-C6)', () => {
     expect(payloads(HUB_SCOPE).filter((p) => p['action'] === 'agent.ready')).toEqual([
       { action: 'agent.ready' },
     ]);
+  });
+});
+
+describe('review fixes (needs you, queued only, toast, composer, list line)', () => {
+  beforeEach(() => tauri.reset());
+
+  it('[P1-1] a thread that needs the user shows "Needs you", not "Failed", and Clear failed keeps it', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])], [], {
+      ...view({ session: SESSION }),
+      earlier: [memTurn('e', { state: 'needs_you', calls: [], parts: [] })],
+      threads: [{ turnId: T('e'), threadId: THREAD_B }],
+    });
+    const row = options(el).find((o) => o.getAttribute('data-request') === `a:${THREAD_B}`);
+    expect(row?.textContent).toContain('Needs you');
+    expect(row?.textContent).not.toContain('Failed');
+    expect(row?.querySelector('.conv-status--needs')).not.toBeNull();
+    expect(q(el, '[data-action="clear-failed"]')).toBeNull();
+  });
+
+  it('[P1-4] a thread with only a queued turn has a heading, an honest line and a way to remove it', async () => {
+    const { el } = await mount();
+    const v = view({
+      session: SESSION,
+      waiting: [memTurn('b', { state: 'queued', position: 1, calls: [] })],
+      threads: [{ turnId: T('b'), threadId: THREAD_A }],
+    });
+    await feed([], [], v);
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    const h = d.querySelector('h2') as HTMLElement;
+    expect(h.textContent).toBe('Compare b?');
+    expect(d.getAttribute('aria-labelledby')).toBe(h.id);
+    expect(d.textContent).toContain('Sends after the current question');
+    expect(d.textContent).not.toContain('answer above');
+    await click(d.querySelector(`[data-agent-remove="${T('b')}"]`));
+    expect(payloads(HUB_SCOPE)).toContainEqual({ action: 'agent.remove_queued', turnId: T('b') });
+  });
+
+  it('[P1-4] a queued turn under an answer keeps "Sends when the answer above lands"', async () => {
+    const { el } = await mount();
+    await feed([], [], running);
+    expect(el.querySelector('[data-agent-waiting]')?.textContent).toContain(
+      'Sends when the answer above lands',
+    );
+  });
+
+  it('[P1-3] the Undo toast sits in the list column, never over the composer', async () => {
+    const { el } = await mount();
+    await feed([], [genieRow(1), genieRow(2)]);
+    await click(q(el, '[data-action="delete"]'));
+    const toast = q(el, '[data-conversations-undo]') as HTMLElement;
+    expect(toast.closest('.conv-listcol')).not.toBeNull();
+    expect(toast.closest('[data-conversation-detail]')).toBeNull();
+  });
+
+  it('[P2-9] Delete sits in the session row of an agent thread, with no bar of its own', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])], [], view());
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.querySelector('.conv-detail-bar')).toBeNull();
+    expect(d.querySelector('.agent-session-row [data-action="delete"]')).not.toBeNull();
+  });
+
+  it('[P2-10] after Clear failed empties the list the focus goes to the empty state', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a', { status: 'failed', summaryMd: '', parts: [] })])]);
+    await click(q(el, '[data-action="clear-failed"]'));
+    const empty = q(el, '.conv-message') as HTMLElement;
+    expect(empty.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(empty);
+    // The toast stays reachable.
+    expect(q(el, '[data-conversations-undo]')).not.toBeNull();
+  });
+
+  it('[P3-16] Clear failed is a quiet secondary action', async () => {
+    const { el } = await mount();
+    await feed([], [genieRow(1, { status: 'failed', answerMd: '' })]);
+    expect(q(el, '[data-action="clear-failed"]')?.className).toContain('text-muted-foreground');
+  });
+
+  it('[P3-14] the agent composer and the not-ready Settings button match the Genie composer', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])], [], {
+      ...view({ genieCode: { ...READY, binary: 'not_installed' } }),
+    });
+    expect(q(el, '[data-agent-open-settings]')?.className).toContain('border');
+    await feed([], [], { ...view(), earlier: [memTurn('e', { state: 'needs_you' })] });
+  });
+
+  it('[LOW] the composer stops at 1000 characters and says so; nothing is lost silently', async () => {
+    const { el } = await mount();
+    await feed([thread(THREAD_A, [stored('a')])], [], view());
+    const field = el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(field.maxLength).toBe(1000);
+    expect(q(el, '[data-agent-too-long]')).toBeNull();
+    await act(async () => type(field, 'x'.repeat(1000)));
+    expect(q(el, '[data-agent-too-long]')?.textContent).toBe(
+      'A question can have up to 1000 characters.',
+    );
+    await click(el.querySelector('button[type="submit"]'));
+    const sent = payloads(CONVERSATIONS_VIEW_ID).find((p) => p['action'] === 'agent.thread_send');
+    expect((sent?.['question'] as string).length).toBe(1000);
+  });
+
+  it('[owner bug] a finished agent thread lists its first answer line as the row hint, never the note', async () => {
+    const { el } = await mount();
+    await feed([
+      thread(THREAD_A, [
+        stored('a', {
+          summaryMd: 'Its findings were shown directly to you.',
+          parts: [
+            part(1, { status: 'failed', answerMd: '' }),
+            part(2, { answerMd: '\n## Churn fell 4%\nMore.' }),
+          ],
+        }),
+      ]),
+    ]);
+    const row = options(el)[0] as HTMLElement;
+    expect(row.getAttribute('title')).toBe('Churn fell 4%');
+  });
+
+  it('[owner bug] a turn of this session shows its workspace answers open and first in the detail', async () => {
+    const { el } = await mount();
+    await feed([], [], {
+      ...view({ session: SESSION }),
+      earlier: [
+        memTurn('a', {
+          summary: { md: 'Shown directly to you.', kind: 'note', workspaces: [] },
+          parts: [
+            {
+              callId: 'c-00000001',
+              workspace: fin,
+              sections: [{ id: 'answer', md: 'Finance churn fell.' }],
+              notShownToAgent: true,
+              folded: true,
+            },
+          ],
+        }),
+      ],
+      threads: [{ turnId: T('a'), threadId: THREAD_A }],
+    });
+    const d = el.querySelector('[data-conversation-detail]') as HTMLElement;
+    expect(d.querySelector('.agent-part-title')?.textContent).toBe('Answer from Finance');
+    expect(d.textContent).toContain('Finance churn fell.');
+    expect(d.querySelector('[data-action="fold"]')).toBeNull();
   });
 });

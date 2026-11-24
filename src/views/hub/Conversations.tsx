@@ -28,6 +28,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import type { HubAgentView } from '../../shared/hub-agent';
 import { MEMORY_UNDO_MS } from '../../shared/hub-memory';
@@ -58,6 +59,7 @@ import {
   inProgress,
   isFailedThread,
   liveMeta,
+  threadLine,
   threadOutcome,
   workspaceNames,
   type AgentEntry,
@@ -406,26 +408,36 @@ function ComposerSlot({
 }
 
 /** The Delete button at the top right of a detail. A thread in progress has none: stop it first. */
-function DetailToolbar({ onDelete, hint }: { onDelete: () => void; hint: string }) {
-  return (
-    <div className="conv-toolbar conv-detail-bar">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        data-action="delete"
-        title={hint}
-        aria-label="Delete conversation"
-        onClick={onDelete}
-      >
-        Delete
-      </Button>
-    </div>
+function DetailToolbar({
+  onDelete,
+  hint,
+  bare = false,
+}: {
+  onDelete: () => void;
+  hint: string;
+  /** No bar around the button: an agent thread puts it in its session row. */
+  bare?: boolean;
+}) {
+  const button = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-action="delete"
+      title={hint}
+      aria-label="Delete conversation"
+      onClick={onDelete}
+    >
+      Delete
+    </Button>
   );
+  return bare ? button : <div className="conv-toolbar conv-detail-bar">{button}</div>;
 }
 
-const GENIE_DELETE_HINT = 'Deletes it from this Mac. The Genie conversation stays in Genie.';
-const AGENT_DELETE_HINT = 'Deletes it from this Mac. The Genie conversations stay in Genie.';
+const DELETE_HINT_TAIL =
+  "stays in Genie until you Wipe or Forget with 'Also delete Genie conversations'.";
+const GENIE_DELETE_HINT = `Deletes it from this Mac. The Genie conversation ${DELETE_HINT_TAIL}`;
+const AGENT_DELETE_HINT = `Deletes it from this Mac. The Genie conversations ${DELETE_HINT_TAIL.replace('stays', 'stay')}`;
 
 /**
  * The thread detail (#145, #103): every exchange that shares one Genie `conversationId`, oldest
@@ -484,9 +496,25 @@ function Detail({
   );
 }
 
-function Message({ title, line, action }: { title: string; line?: string; action?: ReactNode }) {
+function Message({
+  title,
+  line,
+  action,
+  focusRef,
+}: {
+  title: string;
+  line?: string;
+  action?: ReactNode;
+  /** The empty state takes the focus when a Clear failed emptied the list. */
+  focusRef?: RefObject<HTMLDivElement | null>;
+}) {
   return (
-    <div className="conv-message" role="status">
+    <div
+      ref={focusRef}
+      className="conv-message"
+      role="status"
+      {...(focusRef ? { tabIndex: -1 } : {})}
+    >
       <p className="conv-message-title">{title}</p>
       {line && <p className="conv-message-line">{line}</p>}
       {action}
@@ -517,7 +545,8 @@ function AgentRowBody({ entry }: { entry: AgentEntry }) {
         <span className="conv-row-q">{firstQuestion(entry)}</span>
         <span className="conv-row-meta">
           {m.running && <span className="conv-live-dot" data-live-dot aria-hidden="true" />}
-          {m.pill && <span className="agent-pill">{m.pill}</span>} {m.text}
+          {m.pill && <span className="agent-pill">{m.pill}</span>}
+          {m.text}
         </span>
       </>
     );
@@ -536,8 +565,16 @@ function AgentRowBody({ entry }: { entry: AgentEntry }) {
         {outcome !== 'answered' && (
           <>
             {' · '}
-            <span className={outcome === 'failed' ? 'conv-status--failed' : undefined}>
-              {outcome === 'failed' ? 'Failed' : 'Stopped'}
+            <span
+              className={
+                outcome === 'failed'
+                  ? 'conv-status--failed'
+                  : outcome === 'needs_you'
+                    ? 'conv-status--needs'
+                    : undefined
+              }
+            >
+              {outcome === 'failed' ? 'Failed' : outcome === 'needs_you' ? 'Needs you' : 'Stopped'}
             </span>
           </>
         )}
@@ -629,6 +666,7 @@ export function Conversations({
     return { running: run, entries: [...run, ...rest] };
   }, [allRows, agentList, hidden]);
   const selected = entries.find((e) => e.id === selectedId) ?? entries[0];
+  const emptyRef = useRef<HTMLDivElement>(null);
   const selectedThread = useMemo(
     () => (selected?.row ? threadOf(allRows, selected.row) : undefined),
     [allRows, selected],
@@ -719,6 +757,12 @@ export function Conversations({
     startDelete([selected.deleteKey], 'Conversation deleted', entries[i + 1] ?? entries[i - 1]);
   };
 
+  // Clear failed emptied the list: the focus goes to the empty state, not to the body.
+  const emptied = list !== null && entries.length === 0 && toast !== undefined;
+  useEffect(() => {
+    if (emptied) emptyRef.current?.focus();
+  }, [emptied]);
+
   const clearFailed = () => {
     const keys = failedEntries.map((e) => e.deleteKey);
     const n = keys.length;
@@ -772,6 +816,9 @@ export function Conversations({
         aria-selected={isSel}
         data-request={r.id}
         {...(r.inProgress ? { 'data-in-progress': '' } : {})}
+        {...(r.agent && !r.inProgress && threadLine(r.agent) !== ''
+          ? { title: threadLine(r.agent) }
+          : {})}
         className="conv-row"
         onClick={() => {
           select(r);
@@ -804,6 +851,28 @@ export function Conversations({
     );
   };
 
+  // The Undo toast sits in the list column, so it never covers the composer (P1-3). With no list
+  // column (the empty and error states) it sits at the foot of the area.
+  const toastLive = (
+    <div role="status" className="conv-toast-live">
+      {toast !== undefined && (
+        <motion.div
+          key={toast.key}
+          className="conv-toast"
+          data-conversations-undo
+          initial={reduce ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <span>{toast.text}</span>
+          <Button type="button" variant="link" size="sm" data-action="undo" onClick={undoDelete}>
+            Undo
+          </Button>
+        </motion.div>
+      )}
+    </div>
+  );
+  let inListColumn = false;
   let body;
   if (list === null && timedOut) {
     body = (
@@ -838,12 +907,17 @@ export function Conversations({
     );
   } else if (entries.length === 0) {
     body = (
-      <Message title="No conversations yet." line="Hold Right Option and tap G to ask Genie." />
+      <Message
+        title="No conversations yet."
+        line="Hold Right Option and tap G to ask Genie."
+        focusRef={emptyRef}
+      />
     );
   } else {
     const detailKey = selected?.row
       ? selected.row.conversationId || selected.row.requestId
       : selected?.id;
+    inListColumn = true;
     body = (
       <div className="conv-panes">
         <div className="conv-listcol">
@@ -853,6 +927,7 @@ export function Conversations({
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="text-muted-foreground hover:text-foreground"
                 data-action="clear-failed"
                 onClick={clearFailed}
               >
@@ -886,6 +961,7 @@ export function Conversations({
               </div>
             ))}
           </div>
+          {toastLive}
         </div>
         {selected?.agent ? (
           <AgentDetail
@@ -897,7 +973,7 @@ export function Conversations({
             focusRef={detailRef}
             toolbar={
               selected.inProgress ? null : (
-                <DetailToolbar onDelete={deleteSelected} hint={AGENT_DELETE_HINT} />
+                <DetailToolbar bare onDelete={deleteSelected} hint={AGENT_DELETE_HINT} />
               )
             }
             // The composer unmounts with the area, so its `thread.active_agent` announcement
@@ -942,23 +1018,7 @@ export function Conversations({
       hidden={!active}
     >
       {body}
-      <div role="status" className="conv-toast-live">
-        {toast !== undefined && (
-          <motion.div
-            key={toast.key}
-            className="conv-toast"
-            data-conversations-undo
-            initial={reduce ? false : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <span>{toast.text}</span>
-            <Button type="button" variant="link" size="sm" data-action="undo" onClick={undoDelete}>
-              Undo
-            </Button>
-          </motion.div>
-        )}
-      </div>
+      {!inListColumn && toastLive}
     </section>
   );
 }

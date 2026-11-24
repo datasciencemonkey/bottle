@@ -279,6 +279,28 @@
   overflow-wrap: anywhere;
 }
 
+/* "Answer from <workspace>": the heading of an answer that comes first. */
+.agent-part-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-2);
+  margin: 0;
+  font-size: var(--mog-text-sm);
+  font-weight: var(--mog-weight-semibold);
+}
+
+/* The note of the MOG after the answers: one small muted block, not the answer itself. */
+.agent-note--after {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mog-text-muted);
+}
+
+.agent-note--after .agent-note-body {
+  font-size: var(--mog-text-xs);
+}
+
 .agent-keys {
   display: flex;
   flex-wrap: wrap;
@@ -322,6 +344,22 @@
 
 .agent-parts[hidden] {
   display: none;
+}
+
+/* The toggle of the answers in Conversations: a chevron, and room above and below. */
+.agent-fold--chevron {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  margin-bottom: var(--mog-space-2);
+}
+
+.agent-fold--chevron svg {
+  transition: transform 120ms var(--mog-ease-out);
+}
+
+.conv-exchange .agent-parts + .agent-note {
+  margin-top: var(--mog-space-3);
 }
 
 .agent-foot {
@@ -372,8 +410,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-turn .agent-headline::before,
-  .agent-call .agent-chip-dot {
+  /* The same selectors as the rules above: a weaker one would lose on specificity. */
+  .agent-turn:is([data-state='planning'], [data-state='running'], [data-state='slow'])
+    .agent-headline::before,
+  .agent-call[data-state='asking'] .agent-chip-dot {
     animation: none;
   }
 }
@@ -390,6 +430,13 @@
   justify-content: space-between;
   gap: var(--mog-space-3);
   margin-bottom: var(--mog-space-4);
+}
+
+.agent-session-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--mog-space-2);
 }
 
 .agent-session {

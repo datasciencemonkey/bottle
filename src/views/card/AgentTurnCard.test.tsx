@@ -7,6 +7,7 @@ import {
   AgentTurnCard,
   callLabel,
   clock,
+  firstAnswerLine,
   tokensText,
   turnHeadline,
   FROM_EARLIER_COPY,
@@ -44,7 +45,7 @@ const view = (o: Partial<AgentTurnView> = {}): AgentTurnView => ({
 });
 const chips = [
   { id: `agent-stop:${T}`, label: 'Stop' },
-  { id: `agent-open:${T}`, label: 'Open in Agent' },
+  { id: `agent-open:${T}`, label: 'Open in Conversations' },
 ];
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
 
@@ -85,7 +86,7 @@ describe('agent turn text', () => {
 });
 
 describe('AgentTurnCard', () => {
-  it('shows one row for each call, "n of N", Stop and Open in Agent', async () => {
+  it('shows one row for each call, "n of N", Stop and Open in Conversations', async () => {
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
     expect(el.querySelectorAll('[data-agent-call]')).toHaveLength(2);
     expect(el.querySelector('[data-agent-headline]')?.textContent).toContain('3 of 10');
@@ -125,35 +126,103 @@ describe('AgentTurnCard', () => {
     expect(el.querySelector(`[data-chip="agent-stop:${T}"]`)?.textContent).toBe('Remove');
   });
 
-  it('shows the note, the cited part, a fold for the rest, and the earlier tag', async () => {
-    const part = (id: string, o = {}) => ({
-      callId: id,
-      workspace: fin,
-      sections: [{ id: 'answer' as const, md: `Answer ${id}` }],
-      ...o,
-    });
+  const partOf = (id: string, o = {}) => ({
+    callId: id,
+    workspace: fin,
+    sections: [{ id: 'answer' as const, md: `Answer ${id}` }],
+    ...o,
+  });
+
+  it('with a combined note: the note first, the cited part, a fold for the rest, the earlier tag', async () => {
     const t = view({
       state: 'done',
       tokens: 41_000,
-      summary: { md: 'Finance is higher.', kind: 'note', workspaces: [fin] },
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
       parts: [
-        part('c-00000001'),
-        part('c-00000003', { folded: true }),
-        part('c-00000004', { fromEarlier: true, notShownToAgent: true }),
+        partOf('c-00000001'),
+        partOf('c-00000003', { folded: true }),
+        partOf('c-00000004', { fromEarlier: true }),
       ],
     });
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
-    expect(el.querySelector('[data-agent-note]')?.textContent).toContain('Note from your MOG');
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    expect(note.textContent).toContain('Note from your MOG');
+    expect(note.className).not.toContain('agent-note--after');
+    // The note comes before the parts.
+    const parts = el.querySelector('.agent-parts') as HTMLElement;
+    expect(note.compareDocumentPosition(parts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(el.querySelector('[data-agent-footer]')?.textContent).toBe(
       'Planned by Genie Code in Sales · 41k tokens',
     );
     expect(el.textContent).toContain(FROM_EARLIER_COPY);
-    expect(el.textContent).toContain(NOT_SHOWN_COPY);
+    expect(el.querySelector('.agent-part-title')).toBeNull();
     const fold = el.querySelector<HTMLButtonElement>('[data-action="fold"]');
     expect(fold?.textContent).toBe('1 more answer');
     expect(fold?.getAttribute('aria-expanded')).toBe('false');
     await click(fold);
     expect(fold?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('[owner bug] with the cross-workspace answer off the workspace answers come first, open, each under "Answer from <workspace>"', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [] },
+      parts: [
+        partOf('c-00000001', { workspace: sales }),
+        // No source cites it, so it was folded before: it shows now, and it says it is not the agent's.
+        partOf('c-00000003', { folded: true, notShownToAgent: true }),
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const titles = [...el.querySelectorAll('.agent-part-title')].map((n) => n.textContent);
+    expect(titles).toEqual(['Answer from Sales', 'Answer from Finance']);
+    expect(el.textContent).toContain('Answer c-00000001');
+    expect(el.textContent).toContain('Answer c-00000003');
+    // No fold hides an answer, and the parts list is not hidden.
+    expect(el.querySelector('[data-action="fold"]')).toBeNull();
+    expect((el.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
+    // The note comes after the answers, as one small muted block.
+    const note = el.querySelector('[data-agent-note]') as HTMLElement;
+    expect(note.className).toContain('agent-note--after');
+    const parts = el.querySelector('.agent-parts') as HTMLElement;
+    expect(parts.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(el.textContent).toContain(NOT_SHOWN_COPY);
+  });
+
+  it('[owner bug] with no summary at all the answers show open and first', async () => {
+    const t = view({
+      state: 'done',
+      parts: [partOf('c-00000001', { workspace: sales, folded: true })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Sales');
+    expect(el.querySelector('[data-agent-note]')).toBeNull();
+    expect((el.querySelector('.agent-parts') as HTMLElement).hidden).toBe(false);
+  });
+
+  it('[owner bug] a combined note with a part the agent never saw still shows the answers first', async () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Finance is higher.', kind: 'combined', workspaces: [fin] },
+      parts: [partOf('c-00000001', { notShownToAgent: true })],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    expect(el.querySelector('.agent-part-title')?.textContent).toBe('Answer from Finance');
+  });
+
+  it('firstAnswerLine takes the first line of the first answer, never the note', () => {
+    const t = view({
+      state: 'done',
+      summary: { md: 'Its findings were shown directly to you.', kind: 'note', workspaces: [] },
+      parts: [
+        { callId: 'c-00000001', workspace: fin, sections: [] },
+        partOf('c-00000002', {
+          sections: [{ id: 'answer' as const, md: '\n## Churn fell 4%\nMore detail.' }],
+        }),
+      ],
+    });
+    expect(firstAnswerLine(t)).toBe('Churn fell 4%');
+    expect(firstAnswerLine(view())).toBe('');
   });
 
   it('[P1-7] a finished card fades for 300 ms after 20 s, then closes; Close closes at once', async () => {
@@ -209,7 +278,7 @@ describe('AgentTurnCard', () => {
         turn={view({ state: 'needs_you', notice: 'Your sign-in expired.' })}
         chips={[
           { id: `agent-settings:${T}`, label: 'Open Settings' },
-          { id: `agent-open:${T}`, label: 'Open in Agent' },
+          { id: `agent-open:${T}`, label: 'Open in Conversations' },
         ]}
       />,
     );

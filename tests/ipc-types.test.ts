@@ -513,7 +513,7 @@ const agentTyped: Record<string, unknown> = {
       { id: `agent-stop:${TURN_A}`, label: 'Stop' },
       { id: 'agent-more:op-1', label: 'Ask more' },
       { id: `agent-resend:${TURN_A}`, label: 'Send again' },
-      { id: `agent-open:${TURN_A}`, label: 'Open in Agent' },
+      { id: `agent-open:${TURN_A}`, label: 'Open in Conversations' },
     ],
     agentTurn: AGENT_TURN_VIEW,
   } satisfies CardUpdate,

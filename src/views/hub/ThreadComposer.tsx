@@ -52,6 +52,9 @@ const MAX_FIELD_PX = 136;
 
 /** The inline line when the view itself cannot reach the brain (a fixed Bottle text). */
 const SEND_FAILED = 'Bottle could not send this question.';
+/** The most characters of one agent question (`asAgentThreadSendAction`). */
+const QUESTION_MAX = 1000;
+const QUESTION_TOO_LONG = 'A question can have up to 1000 characters.';
 
 /** Appendix-style hint under the field: the voice route into this same thread (item 4). */
 const VOICE_HINT = 'Or hold Right Option and tap G';
@@ -314,7 +317,7 @@ export function ThreadComposer({ thread, now = Date.now }: ThreadComposerProps) 
             drafts.set(conversationId, e.target.value);
           }}
           onKeyDown={onKeyDown}
-          placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up…'}
+          placeholder={blocked ? 'Sign in to ask a follow-up' : 'Ask a follow-up'}
           aria-label="Ask a follow-up in this conversation"
           readOnly={sending}
           disabled={blocked}
@@ -451,6 +454,15 @@ export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
           {SEND_FAILED}
         </p>
       )}
+      {text.length >= QUESTION_MAX && (
+        <p
+          className="thread-composer-status mb-2 text-sm text-muted-foreground"
+          role="status"
+          data-agent-too-long
+        >
+          {QUESTION_TOO_LONG}
+        </p>
+      )}
       <form
         className="thread-composer-row flex items-end gap-2"
         onSubmit={(e: FormEvent) => {
@@ -462,6 +474,8 @@ export function AgentComposer({ threadId, mogId, agent }: AgentComposerProps) {
           className="thread-composer-field flex-1 overflow-y-auto"
           value={text}
           ref={fieldRef}
+          // The brain refuses a question over 1000 characters: the field stops at the limit.
+          maxLength={QUESTION_MAX}
           onChange={(e) => {
             setText(e.target.value);
             drafts.set(key, e.target.value);

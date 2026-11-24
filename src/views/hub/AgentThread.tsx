@@ -5,12 +5,13 @@
  * one `AgentAction` for each click with `view_emit`.
  *
  * - Header: "Genie Code in sales · started 10:42 · 3 questions · 124k tokens" and [New session],
- *   or "This session ended. A reply starts a new session." when the thread is not in the live session.
- * - Turns, oldest first: the question, a meta line, "Note from your MOG" and "From each workspace".
+ *   or "This session ended. A reply starts a new session." when no session is open at all.
+ * - Turns, oldest first: the question, a meta line, the answer of each workspace ("Answer from
+ *   sales", open) and then "Note from your MOG" as one small muted block.
  * - The live turn is the card's `TurnBody` with [Stop]. Waiting turns show a muted row with [×].
  * - The in-memory turn wins over the stored turn with the same turn id.
  */
-import { XIcon } from 'lucide-react';
+import { ChevronRightIcon, XIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import {
   useCallback,
@@ -39,6 +40,9 @@ import {
   TurnBody,
   WAITING_COPY,
   WsChip,
+  answerFromText,
+  firstAnswerLine,
+  stripe,
   tokensText,
   useNow,
 } from '../card/AgentTurnCard';
@@ -90,28 +94,69 @@ export interface AgentEntry {
   inSession: boolean;
 }
 
-export type Outcome = 'answered' | 'failed' | 'stopped';
+export type Outcome = 'answered' | 'failed' | 'stopped' | 'needs_you';
 
 const turnIdOf = (uuid: string) => uuid.replaceAll('-', '').toLowerCase();
 
 export const inProgress = (e: AgentEntry): boolean => e.live !== undefined || e.waiting.length > 0;
 
+/**
+ * A turn answered when its own status says so or when any Genie call of it answered: a stopped
+ * or timed-out turn can still hold one answer. This is the rule of the brain's `failed` flag for
+ * Clear failed (`hub-conversations-wiring.ts`: a `completed` turn row or part); a test keeps the
+ * two equal.
+ */
 const memOutcome = (t: AgentTurnView): Outcome =>
-  t.state === 'done' ? 'answered' : t.state === 'stopped' ? 'stopped' : 'failed';
+  t.state === 'done' || t.calls.some((c) => c.state === 'ready')
+    ? 'answered'
+    : t.state === 'needs_you'
+      ? 'needs_you'
+      : t.state === 'stopped'
+        ? 'stopped'
+        : 'failed';
+
+const storedOutcome = (t: AgentThreadTurn): Outcome =>
+  t.status === 'answered' || t.parts.some((p) => p.status === 'answered') ? 'answered' : t.status;
 
 const outcomeOf = (t: ShownTurn): Outcome =>
-  t.kind === 'stored' ? t.turn.status : memOutcome(t.turn);
+  t.kind === 'stored' ? storedOutcome(t.turn) : memOutcome(t.turn);
 
 /** "Stopped" when the last turn stopped, "Failed" when no turn answered, else "answered". */
 export function threadOutcome(e: AgentEntry): Outcome {
   const outcomes = e.turns.map(outcomeOf);
-  if (outcomes.at(-1) === 'stopped') return 'stopped';
+  const last = outcomes.at(-1);
+  if (last === 'stopped' || last === 'needs_you') return last;
   return outcomes.includes('answered') ? 'answered' : 'failed';
 }
 
-/** A finished thread with no answered turn: what Clear failed removes. */
-export const isFailedThread = (e: AgentEntry): boolean =>
-  !inProgress(e) && e.turns.length > 0 && !e.turns.map(outcomeOf).includes('answered');
+/**
+ * A finished thread with no answered turn and no turn that waits for the user: what Clear failed
+ * removes. A thread that needs the user (a sign-in) is not failed: Settings fixes it.
+ */
+export const isFailedThread = (e: AgentEntry): boolean => {
+  if (inProgress(e) || e.turns.length === 0) return false;
+  const outcomes = e.turns.map(outcomeOf);
+  return !outcomes.includes('answered') && !outcomes.includes('needs_you');
+};
+
+/** The first line of the first answered part of the newest turn that has one, or ''. */
+export function turnLine(t: ShownTurn): string {
+  if (t.kind === 'mem') return firstAnswerLine(t.turn);
+  for (const p of t.turn.parts) {
+    const line = p.status === 'answered' ? p.answerMd.split('\n').find((l) => l.trim() !== '') : '';
+    if (line !== undefined && line !== '') return line.replace(/^[#>*\-\s]+/, '').trim();
+  }
+  return '';
+}
+
+/** One line for a list: the answer of the newest turn that has one (never the agent note). */
+export function threadLine(e: AgentEntry): string {
+  for (const t of [...e.turns].reverse()) {
+    const line = turnLine(t);
+    if (line !== '') return line;
+  }
+  return '';
+}
 
 export function firstQuestion(e: AgentEntry): string {
   const t = e.turns[0] ?? (e.live ? { kind: 'mem' as const, turn: e.live } : undefined);
@@ -198,7 +243,7 @@ export function buildAgentEntries(
 /** The meta line of an "In progress" row: a pill or a state, with a live dot while it runs. */
 export function liveMeta(e: AgentEntry): { pill?: string; text: string; running: boolean } {
   const t = e.live;
-  if (!t) return { pill: QUEUED_LABEL, text: WAITING_COPY, running: false };
+  if (!t) return { pill: QUEUED_LABEL, text: 'Sends next', running: false };
   if (t.state === 'slow') return { text: SLOW_COPY, running: true };
   if (t.state === 'running' && t.calls.length > 0)
     return { text: `Asking · ${t.used} of ${t.budget} Genie calls`, running: true };
@@ -297,14 +342,17 @@ export function NewSessionConfirm({
   );
 }
 
-export function WaitingRow({ turn }: { turn: AgentTurnView }) {
+/** The copy of a waiting turn: "Sends when the answer above lands" only with an answer above. */
+export const SENDS_NEXT_COPY = 'Sends after the current question';
+
+export function WaitingRow({ turn, copy = WAITING_COPY }: { turn: AgentTurnView; copy?: string }) {
   return (
     <li className="agent-queued-row" data-agent-waiting={turn.turnId}>
       <span className="conv-queued-text">
         <span className="agent-waiting-q" title={turn.question}>
           {turn.question}
         </span>
-        <span className="agent-sub">{WAITING_COPY}</span>
+        <span className="agent-sub">{copy}</span>
       </span>
       <button
         type="button"
@@ -341,7 +389,14 @@ const openPartLink = (url: string, requestId: string) =>
     requestId,
   }).catch(() => undefined);
 
-function StoredPart({ part }: { part: AgentThreadPart }) {
+function StoredPart({
+  part,
+  turnFailed,
+}: {
+  part: AgentThreadPart;
+  /** The turn shows "Failed" already: the part adds no second tag. */
+  turnFailed: boolean;
+}) {
   const trust = useMemo(
     () => ({ profileHost: part.workspaceHost, allowedAppUrls: [] as string[] }),
     [part.workspaceHost],
@@ -349,10 +404,17 @@ function StoredPart({ part }: { part: AgentThreadPart }) {
   const url = openInDatabricksUrl(part.deepLink, part.workspaceHost);
   const failed = part.status === 'failed';
   return (
-    <li className="agent-part" data-agent-part={part.requestId}>
+    <li className="agent-part" data-agent-part={part.requestId} style={stripe(part.workspace)}>
       <div className="agent-part-head">
-        <WsChip chip={part.workspace} />
-        {failed && <span className="agent-tag">Failed</span>}
+        {part.answerMd ? (
+          <h3 className="agent-part-title">
+            <span className="agent-chip-dot" aria-hidden="true" />
+            {answerFromText(part.workspace.name)}
+          </h3>
+        ) : (
+          <WsChip chip={part.workspace} />
+        )}
+        {failed && !turnFailed && <span className="agent-tag">Failed</span>}
       </div>
       {part.answerMd ? (
         <div
@@ -399,7 +461,12 @@ function StoredPart({ part }: { part: AgentThreadPart }) {
   );
 }
 
-/** A turn read from the store: the question, the meta line, the note and the folded parts. */
+/**
+ * A turn read from the store: the question, the meta line, the answer of each workspace (open,
+ * first) and the note of the MOG after them. The stored turn does not say whether the agent saw
+ * every answer, so the answers are always first: a note that only refers to them is one small
+ * muted block, never the only thing the user can read.
+ */
 function StoredTurn({
   turn,
   headingId,
@@ -407,15 +474,15 @@ function StoredTurn({
   turn: AgentThreadTurn;
   headingId?: string | undefined;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const trust = useMemo(() => ({ profileHost: '', allowedAppUrls: [] as string[] }), []);
   const listId = `agent-parts-${turn.turnUuid}`;
   const hasNote = turn.summaryMd !== '';
-  // With no note the parts are the answer: they show open.
   const shown = !hasNote || open;
-  const names = [...new Set(turn.parts.map((p) => p.workspace))];
+  const names = [...new Map(turn.parts.map((p) => [p.workspace.name, p.workspace])).values()];
   const word =
     turn.status === 'answered' ? 'Answered' : turn.status === 'stopped' ? 'Stopped' : 'Failed';
+  const failed = turn.status === 'failed';
   return (
     <section className="conv-exchange" data-agent-stored-turn={turn.turnUuid}>
       <h2 id={headingId} className="conv-question">
@@ -423,18 +490,15 @@ function StoredTurn({
       </h2>
       <p className="conv-meta">
         <span
-          className={
-            turn.status === 'failed'
-              ? 'conv-meta-part conv-status--failed'
-              : 'conv-meta-part conv-status'
-          }
+          className={failed ? 'conv-meta-part conv-status--failed' : 'conv-meta-part conv-status'}
         >
           {word}
         </span>
         <time className="conv-meta-part" dateTime={new Date(turn.askedAt).toISOString()}>
           {fullDateOf(turn.askedAt)}
         </time>
-        {names.length > 0 && (
+        {/* One part: its heading names the workspace already. */}
+        {names.length > 0 && turn.parts.length > 1 && (
           <span className="conv-meta-part conv-chips">
             {names.map((c) => (
               <WsChip key={c.name} chip={c} />
@@ -442,34 +506,47 @@ function StoredTurn({
           </span>
         )}
       </p>
-      {hasNote && (
-        <div className="agent-note" data-agent-note>
-          <p className="agent-note-label">{NOTE_LABEL}</p>
-          <div className="agent-note-body">
-            <SafeMarkdown text={turn.summaryMd} trust={trust} />
-          </div>
-        </div>
+      {turn.parts.length === 0 && !hasNote && (
+        <p className="conv-answer conv-answer--none">
+          {turn.status === 'stopped'
+            ? 'You stopped this question before an answer came.'
+            : 'Genie could not answer this question.'}
+        </p>
       )}
       {turn.parts.length > 0 && (
         <>
           {hasNote && (
             <button
               type="button"
-              className="agent-fold"
+              className="agent-fold agent-fold--chevron"
               aria-expanded={open}
               aria-controls={listId}
               data-action="parts"
               onClick={() => setOpen((o) => !o)}
             >
-              From each workspace
+              <ChevronRightIcon
+                className={open ? 'size-3.5 rotate-90' : 'size-3.5'}
+                aria-hidden="true"
+              />
+              {open
+                ? 'Hide answers'
+                : `Answers from ${plural(names.length, 'workspace', 'workspaces')}`}
             </button>
           )}
-          <ul id={listId} className="agent-parts" aria-label="From each workspace" hidden={!shown}>
+          <ul id={listId} className="agent-parts" aria-label="Answers" hidden={!shown}>
             {turn.parts.map((p) => (
-              <StoredPart key={p.requestId} part={p} />
+              <StoredPart key={p.requestId} part={p} turnFailed={failed} />
             ))}
           </ul>
         </>
+      )}
+      {hasNote && (
+        <div className="agent-note agent-note--after" data-agent-note>
+          <p className="agent-note-label">{NOTE_LABEL}</p>
+          <div className="agent-note-body">
+            <SafeMarkdown text={turn.summaryMd} trust={trust} />
+          </div>
+        </div>
       )}
     </section>
   );
@@ -478,6 +555,7 @@ function StoredTurn({
 const openSettings = (
   <Button
     type="button"
+    variant="outline"
     size="sm"
     data-agent-open-settings
     onClick={() => send({ action: 'agent.open_settings' })}
@@ -559,6 +637,24 @@ export function AgentDetail({
   }, [count]);
 
   const live = entry.live;
+  // A thread with only queued turns has no question heading yet: its first waiting turn gives it.
+  const queuedOnly = entry.turns.length === 0 && !live && entry.waiting[0] !== undefined;
+  // A session is open (for this thread or another one): nothing says "ended" then. A reply joins
+  // the open session, so the line would be false.
+  const noSession = agent !== undefined && agent.session.state === 'none' && !entry.inSession;
+  const newSessionButton = agent !== undefined && entry.inSession && (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-agent-new-session
+      aria-expanded={confirm}
+      onClick={() => (needsConfirm ? setConfirm(true) : newSession())}
+    >
+      New session
+    </Button>
+  );
+  const hasActions = Boolean(newSessionButton) || Boolean(toolbar);
   return (
     <motion.article
       ref={focusRef}
@@ -571,30 +667,25 @@ export function AgentDetail({
       animate={{ opacity: 1, filter: 'blur(0px)' }}
       transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
     >
-      {toolbar}
       <div ref={scrollRef} className="conv-thread">
-        {agent !== undefined && (
+        {(agent !== undefined || hasActions) && (
           <div className="agent-session-row">
-            {entry.inSession ? (
-              <>
-                <p ref={sessionLine} tabIndex={-1} data-agent-session className="agent-session">
-                  {sessionText(agent)}
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  data-agent-new-session
-                  aria-expanded={confirm}
-                  onClick={() => (needsConfirm ? setConfirm(true) : newSession())}
-                >
-                  New session
-                </Button>
-              </>
-            ) : (
+            {agent !== undefined && entry.inSession ? (
+              <p ref={sessionLine} tabIndex={-1} data-agent-session className="agent-session">
+                {sessionText(agent)}
+              </p>
+            ) : noSession ? (
               <p data-agent-ended className="agent-session">
                 {SESSION_ENDED_COPY}
               </p>
+            ) : (
+              <span />
+            )}
+            {hasActions && (
+              <span className="agent-session-actions">
+                {newSessionButton}
+                {toolbar}
+              </span>
             )}
           </div>
         )}
@@ -620,6 +711,28 @@ export function AgentDetail({
               headingId={i === 0 ? first : undefined}
             />
           ),
+        )}
+        {queuedOnly && (
+          <section className="conv-exchange" data-agent-queued-only>
+            <h2 id={first} className="conv-question">
+              {entry.waiting[0]?.question}
+            </h2>
+            <p className="conv-meta">
+              <span className="agent-pill">{QUEUED_LABEL}</span>
+              <span className="conv-meta-part">{SENDS_NEXT_COPY}</span>
+              <button
+                type="button"
+                className="agent-x"
+                data-agent-remove={entry.waiting[0]?.turnId}
+                aria-label={`Remove: ${entry.waiting[0]?.question}`}
+                onClick={() =>
+                  send({ action: 'agent.remove_queued', turnId: entry.waiting[0]?.turnId ?? '' })
+                }
+              >
+                Remove
+              </button>
+            </p>
+          </section>
         )}
         {live && (
           <section className="conv-exchange" data-agent-live aria-label="Live question">
@@ -656,9 +769,15 @@ export function AgentDetail({
         )}
         {entry.waiting.length > 0 && (
           <ul className="agent-queued conv-queued" aria-label="Waiting questions">
-            {entry.waiting.map((t) => (
-              <WaitingRow key={t.turnId} turn={t} />
-            ))}
+            {entry.waiting.map((t, i) =>
+              queuedOnly && i === 0 ? null : (
+                <WaitingRow
+                  key={t.turnId}
+                  turn={t}
+                  copy={entry.turns.length > 0 || live || i > 0 ? WAITING_COPY : SENDS_NEXT_COPY}
+                />
+              ),
+            )}
           </ul>
         )}
       </div>

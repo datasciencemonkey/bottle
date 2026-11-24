@@ -1,7 +1,7 @@
 /**
  * Slice 2a: the view of one agent turn (plan Amendment 2 A2, "What the user sees"). The card
- * shows it in compact form with Stop and "Open in Agent"; the hub Agent panel shows the same body
- * for the live turn and for each earlier turn (`AgentPanel.tsx`). Thin view (ARC-2): the brain
+ * shows it in compact form with Stop and "Open in Conversations"; hub Conversations shows the
+ * same body for the live turn and for each earlier turn (`AgentThread.tsx`). Thin view (ARC-2): the brain
  * sends the `AgentTurnView`; this file draws it and sends clicks with `view_emit`.
  *
  * - Header: "Planning with Genie Code in sales…", then "Asking 2 workspaces · 3 of 10 Genie
@@ -9,8 +9,11 @@
  * - One row for each Genie call: colour stripe, workspace chip, the question on one line (the full
  *   text in `title`), and the state (Queued, "Asking finance… 0:12", Ready, No answer, Needs you,
  *   Failed, Stopped). The same names as the direct path and the UX proposal.
- * - "Note from your MOG": the model's note, muted. Then the parts, each with its chip. A part that
- *   no source cites folds into "1 more answer". A part of an earlier turn says so.
+ * - The answers of the workspaces come first and open, each under "Answer from <workspace>", when
+ *   the turn has no combined note (the cross-workspace answer is off, or the note is missing). The
+ *   note of the MOG then comes after them as one small muted block. With a combined note the note
+ *   comes first, and a part that no source cites folds into "1 more answer".
+ *   A part of an earlier turn says so.
  * - A queued turn shows the pill "Queued" and "Sends when the answer above lands".
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
  */
@@ -153,7 +156,7 @@ export function useNow(active: boolean): number {
   return now;
 }
 
-const stripe = (chip: AgentWsChip): CSSProperties =>
+export const stripe = (chip: AgentWsChip): CSSProperties =>
   ({ '--agent-ws-color': paletteColorOf(chip.colorVariant, chip.name).hex }) as CSSProperties;
 
 export function WsChip({ chip }: { chip: AgentWsChip }) {
@@ -191,12 +194,18 @@ export function CallRows({ calls, now }: { calls: AgentCallView[]; now: number }
 const sectionOf = <I extends CardSection['id']>(sections: CardSection[], id: I) =>
   sections.find((s): s is Extract<CardSection, { id: I }> => s.id === id);
 
+/** The heading of an answer that comes first: "Answer from sales". */
+export const answerFromText = (workspace: string): string => `Answer from ${workspace}`;
+
 function Part({
   part,
   onOpenLink,
+  titled = false,
 }: {
   part: AgentPartView;
   onOpenLink?: ((url: string) => void) | undefined;
+  /** The answer has its own heading "Answer from <workspace>" instead of the chip. */
+  titled?: boolean;
 }) {
   const answer = sectionOf(part.sections, 'answer');
   const keys = sectionOf(part.sections, 'keyNumbers');
@@ -209,7 +218,14 @@ function Part({
   return (
     <li className="agent-part" data-agent-part={part.callId} style={stripe(part.workspace)}>
       <div className="agent-part-head">
-        <WsChip chip={part.workspace} />
+        {titled && answer ? (
+          <h3 className="agent-part-title">
+            <span className="agent-chip-dot" aria-hidden="true" />
+            {answerFromText(part.workspace.name)}
+          </h3>
+        ) : (
+          <WsChip chip={part.workspace} />
+        )}
         {part.fromEarlier && <span className="agent-tag">{FROM_EARLIER_COPY}</span>}
         {part.notShownToAgent && <span className="agent-tag">{NOT_SHOWN_COPY}</span>}
       </div>
@@ -248,13 +264,16 @@ function Part({
 export function TurnParts({
   turn,
   onOpenLink,
+  answersFirst = false,
 }: {
   turn: AgentTurnView;
   onOpenLink?: ((url: string) => void) | undefined;
+  /** Every answer shows open under "Answer from <workspace>"; none folds. */
+  answersFirst?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const shown = turn.parts.filter((p) => p.folded !== true);
-  const folded = turn.parts.filter((p) => p.folded === true);
+  const shown = turn.parts.filter((p) => answersFirst || p.folded !== true);
+  const folded = answersFirst ? [] : turn.parts.filter((p) => p.folded === true);
   const foldId = `agent-fold-${turn.turnId}`;
   if (turn.parts.length === 0) return null;
   return (
@@ -262,7 +281,7 @@ export function TurnParts({
       {shown.length > 0 && (
         <ul className="agent-parts" aria-label="Answers">
           {shown.map((p) => (
-            <Part key={p.callId} part={p} onOpenLink={onOpenLink} />
+            <Part key={p.callId} part={p} onOpenLink={onOpenLink} titled={answersFirst} />
           ))}
         </ul>
       )}
@@ -344,7 +363,28 @@ function CallsOf({ turn, now }: { turn: AgentTurnView; now: number }) {
   );
 }
 
-/** The body of a turn, the same in the card and in the hub panel. */
+/**
+ * The workspace answers come first, open, when the agent has no combined note of them: the turn
+ * has no summary, the summary is the agent's own note (the cross-workspace answer is off), or a
+ * part was never shown to the agent. Else the combined note comes first and the parts fold.
+ */
+export const answersFirstOf = (turn: AgentTurnView): boolean =>
+  turn.parts.length > 0 &&
+  (turn.summary === undefined ||
+    turn.summary.kind !== 'combined' ||
+    turn.parts.some((p) => p.notShownToAgent === true));
+
+/** The first line of the first answer of a turn, for a list: never the note of the agent. */
+export function firstAnswerLine(turn: AgentTurnView): string {
+  for (const p of turn.parts) {
+    const md = sectionOf(p.sections, 'answer')?.md ?? '';
+    const line = md.split('\n').find((l) => l.trim() !== '');
+    if (line !== undefined) return line.replace(/^[#>*\-\s]+/, '').trim();
+  }
+  return '';
+}
+
+/** The body of a turn, the same in the card and in hub Conversations. */
 export function TurnBody({
   turn,
   now,
@@ -357,6 +397,19 @@ export function TurnBody({
   const queued = turn.state === 'queued';
   // On an ended turn the answer comes before the process.
   const answerFirst = !isOpenState(turn.state) && turn.state !== 'needs_you';
+  const answersFirst = answersFirstOf(turn);
+  const note = turn.summary && (
+    <div className={answersFirst ? 'agent-note agent-note--after' : 'agent-note'} data-agent-note>
+      <p className="agent-note-label">{NOTE_LABEL}</p>
+      <div className="agent-note-body">
+        <SafeMarkdown
+          text={turn.summary.md}
+          trust={{ profileHost: '', allowedAppUrls: [] }}
+          {...(onOpenLink ? { onOpenLink } : {})}
+        />
+      </div>
+    </div>
+  );
   return (
     <div className="agent-turn" data-agent-turn={turn.turnId} data-state={turn.state}>
       {showQuestion && (
@@ -379,19 +432,9 @@ export function TurnBody({
         </p>
       )}
       {!answerFirst && <CallsOf turn={turn} now={now} />}
-      {turn.summary && (
-        <div className="agent-note" data-agent-note>
-          <p className="agent-note-label">{NOTE_LABEL}</p>
-          <div className="agent-note-body">
-            <SafeMarkdown
-              text={turn.summary.md}
-              trust={{ profileHost: '', allowedAppUrls: [] }}
-              {...(onOpenLink ? { onOpenLink } : {})}
-            />
-          </div>
-        </div>
-      )}
-      <TurnParts turn={turn} onOpenLink={onOpenLink} />
+      {!answersFirst && note}
+      <TurnParts turn={turn} onOpenLink={onOpenLink} answersFirst={answersFirst} />
+      {answersFirst && note}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
     </div>
@@ -401,7 +444,7 @@ export function TurnBody({
 export interface AgentTurnCardProps {
   mogId: MogId;
   turn: AgentTurnView;
-  /** The chips of the compact card: Stop (or Remove), Open Settings, Open in Agent. */
+  /** The chips of the compact card: Stop (or Remove), Open Settings, Open in Conversations. */
   chips: { id: string; label: string }[];
   /** The turns that wait under the live one: `agent-queued:<turnId>` chips, the label is the question. */
   queued?: { id: string; label: string }[];
