@@ -6,11 +6,11 @@ Bottle turns your team's unwritten know-how into governed context that every Gen
 
 ## What ships now (macOS)
 
-- **Dictation.** Hold **Right Option** and speak. Local Parakeet speech-to-text pastes the text at your cursor. A small pop-up offers Copy and Ask Genie.
-- **Ask Genie.** Hold Right Option and tap **G** (⌥G). Bottle sends your words to Genie One through MCP. The answer card shows Markdown, tables, clickable workspace links and an Open in Databricks link.
-- **The hub.** Conversations (with thread replies), Recordings and Settings.
+- **Dictation with cleanup.** Hold **Right Option** and speak. Local Parakeet speech-to-text transcribes the speech. Bottle removes filler words on the device. Then one orchestrator model cleans up the text, in 1.5 seconds or less, on your home workspace's AI Gateway. Bottle pastes the model text only when its words match yours. Otherwise it pastes the local text. The setting "Clean up dictation" switches this step off. A small pop-up offers Copy and Ask Genie.
+- **Ask.** Hold Right Option and tap **G** (⌥G). The orchestrator model asks the Genie One of each workspace that you switched on, and it can combine the answers. A combined answer cites each workspace as [1] [2]. Each marker links to that workspace's answer and its Open in Databricks link. If the model is not reachable, Bottle asks Genie One on your home workspace and shows a short notice. The answer card shows Markdown, tables and safe links.
+- **The hub.** Conversations (with thread replies), Recordings and Settings. In Settings → Workspace, you pick the orchestrator model from the `system.ai` chat models. You also switch "Clean up dictation" and "Combine across workspaces" there.
 - **Call recording.** Hold Right Option and tap **R** (⌥R). Bottle records the mic and system audio to your Unity Catalog volume. A Gemini model writes the transcript and a Claude model writes the notes, through the Databricks AI Gateway. Recording is off until you turn it on in Settings.
-- **Several MOGs.** Each MOG has a name, an accent colour and a right-click menu. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
+- **One MOG.** One floating MOG serves all your workspaces. Each connected Databricks CLI profile is a workspace of that MOG. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
 
 See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (recorded transcripts becoming UC Pages in your domain, after your review) and memory-first answers.
 
@@ -18,7 +18,7 @@ See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, su
 
 - macOS 14.4 or later. Windows 11 is second: its hotkeys are partly done (no Windows ⌥G yet).
 - The Databricks CLI. Bottle can install the official CLI after you consent, then sign you in to a workspace.
-- Tokens come from the CLI (`databricks auth token --profile <p>`) and live only in memory. One CLI profile is one workspace.
+- Tokens come from the CLI (`databricks auth token --profile <p>`) and live only in memory. One CLI profile is one workspace. Model calls send `store: false`.
 
 ## Run locally
 
