@@ -231,6 +231,28 @@ describe('genie history: one local exchange row per Ask Genie request (#40)', ()
     expect(writes()).toBe(RECENT_OPS_MAX + 2);
   });
 
+  it('[AC-2a.18] an agent call keeps the turn as split group, and a call to another workspace is not a home row', async () => {
+    const { store, record } = rig();
+    const turnUuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    await record(answered({ opId: OP, splitGroupId: turnUuid, homeWorkspace: true }));
+    await record(
+      answered({
+        opId: '41111111-2222-4333-8444-555555555541',
+        splitGroupId: turnUuid,
+        homeWorkspace: false,
+      }),
+    );
+    const rows = store.calls.filter((c) => c.stmtId === 'mem.exchange.upsert').map((c) => c.params);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.splitGroupId)).toEqual([turnUuid, turnUuid]);
+    expect(rows.map((r) => r.homeWorkspace)).toEqual([true, false]);
+    // The direct path stays a home row with no split group.
+    const direct = rig();
+    await direct.record(answered());
+    expect(exchange(direct.store).homeWorkspace).toBe(true);
+    expect(exchange(direct.store).splitGroupId).toBeUndefined();
+  });
+
   it('[MEM-39a] isExchangeMemory accepts T10 and refuses an object without registerMog', () => {
     expect(isExchangeMemory(new LocalMemoryService(new RecordingLocalStore()))).toBe(true);
     expect(isExchangeMemory({ recordExchange: async () => undefined })).toBe(false);

@@ -14,6 +14,7 @@ import { createGenieBridge } from './components/genie-bridge';
 import { GIVE_UP_MS } from './components/poll-actor';
 import { ANSWER_READY, ASKING_GENIE } from '../shared/genie-status';
 import {
+  ASK_OTHERS_LABEL,
   CHANGE_WORKSPACE_LABEL,
   GENIE_DATA_FLOW_TEXT,
   TRY_AGAIN_LABEL,
@@ -632,6 +633,89 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       });
       await send(turn());
       expect(c.log.map((x) => x.text)).toEqual([ASKING_GENIE, 'Churn was 4.2%.']);
+    });
+  });
+
+  describe('slice 2a: the fallback notice and the "Ask other workspaces too" chip', () => {
+    const answerEvent: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [],
+      deepLink: '',
+      queryItems: [],
+    };
+
+    it('[AC-2a.11] a fallback shows its one-line reason before the answer, and not in the saved end', async () => {
+      const c = fakeCard();
+      const ends: GenieEnd[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onEnd: (x) => void ends.push(x),
+      });
+      await send(turn(), { notice: 'Genie Code is not installed. Asked sales only.' });
+      expect(c.expanded.at(-1)?.answerMd).toBe(
+        '*Genie Code is not installed. Asked sales only.*\n\nChurn was 4.2%.',
+      );
+      // History keeps the answer as Genie wrote it.
+      expect(ends[0]?.end).toMatchObject({ t: 'answer', md: 'Churn was 4.2%.' });
+    });
+
+    it('[R-8] an answered request offers the chip, with the request id in the chip id', async () => {
+      const c = fakeCard();
+      const offered: string[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        offerOthers: (_t, opId) => {
+          offered.push(opId);
+          return { id: `agent-more:${opId}`, label: ASK_OTHERS_LABEL };
+        },
+      });
+      await send(turn());
+      expect(offered).toEqual([OP]);
+      expect([...c.controls.values()].flatMap((x) => x.list)).toEqual([
+        { id: `agent-more:${OP}`, label: 'Ask other workspaces too' },
+      ]);
+    });
+
+    it('[R-8] a failed request offers no chip, and the next request takes the old chip away', async () => {
+      const c = fakeCard();
+      const events: AskEvent[] = [answerEvent];
+      const send = createGenieDirectSend({
+        genie: {
+          submit: (req) => ({
+            opId: req.opId,
+            events: (async function* () {
+              for (const e of events) yield e;
+            })(),
+          }),
+        },
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        offerOthers: (_t, opId) => ({ id: `agent-more:${opId}`, label: ASK_OTHERS_LABEL }),
+      });
+      await send(turn());
+      expect(c.controls.size).toBe(1);
+      events[0] = { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' };
+      await send(turn());
+      // The old chip left at the send; the failed card has only its Try again control.
+      expect([...c.controls.keys()].every((k) => k.startsWith('retry:'))).toBe(true);
+    });
+
+    it('[R-8] with no offer (the agent cannot run) the card has no extra control', async () => {
+      const c = fakeCard();
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        offerOthers: () => undefined,
+      });
+      await send(turn());
+      expect(c.controls.size).toBe(0);
     });
   });
 });

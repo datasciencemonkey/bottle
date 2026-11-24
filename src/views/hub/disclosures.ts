@@ -78,6 +78,9 @@ export const SEC_DISC: readonly Disclosure[] = [
       'It never gets your sign-in tokens: a local proxy in the Bottle core adds them.',
       'The agent cannot start recording, send context, publish a Page or change the workspace without you.',
       'Dictation does not go through the agent.',
+      'When a question needs more than one workspace, Bottle sends it to Genie Code in your agent workspace.',
+      "Genie Code uses that workspace's AI model.",
+      "It bills about 30,000 to 50,000 tokens per question to that workspace's Genie budget.",
     ],
   },
   {

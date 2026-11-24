@@ -1,7 +1,7 @@
 /** The brain side of the one MOG with workspaces (ADR 0117, S1-B). All IPC is fake. */
 import type { HubWorkspaceList } from '../shared/hub-workspaces';
 import { HUB_WORKSPACES_EVENT } from '../shared/hub-workspaces';
-import type { WorkspaceList } from '../shared/ipc';
+import type { GenieCodeStatus, WorkspaceList } from '../shared/ipc';
 import { MOG_PALETTE } from '../shared/mog-palette';
 import { memoryConfigs, sequentialIds } from '../test-support/mog-doubles';
 import { workspaceList } from '../test-support/workspace-list';
@@ -144,6 +144,7 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
       crossWorkspaceData: false,
       crossWorkspaceLocked: false,
       genieCallBudget: 10,
+      runProfile: null,
     });
   });
 
@@ -724,5 +725,110 @@ describe('workspaces: data MOG, lamp and identity (ADR 0117)', () => {
     const m = lampOnlyManager(base, async () => id(2));
     expect((await m.list()).mogs.map((x) => x.mogId)).toEqual([id(2)]);
     expect((await lampOnlyManager(base, async () => undefined).list()).mogs).toEqual([]);
+  });
+});
+
+describe('workspaces: the Genie Code relays of slice 2a', () => {
+  const READY: GenieCodeStatus = {
+    binary: 'ready',
+    version: '0.5.0',
+    pinned: '0.5.0',
+    agentProfile: 'work',
+    agentProfileState: 'ready',
+  };
+  const NOT_INSTALLED: GenieCodeStatus = { ...READY, binary: 'not_installed' };
+  const list = () =>
+    workspaceList('work', [
+      { profile: 'work', mogIds: [id(1)] },
+      { profile: 'lab', mogIds: [id(2)], available: true },
+      { profile: 'off', mogIds: [id(3)], available: false },
+      { profile: 'gone', mogIds: [id(4)], available: true, signIn: 'missing' },
+    ]);
+
+  function genieRig(status: GenieCodeStatus = READY) {
+    const r = rig(list());
+    r.configs.files.set(id(1), cfg('Sales', 'work', 'coral'));
+    r.configs.files.set(id(2), cfg('Lab', 'lab', 'amber'));
+    let current = status;
+    const reads: (boolean | undefined)[] = [];
+    r.deps.genieCodeStatus = async (recheck) => {
+      reads.push(recheck);
+      return current;
+    };
+    return { ...r, reads, setStatus: (s: GenieCodeStatus) => (current = s) };
+  }
+
+  it('sends the Genie Code status and the agent profile with the list', async () => {
+    const r = genieRig();
+    await r.ws.refresh();
+    expect(r.last()?.agent.genieCode).toEqual(READY);
+    expect(r.last()?.agent.runProfile).toBeNull();
+    expect(r.ws.genieCode()).toEqual(READY);
+  });
+
+  it('a hub that opens reads the status again', async () => {
+    const r = genieRig();
+    await r.ws.act({ action: 'workspaces.ready' });
+    expect(r.reads).toEqual([undefined]);
+    expect(r.last()?.agent.genieCode?.binary).toBe('ready');
+  });
+
+  it('[AC-2a.25] "Genie Code runs on" writes runProfile; null means home', async () => {
+    const r = genieRig();
+    await r.ws.refresh();
+    await r.ws.act({ action: 'workspace.agent_profile', profile: 'lab' });
+    expect(r.calls.find((c) => c[0] === 'settings_write')?.[1]).toEqual({ runProfile: 'lab' });
+    expect(r.last()?.agent.runProfile).toBe('lab');
+    await r.ws.act({ action: 'workspace.agent_profile', profile: null });
+    expect(r.last()?.agent.runProfile).toBeNull();
+    // The status of the agent profile is read again after each change.
+    expect(r.reads.length).toBe(3);
+  });
+
+  it('Check again asks for a recheck and sends the new status', async () => {
+    const r = genieRig({ ...READY, agentProfileState: 'not_eligible' });
+    await r.ws.refresh();
+    r.setStatus(READY);
+    await r.ws.act({ action: 'genie_code.recheck' });
+    expect(r.reads.at(-1)).toBe(true);
+    expect(r.last()?.agent.genieCode?.agentProfileState).toBe('ready');
+  });
+
+  it('Install shows the busy state, then the result', async () => {
+    const r = genieRig(NOT_INSTALLED);
+    await r.ws.refresh();
+    r.deps.genieCodeInstall = async () => READY;
+    await r.ws.act({ action: 'genie_code.install', consent: true });
+    const seen = r.sent.map((l) => l.agent.genieCode?.binary);
+    expect(seen.slice(-2)).toEqual(['installing', 'ready']);
+  });
+
+  it('an install that fails says so with a fixed text and reads the status again', async () => {
+    const r = genieRig(NOT_INSTALLED);
+    await r.ws.refresh();
+    r.deps.genieCodeInstall = async () => Promise.reject({ error: 'install_failed' });
+    await r.ws.act({ action: 'genie_code.install', consent: true });
+    expect(r.last()?.notice).toEqual({ kind: 'error', text: WORKSPACE_TEXT.install_failed });
+    expect(r.last()?.agent.genieCode?.binary).toBe('not_installed');
+    r.deps.genieCodeInstall = async () => Promise.reject({ error: 'checksum_mismatch' });
+    await r.ws.act({ action: 'genie_code.install', consent: true });
+    expect(r.last()?.notice?.text).toBe(WORKSPACE_TEXT.checksum_mismatch);
+  });
+
+  it('a failed status read keeps the last status', async () => {
+    const r = genieRig();
+    await r.ws.refresh();
+    r.deps.genieCodeStatus = async () => Promise.reject({ error: 'host_failed' });
+    await r.ws.refreshGenieCode(true);
+    expect(r.ws.genieCode()).toEqual(READY);
+  });
+
+  it('the catalog lists the usable available workspaces with their names, home first', async () => {
+    const r = genieRig();
+    await r.ws.refresh();
+    expect(r.ws.catalog().map((c) => [c.profile, c.name, c.isHome])).toEqual([
+      ['work', 'Sales', true],
+      ['lab', 'Lab', false],
+    ]);
   });
 });

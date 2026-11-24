@@ -12,7 +12,7 @@
  * controls field, so they go first in `chips`, and a `chip_click` on one runs its handler.
  */
 import type { MogId } from '../shared/interfaces';
-import type { ViewEmitKind } from '../shared/ipc';
+import type { AgentTurnView, ViewEmitKind } from '../shared/ipc';
 import { sendCardUpdate } from './bus';
 import {
   BlurbStack,
@@ -38,6 +38,8 @@ export interface CardStackUpdate {
   sections?: ExpandedSection[];
   /** The STT badge of the card footer (UX-38), from `sttBadgeText` (ADR 0029). */
   sttBadge?: string;
+  /** Slice 2a: the live agent turn in compact form. The card view shows it instead of the blurbs. */
+  agentTurn?: AgentTurnView;
 }
 
 /** Run `fn` at monotonic time `atMs`. Returns a cancel function. */
@@ -74,6 +76,8 @@ export interface CardStack {
   setControls(owner: string, controls: ChipView[], onClick?: (id: string) => void): void;
   /** Remove the controls of `owner`. */
   clearControls(owner: string): void;
+  /** Slice 2a: set the live agent turn of the card (`agent-card.ts`), or `undefined` to clear it. */
+  setAgentTurn(turn: AgentTurnView | undefined): void;
   /** Send the current state again, for a card view that starts to listen late (#498). */
   republish(): void;
   dispose(): void;
@@ -121,6 +125,7 @@ export function createCardStack(
   let armedAt: number | undefined;
   let sttBadge: string | undefined;
   let expanded: SectionInput | undefined;
+  let agentTurn: AgentTurnView | undefined;
   const row = new ChipRow();
   /** The template controls, by owner, in the order set. */
   const controls = new Map<string, { list: ChipView[]; onClick?: (id: string) => void }>();
@@ -137,6 +142,7 @@ export function createCardStack(
       overflowChips: c.overflow,
     };
     if (sttBadge !== undefined) u.sttBadge = sttBadge;
+    if (agentTurn) u.agentTurn = agentTurn;
     if (expanded)
       u.sections = buildSections(sttBadge === undefined ? expanded : { sttBadge, ...expanded });
     void deps.send(u);
@@ -222,6 +228,10 @@ export function createCardStack(
     },
     clearControls(owner) {
       if (controls.delete(owner)) publish();
+    },
+    setAgentTurn(turn) {
+      agentTurn = turn;
+      publish();
     },
     republish: () => publish(),
     dispose() {

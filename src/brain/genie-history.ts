@@ -17,7 +17,9 @@
  *   the profile that answered (`mogIds[0]` of its workspace row, `dataMogId`). With no such id
  *   (a profile with no config yet) it falls back to the lamp's id. History and memory stay in
  *   the folders of the old MOGs.
- * - The target is the MOG's home profile (no hop yet), so the row is a home-workspace row.
+ * - The direct path targets the MOG's home profile, so its row is a home-workspace row. Slice 2a:
+ *   an agent turn writes one row for each Genie call (`homeWorkspace` says which), and the rows
+ *   of a turn share one `splitGroupId`.
  * - The direct path sends no context preamble, so the sent question is the user's question.
  * - A failed write never rejects and never touches the card. The log gets only the fixed line
  *   `event=memory.write ok=0` (SEC-16c): no question, answer or error text.
@@ -47,6 +49,13 @@ export interface GenieEnd {
   /** From the `accepted` event, when there was one. */
   conversationId?: string;
   responseId?: string;
+  /**
+   * Slice 2a: one agent turn makes one row for each Genie call, and the rows of a turn share this
+   * UUID (`genie_exchange.split_group_id`, the `turnId`).
+   */
+  splitGroupId?: string;
+  /** Slice 2a: false for a call to a workspace that is not home (the table keeps no question text). */
+  homeWorkspace?: boolean;
 }
 
 /** The part of T10 that the history uses. */
@@ -118,7 +127,8 @@ function exchangeOf(x: GenieEnd, host: string, mogId: MogId): GenieExchange {
         : {}),
     keyNumbers: e.t === 'answer' ? e.keyNumbers : [],
     deepLink: e.t === 'answer' ? e.deepLink : '',
-    homeWorkspace: true,
+    homeWorkspace: x.homeWorkspace ?? true,
+    ...(x.splitGroupId !== undefined ? { splitGroupId: x.splitGroupId } : {}),
   };
 }
 

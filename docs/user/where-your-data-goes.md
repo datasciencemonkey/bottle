@@ -73,6 +73,9 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - When the agent proposes a workspace change, the MOG shows "Switch to <profile>?". Only your click changes the workspace.
 - Bottle keeps a log of each agent action: the MOG, the tool name, the time and sizes. The log holds no text of your questions, answers or transcripts. In this build, the log stays in memory until Bottle quits. Stored logs are kept for 30 days by default.
 - Dictation does not go through the agent.
+- When a question needs more than one workspace, Bottle sends it to Genie Code in your agent workspace.
+- Genie Code uses that workspace's AI model.
+- It bills about 30,000 to 50,000 tokens per question to that workspace's Genie budget.
 
 ## Genie history
 

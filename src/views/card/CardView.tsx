@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PIN_ENABLED } from '../../shared/feature-flags';
+import { asAgentTurnView } from '../../shared/hub-agent';
 import { isGenieBlurbId } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
 import { DomainPicker } from '../DomainPicker';
@@ -17,6 +18,7 @@ import {
   type CardUpdate,
 } from '../view-ipc';
 import { applyCardSide, createWindowFit, tauriCardWindow, widthMayChangeIn } from './fit-window';
+import { AgentTurnCard } from './AgentTurnCard';
 import { GenieCard } from './GenieCard';
 import { Popup } from './Popup';
 import { useMemorySaved } from './memory-saved';
@@ -225,6 +227,8 @@ export function CardView({ mogId }: { mogId: MogId }) {
     card !== undefined &&
     (hasAnswer || card.pageDomain !== undefined || card.pagesChecklist !== undefined);
   const newest = card?.blurbs[0];
+  // Slice 2a: a payload that does not pass the shape check shows no agent card.
+  const agentTurn = card?.agentTurn ? asAgentTurnView(card.agentTurn) : undefined;
   const shown = kept && (!newest || newest.id === kept.blurbs[0]?.id) ? kept : card;
   // #573: the window takes the height of the pop-up or the Genie card (`fit-window.ts`).
   const genie = card !== undefined && isGenieBlurbId(newest?.id);
@@ -310,6 +314,20 @@ export function CardView({ mogId }: { mogId: MogId }) {
     if (!stack || !stackFrame.current) return;
     void onSize(stackFrame.current.getBoundingClientRect().height);
   }, [stack, popupOn, onSize]);
+  // Slice 2a: the live agent turn takes the card. The brain clears it when a direct ask starts.
+  if (agentTurn)
+    return (
+      <section aria-label="MOG card" className="card card-genie">
+        <AgentTurnCard
+          key={agentTurn.turnId}
+          mogId={mogId}
+          turn={agentTurn}
+          chips={card?.chips.filter((c) => c.id.startsWith('agent-')) ?? []}
+          onSize={onSize}
+          identity={identity}
+        />
+      </section>
+    );
   if ((genie && newest) || (stack && pending && pillCard))
     return (
       <section ref={stackFrame} aria-label="MOG card" className="card card-genie">

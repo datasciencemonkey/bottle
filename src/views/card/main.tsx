@@ -2,6 +2,7 @@
 import '../tokens.css';
 import './card.css';
 import './genie-card.css';
+import './agent-run.css';
 import { mount } from '../mount';
 import { ownMogId, startCardFocusSignal } from '../view-ipc';
 import { CardView } from './CardView';

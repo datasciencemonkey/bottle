@@ -220,6 +220,8 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
   );
   const retry = card.chips.find((c) => c.id === `retry:${blurbId}`);
   const changeWorkspace = card.chips.find((c) => c.id === `workspace:${blurbId}`);
+  // Slice 2a, R-8: the chip that sends this question to the agent too. Its id names the request.
+  const askOthers = card.chips.find((c) => c.id === `agent-more:${opId}`);
   const kind = working ? 'working' : answer ? 'answer' : retry ? 'failure' : 'message';
   const text = newest?.text ?? '';
   // UX slice 1: an answer is waiting for the talk-key hold to end. The pill says so, with no timer.
@@ -732,6 +734,23 @@ export function GenieCard({ mogId, card, onSize, identity, saved = NO_SAVED }: G
                     {OPEN_IN_DATABRICKS_LABEL}
                     <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
                   </a>
+                )}
+                {kind === 'answer' && askOthers && (
+                  <button
+                    type="button"
+                    className="genie-toggle genie-ask-others"
+                    data-chip={askOthers.id}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.detail > 1) return;
+                      void emitView(mogId, 'chip_click', { chipId: askOthers.id }).catch(
+                        () => undefined,
+                      );
+                    }}
+                  >
+                    {askOthers.label}
+                  </button>
                 )}
                 {kind === 'answer' &&
                   (remember === 'kept' ? (

@@ -34,6 +34,7 @@ import { Switch } from '../ui/switch';
 import { cn } from '../ui/utils';
 import { DomainPicker } from '../DomainPicker';
 import { askBrain, emitView, type MogViewState } from '../view-ipc';
+import { AgentSettings } from './AgentSettings';
 import { ConnectAnotherWorkspace } from './ConnectAnotherWorkspace';
 import { SettingsGroup } from './SettingsGroup';
 import { ColorDot, WorkspaceColor } from './WorkspaceColor';
@@ -450,8 +451,11 @@ export function WorkspaceSettings({
   list,
   homeDomains = [],
   onChoose,
+  agentBusy = false,
 }: {
   list: HubWorkspaceList | undefined;
+  /** Slice 2a: a turn of the agent runs, so a change of the agent workspace applies after it. */
+  agentBusy?: boolean;
   /** MOG states that carry the home domain picker (PG-18, PG-20). */
   homeDomains?: readonly MogViewState[];
   /** Reopens the home pick dialog. */
@@ -544,6 +548,9 @@ export function WorkspaceSettings({
       <p className="mt-[var(--mog-space-2)] text-[var(--mog-text-xs)] text-muted-foreground">
         New workspaces start off. Turn one on to let your MOG use it.
       </p>
+      {/* Slice 2a: where Genie Code runs, how many Genie calls one question may make, and the
+          status of Genie Code. */}
+      <AgentSettings list={list} busy={agentBusy} />
     </section>
   );
 }

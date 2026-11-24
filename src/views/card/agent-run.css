@@ -1,0 +1,247 @@
+/* Slice 2a: one agent turn, in the card and in the hub Agent panel (`AgentTurnCard.tsx`). Plain
+   CSS on `tokens.css` only, so the card window (no Tailwind) and the hub both load it. Every
+   colour, size, radius and curve is a token. */
+
+.agent-card {
+  /* The frame is `.genie.genie-answer` (genie-card.css): a flex column under a 280 px cap. */
+  padding-top: 26px;
+}
+
+/* The one part of the card that gives up height: it scrolls, and a keyboard user can reach it. */
+.agent-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--mog-edge) transparent;
+}
+
+.agent-card-body:focus-visible {
+  outline: none;
+  border-radius: var(--mog-radius-sm);
+  box-shadow: var(--mog-focus-ring);
+}
+
+.agent-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-2);
+  min-width: 0;
+  color: var(--mog-text);
+  font-size: var(--mog-text-sm);
+  line-height: var(--mog-leading);
+}
+
+.agent-question {
+  margin: 0;
+  font-weight: var(--mog-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mog-space-2);
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-pill {
+  padding: 1px var(--mog-space-3);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-text);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-slow {
+  color: var(--mog-text);
+  font-weight: var(--mog-weight-medium);
+}
+
+.agent-notice {
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+/* One row for each Genie call: a stripe in the colour of its workspace, the chip, the question on
+   one line and the state. */
+.agent-calls,
+.agent-parts,
+.agent-keys {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-1);
+}
+
+.agent-call {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--mog-space-2);
+  padding: var(--mog-space-1) var(--mog-space-2);
+  border-left: 3px solid var(--agent-ws-color, var(--mog-edge));
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-surface-raised);
+}
+
+.agent-call-question {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-call-state {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Needs you is the one amber state (UX proposal 2.1): it asks the user for something. */
+.agent-call[data-state='needs_you'] .agent-call-state {
+  color: var(--mog-note-text);
+}
+
+.agent-call[data-state='needs_you'] {
+  background: var(--mog-note-bg);
+}
+
+.agent-call[data-state='failed'] .agent-call-state,
+.agent-call[data-state='no_answer'] .agent-call-state,
+.agent-call[data-state='stopped'] .agent-call-state {
+  color: var(--mog-text-muted);
+}
+
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-1);
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-chip-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--agent-ws-color, var(--mog-text-muted));
+}
+
+.agent-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-1);
+  padding: var(--mog-space-2) var(--mog-space-3);
+  border: 1px solid var(--mog-note-border);
+  border-radius: var(--mog-radius-sm);
+  background: var(--mog-note-bg);
+  color: var(--mog-note-text);
+}
+
+.agent-note-label {
+  margin: 0;
+  font-size: var(--mog-text-xs);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-note-body {
+  min-width: 0;
+  font-size: var(--mog-text-sm);
+}
+
+.agent-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-3);
+}
+
+.agent-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mog-space-1);
+  min-width: 0;
+  padding-left: var(--mog-space-3);
+  border-left: 3px solid var(--agent-ws-color, var(--mog-edge));
+}
+
+.agent-part-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mog-space-2);
+}
+
+.agent-tag {
+  padding: 0 var(--mog-space-2);
+  border: 1px solid var(--mog-edge);
+  border-radius: var(--mog-radius-pill);
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-part-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mog-space-3);
+  font-weight: var(--mog-weight-semibold);
+}
+
+.agent-fold,
+.agent-databricks {
+  align-self: flex-start;
+}
+
+.agent-parts[hidden] {
+  display: none;
+}
+
+.agent-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mog-space-2) var(--mog-space-4);
+  margin-top: var(--mog-space-1);
+}
+
+.agent-foot-text {
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mog-space-4);
+  margin-left: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-card-body {
+    scroll-behavior: auto;
+  }
+}

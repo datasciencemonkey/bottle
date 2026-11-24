@@ -9,6 +9,8 @@ import './hub.css';
 // hub.css's own top comment for why that ordering keeps it winning over Tailwind's preflight
 // while a shadcn component's utilities still win over a matching hub.css selector.
 import './tailwind.css';
+// Slice 2a: the agent turn body is shared with the card window (plain CSS on tokens.css).
+import '../card/agent-run.css';
 import { mount } from '../mount';
 import { MotionConfig } from 'motion/react';
 import { Hub } from './Hub';

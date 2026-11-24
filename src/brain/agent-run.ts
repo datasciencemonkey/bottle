@@ -1,0 +1,711 @@
+/**
+ * Slice 2a: the brain client of the one live Genie Code session (plan Amendment 2, Part B).
+ *
+ * - `submit` sends one ⌥G question with `agent_turn_submit` and an `opId`. The core needs the
+ *   ⌥G latch or an Ask ticket, and it starts a session if none is open.
+ * - The `agent:turn` and `agent:session` events (content-free) move one `AgentTurnView` for each
+ *   turn. On a terminal call the client pulls `agent_turn_call` (the question and the reply),
+ *   saves one history row, and keeps the answer as a part. On `ended` with `answered` it pulls
+ *   `agent_turn_result`: the note of the MOG, and the sources that decide which parts fold.
+ * - AC-2a.11: a turn that ends `timeout`, `offline` or `failed` before any Genie call falls back
+ *   to one direct home call, with a one-line reason.
+ * - R-13, R-14: the follow-up window learns of each answer and of each session end.
+ * - The content of every turn lives in this object only, in memory. A new session, quit or Wipe
+ *   clears it. Nothing here writes a question, an answer or a reply to the log (SEC-16c).
+ *
+ * The clock and every side effect come in through `AgentClientDeps`, so tests use doubles.
+ */
+import type { AgentTurn, MogId, ProfileName } from '../shared/interfaces';
+import {
+  call,
+  type AgentCallState,
+  type AgentCallView,
+  type AgentPartView,
+  type AgentSessionEvent,
+  type AgentSessionState,
+  type AgentTurnAccepted,
+  type AgentTurnCall,
+  type AgentTurnEvent,
+  type AgentTurnResult,
+  type AgentTurnView,
+  type AgentWorkspace,
+  type AgentWsChip,
+  type CommandArgs,
+} from '../shared/ipc';
+import type { HubAgentView } from '../shared/hub-agent';
+import {
+  callViewState,
+  fallbackNotice,
+  isTerminalCall,
+  partOf,
+  REFUSAL_TEXT,
+  replyRefs,
+  answerOf,
+  whyOfOutcome,
+  whyOfRefusal,
+} from './agent-card';
+import type { FollowUpWindow } from './agent-route';
+import { keyNumbersOf, type TerminalAskEvent } from './components/ask-events';
+import type { GenieEnd } from './genie-history';
+import type { GeniePhase } from './genie-direct';
+import type { BrainLog } from './log';
+
+/** The mode of a submit. `ask_others` is the click on the R-8 chip. */
+export type AgentMode = NonNullable<CommandArgs['agent_turn_submit']['mode']>;
+
+/** The IPC functions of the client, one for each command. */
+export interface AgentApi {
+  submit(args: CommandArgs['agent_turn_submit']): Promise<AgentTurnAccepted>;
+  stop(turnId: string): Promise<unknown>;
+  callDetail(turnId: string, callId: string): Promise<AgentTurnCall>;
+  result(turnId: string): Promise<AgentTurnResult>;
+  sessionState(): Promise<AgentSessionState>;
+  endSession(): Promise<unknown>;
+}
+
+export function ipcAgentApi(): AgentApi {
+  return {
+    submit: (args) => call('agent_turn_submit', args),
+    stop: (turnId) => call('agent_turn_stop', { turnId }),
+    callDetail: (turnId, callId) => call('agent_turn_call', { turnId, callId }),
+    result: (turnId) => call('agent_turn_result', { turnId }),
+    sessionState: () => call('agent_session_state', {}),
+    endSession: () => call('agent_session_end', { reason: 'new_session' }),
+  };
+}
+
+export interface AgentClientDeps {
+  api: AgentApi;
+  /** The name and colour of a workspace, from the list that Settings shows. Sync, from a cache. */
+  chipOf(profile: ProfileName): AgentWsChip;
+  /** The names for the fallback line: the workspace the agent runs on, and home. */
+  names(): { agent: string; home: string };
+  homeProfile(): Promise<ProfileName | undefined>;
+  hostOf(profile: ProfileName): Promise<string | undefined>;
+  /** A new UUID, for the request id of one history row. */
+  newId(): string;
+  /** Wall time in Unix ms, for the start and end of a call row. */
+  wallNow(): number;
+  /** One history row for each Genie call (`genie-history.ts`). Never rejects. */
+  recordCall?(x: GenieEnd): void;
+  /** The fallback: one direct home call, with the notice line. */
+  direct(turn: AgentTurn, notice: string): Promise<void>;
+  /** The card of `mogId` shows this turn (`agent-card.ts`). */
+  showTurn(mogId: MogId, turn: AgentTurnView): void;
+  /** The card of a turn that left (a removed turn, a cleared session). */
+  dropTurn(mogId: MogId, turnId: string): void;
+  /** A one-line pop-up on the card of `mogId` (the queue is full). */
+  note?(mogId: MogId, text: string): void;
+  /** The MOG mood follows the turn. */
+  phase?(mogId: MogId, phase: GeniePhase): void;
+  followUp?: Pick<FollowUpWindow, 'answered' | 'reset'>;
+  /** The panel changed: the hub gets a new `HubAgentView`. */
+  onChange?(): void;
+  /** A fixed code line only. */
+  log?: Pick<BrainLog, 'event'>;
+}
+
+type Panel = Pick<HubAgentView, 'session' | 'live' | 'waiting' | 'earlier'>;
+
+interface TurnRec {
+  view: AgentTurnView;
+  origin: AgentTurn;
+  catalog: Map<string, AgentWorkspace>;
+  crossWorkspace: boolean;
+  agentProfile: ProfileName | undefined;
+  /** The answered parts, by call id, in the order the calls ended. */
+  parts: Map<string, AgentPartView>;
+  fetched: Set<string>;
+  pending: Set<Promise<unknown>>;
+  /** Set when the turn ended; the order of `earlier`. */
+  endedSeq?: number;
+  ended: boolean;
+  fellBack: boolean;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+const codeOf = (e: unknown): string =>
+  isObj(e) && typeof e['error'] === 'string' ? e['error'] : '';
+const TURN_ID = /^[0-9a-f]{32}$/;
+const CALL_ID = /^c-[0-9a-f]{8}$/;
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+/** The 32 hex digits of a turn id as a UUID, for `genie_exchange.split_group_id`. */
+export const uuidOfTurn = (turnId: string): string =>
+  `${turnId.slice(0, 8)}-${turnId.slice(8, 12)}-${turnId.slice(12, 16)}-${turnId.slice(16, 20)}-${turnId.slice(20)}`;
+
+const CALL_STATES: readonly string[] = [
+  'queued',
+  'asking',
+  'answered',
+  'no_answer',
+  'failed',
+  'timeout',
+  'signed_out',
+  'stopped',
+];
+const OUTCOMES: readonly string[] = [
+  'answered',
+  'stopped',
+  'removed',
+  'timeout',
+  'offline',
+  'signed_out',
+  'not_eligible',
+  'failed',
+  'lockdown',
+  'refusals',
+  'session_ended',
+];
+
+/** A shape check of one `agent:turn` payload. A bad item is dropped. */
+export function asTurnEvent(p: unknown): AgentTurnEvent | undefined {
+  if (!isObj(p) || typeof p['turnId'] !== 'string' || !TURN_ID.test(p['turnId'])) return undefined;
+  const turnId = p['turnId'];
+  switch (p['kind']) {
+    case 'queued':
+      return isCount(p['position'])
+        ? { kind: 'queued', turnId, position: p['position'] }
+        : undefined;
+    case 'started':
+    case 'thinking':
+    case 'slow':
+      return { kind: p['kind'], turnId };
+    case 'call': {
+      const { callId, workspaceId, state, used, budget } = p;
+      if (typeof callId !== 'string' || !CALL_ID.test(callId)) return undefined;
+      if (typeof workspaceId !== 'string' || !CALL_STATES.includes(state as string))
+        return undefined;
+      if (!isCount(used) || !isCount(budget)) return undefined;
+      return {
+        kind: 'call',
+        turnId,
+        callId,
+        workspaceId,
+        state: state as AgentCallState,
+        used,
+        budget,
+      };
+    }
+    case 'refused':
+      return isCount(p['used'])
+        ? { kind: 'refused', turnId, code: p['code'] as never, used: p['used'] }
+        : undefined;
+    case 'ended': {
+      if (!OUTCOMES.includes(p['outcome'] as string) || !isCount(p['calls'])) return undefined;
+      const tokens = p['tokens'];
+      if (tokens !== undefined && !isCount(tokens)) return undefined;
+      return {
+        kind: 'ended',
+        turnId,
+        outcome: p['outcome'] as never,
+        calls: p['calls'],
+        ...(tokens !== undefined ? { tokens } : {}),
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+export function asSessionEvent(p: unknown): AgentSessionEvent | undefined {
+  if (!isObj(p) || typeof p['sessionId'] !== 'string') return undefined;
+  if (p['kind'] === 'started') return { kind: 'started', sessionId: p['sessionId'] };
+  if (p['kind'] === 'ended' && typeof p['reason'] === 'string')
+    return { kind: 'ended', sessionId: p['sessionId'], reason: p['reason'] as never };
+  return undefined;
+}
+
+/** Session end reasons after which no turn of the session stays (the context is gone). */
+const CLEARING: ReadonlySet<string> = new Set([
+  'new_session',
+  'quit',
+  'wipe',
+  'tainted',
+  'profile_changed',
+  'd1_changed',
+  'catalog_changed',
+  'idle',
+]);
+
+/** The most earlier turns the panel keeps in memory. */
+export const EARLIER_MAX = 20;
+/** The most events that wait for a `submit` to return. */
+const EARLY_MAX = 32;
+
+const NO_SESSION: AgentSessionState = {
+  state: 'none',
+  agentProfile: null,
+  turns: 0,
+  queued: 0,
+  tokens: 0,
+};
+
+export interface AgentClient {
+  /** Send one question to the session. It resolves when the core accepted the turn (or fell back). */
+  submit(turn: AgentTurn, mode: AgentMode, actionTicket?: string): Promise<void>;
+  onTurnEvent(payload: unknown): void;
+  onSessionEvent(payload: unknown): void;
+  /** Stop the live turn, or remove a waiting one. */
+  stop(turnId: string): Promise<void>;
+  /** The New session button. */
+  newSession(): Promise<void>;
+  /** Read the session state again (the panel header). */
+  refreshSession(): Promise<void>;
+  /** The Agent panel as it is now (the genie code status is the caller's). */
+  panel(): Panel;
+  /** The turn view of `turnId`, if the client holds it. */
+  turn(turnId: string): AgentTurnView | undefined;
+}
+
+export function createAgentClient(deps: AgentClientDeps): AgentClient {
+  const recs = new Map<string, TurnRec>();
+  /** Events that came before the `submit` reply, by turn id. */
+  const early = new Map<string, AgentTurnEvent[]>();
+  let session: AgentSessionState = NO_SESSION;
+  let seq = 0;
+  /** The session ended in a way that leaves its failed turns on screen until the next start. */
+  let stale = false;
+  const fault = () => void deps.log?.event('agent.turn', { ok: 0 });
+  const changed = () => {
+    try {
+      deps.onChange?.();
+    } catch {
+      fault();
+    }
+  };
+  const show = (r: TurnRec) => {
+    try {
+      deps.showTurn(r.origin.mogId, r.view);
+    } catch {
+      fault();
+    }
+  };
+  const update = (r: TurnRec) => {
+    show(r);
+    changed();
+  };
+
+  function newView(a: AgentTurnAccepted, question: string): TurnRec['view'] {
+    const agentWs = a.catalog.find((c) => c.isAgentWorkspace);
+    return {
+      turnId: a.turnId,
+      question,
+      state: a.position > 0 ? 'queued' : 'planning',
+      ...(a.position > 0 ? { position: a.position } : {}),
+      used: 0,
+      budget: a.budget,
+      agentWorkspace: agentWs
+        ? deps.chipOf(agentWs.profile)
+        : { name: deps.names().agent, colorVariant: '' },
+      calls: [],
+      parts: [],
+    };
+  }
+
+  const chipOfAlias = (r: TurnRec, alias: string): AgentWsChip => {
+    const ws = r.catalog.get(alias);
+    return ws ? deps.chipOf(ws.profile) : { name: alias, colorVariant: '' };
+  };
+
+  const syncParts = (r: TurnRec) => {
+    r.view = { ...r.view, parts: [...r.parts.values()] };
+  };
+
+  /** Pull the question (and, when it ended, the reply) of one call. */
+  async function pullCall(r: TurnRec, callId: string, terminal: boolean): Promise<void> {
+    let d: AgentTurnCall;
+    try {
+      d = await deps.api.callDetail(r.view.turnId, callId);
+    } catch {
+      fault();
+      return;
+    }
+    const row = r.view.calls.find((c) => c.callId === callId);
+    if (row && d.question !== '' && row.question !== d.question) {
+      r.view = {
+        ...r.view,
+        calls: r.view.calls.map((c) => (c.callId === callId ? { ...c, question: d.question } : c)),
+      };
+    }
+    if (!terminal || !isTerminalCall(d.state) || r.fetched.has(callId)) {
+      update(r);
+      return;
+    }
+    r.fetched.add(callId);
+    const ws = r.catalog.get(d.workspaceId);
+    const host = await deps.hostOf(d.profile).catch(() => undefined);
+    const part = partOf(d, {
+      chip: deps.chipOf(d.profile),
+      host,
+      notShownToAgent: !r.crossWorkspace && ws !== undefined && !ws.isAgentWorkspace,
+    });
+    if (part) r.parts.set(callId, part);
+    syncParts(r);
+    await record(r, d);
+    update(r);
+  }
+
+  /** One history row for each Genie call. */
+  async function record(r: TurnRec, d: AgentTurnCall): Promise<void> {
+    if (!deps.recordCall) return;
+    const home = await deps.homeProfile().catch(() => undefined);
+    const refs = replyRefs(d);
+    let end: TerminalAskEvent;
+    switch (d.state) {
+      case 'answered': {
+        const md = answerOf(d);
+        end =
+          d.withheld !== undefined || md.trim() === ''
+            ? { t: 'failed', code: 'GENIE_FAILED', userText: '', retry: 'none' }
+            : {
+                t: 'answer',
+                md,
+                incomplete: false,
+                keyNumbers: keyNumbersOf(md),
+                deepLink: refs.deepLink,
+                queryItems: [],
+              };
+        break;
+      }
+      case 'timeout':
+        end = { t: 'abandoned' };
+        break;
+      case 'stopped':
+        end = { t: 'cancel_requested' };
+        break;
+      case 'signed_out':
+        end = { t: 'failed', code: 'AUTH_EXPIRED', userText: '', retry: 'relogin' };
+        break;
+      default:
+        end = { t: 'failed', code: 'GENIE_FAILED', userText: '', retry: 'user' };
+    }
+    try {
+      deps.recordCall({
+        opId: deps.newId(),
+        mogId: r.origin.mogId,
+        profile: d.profile,
+        question: d.question,
+        end,
+        splitGroupId: uuidOfTurn(r.view.turnId),
+        homeWorkspace: home === undefined || d.profile === home,
+        ...(refs.conversationId !== undefined ? { conversationId: refs.conversationId } : {}),
+        ...(refs.responseId !== undefined ? { responseId: refs.responseId } : {}),
+      });
+    } catch {
+      fault();
+    }
+  }
+
+  const track = (r: TurnRec, p: Promise<void>) => {
+    const t = p.catch(fault).finally(() => r.pending.delete(t));
+    r.pending.add(t);
+  };
+
+  function onCall(r: TurnRec, e: Extract<AgentTurnEvent, { kind: 'call' }>) {
+    const now = deps.wallNow();
+    const known = r.view.calls.find((c) => c.callId === e.callId);
+    const state = callViewState(e.state);
+    let calls: AgentCallView[];
+    if (known) {
+      // A late event never moves a call back from its end.
+      const done = known.endedAt !== undefined;
+      calls = r.view.calls.map((c) =>
+        c.callId !== e.callId || done
+          ? c
+          : {
+              ...c,
+              state,
+              ...(isTerminalCall(e.state) ? { endedAt: now } : {}),
+              ...(c.startedAt === undefined && e.state === 'asking' ? { startedAt: now } : {}),
+            },
+      );
+    } else {
+      calls = [
+        ...r.view.calls,
+        {
+          callId: e.callId,
+          workspace: chipOfAlias(r, e.workspaceId),
+          question: '',
+          state,
+          ...(e.state === 'asking' ? { startedAt: now } : {}),
+          ...(isTerminalCall(e.state) ? { endedAt: now } : {}),
+        },
+      ];
+    }
+    r.view = {
+      ...r.view,
+      calls,
+      used: e.used,
+      budget: e.budget,
+      state: r.view.state === 'slow' ? 'slow' : 'running',
+    };
+    update(r);
+    // The question comes with the first sight of the call; the reply when it ends.
+    if (!known || isTerminalCall(e.state)) track(r, pullCall(r, e.callId, isTerminalCall(e.state)));
+  }
+
+  async function finish(r: TurnRec, e: Extract<AgentTurnEvent, { kind: 'ended' }>) {
+    if (r.ended) return;
+    r.ended = true;
+    r.endedSeq = ++seq;
+    const names = deps.names();
+    const out = e.outcome;
+    if (out === 'removed') {
+      recs.delete(r.view.turnId);
+      try {
+        deps.dropTurn(r.origin.mogId, r.view.turnId);
+      } catch {
+        fault();
+      }
+      changed();
+      void refresh();
+      return;
+    }
+    const state: AgentTurnView['state'] =
+      out === 'answered'
+        ? 'done'
+        : out === 'stopped'
+          ? 'stopped'
+          : out === 'timeout'
+            ? 'timed_out'
+            : out === 'offline'
+              ? 'offline'
+              : out === 'signed_out'
+                ? 'needs_you'
+                : 'failed';
+    r.view = {
+      ...r.view,
+      state,
+      ...(e.tokens !== undefined ? { tokens: e.tokens } : {}),
+      ...(out === 'signed_out'
+        ? {
+            notice: `Your sign-in to ${r.view.agentWorkspace.name} expired. Sign in again in Settings.`,
+          }
+        : {}),
+    };
+    // AC-2a.11: an agent that never asked a workspace falls back to one direct home call.
+    const why = e.calls === 0 ? whyOfOutcome(out) : undefined;
+    if (why && !r.fellBack) {
+      r.fellBack = true;
+      const notice = fallbackNotice(why, names);
+      r.view = { ...r.view, notice };
+      update(r);
+      await deps.direct(r.origin, notice).catch(fault);
+    } else {
+      update(r);
+    }
+    // The calls that ended just before the turn finish their pulls first.
+    await Promise.allSettled([...r.pending]);
+    if (out === 'answered') await summarise(r);
+    syncParts(r);
+    update(r);
+    // A fallback has its own phases: the direct call shows its own outcome.
+    if (!r.fellBack)
+      deps.phase?.(
+        r.origin.mogId,
+        out === 'answered' ? 'answered' : out === 'stopped' ? 'cancelled' : 'failed',
+      );
+    if (out === 'answered') deps.followUp?.answered();
+    void refresh();
+  }
+
+  /** The note of the MOG, and which parts the sources cite (AC-2a.12, AC-2a.28). */
+  async function summarise(r: TurnRec): Promise<void> {
+    let res: AgentTurnResult;
+    try {
+      res = await deps.api.result(r.view.turnId);
+    } catch {
+      fault();
+      return;
+    }
+    if (res.usage && r.view.tokens === undefined) {
+      r.view = { ...r.view, tokens: res.usage.inputTokens + res.usage.outputTokens };
+    }
+    if (res.answerKind === 'hidden' || res.answer === undefined || res.answer.trim() === '') {
+      // No note: every part shows, none folds.
+      return;
+    }
+    // A source of an earlier turn shows as "From an earlier answer".
+    for (const s of res.sources) {
+      if (r.parts.has(s.callId) || !CALL_ID.test(s.callId)) continue;
+      try {
+        const d = await deps.api.callDetail(s.turnId, s.callId);
+        const ws = recs.get(s.turnId)?.catalog.get(d.workspaceId);
+        const part = partOf(d, {
+          chip: deps.chipOf(d.profile),
+          fromEarlier: s.turnId !== r.view.turnId,
+          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !r.crossWorkspace,
+        });
+        if (part) r.parts.set(s.callId, part);
+      } catch {
+        fault();
+      }
+    }
+    const cited = new Set(res.sources.map((s) => s.callId));
+    for (const [id, p] of r.parts) r.parts.set(id, cited.has(id) ? p : { ...p, folded: true });
+    const chips = res.sources
+      .map((s) => r.parts.get(s.callId)?.workspace)
+      .filter((c): c is AgentWsChip => c !== undefined);
+    const workspaces = chips.filter((c, i) => chips.findIndex((x) => x.name === c.name) === i);
+    r.view = {
+      ...r.view,
+      summary: { md: res.answer, kind: res.answerKind, workspaces },
+    };
+  }
+
+  function apply(r: TurnRec, e: AgentTurnEvent) {
+    switch (e.kind) {
+      case 'queued':
+        r.view = { ...r.view, state: 'queued', position: e.position };
+        return update(r);
+      case 'started': {
+        const rest = { ...r.view };
+        delete rest.position;
+        r.view = { ...rest, state: r.view.state === 'slow' ? 'slow' : 'planning' };
+        deps.phase?.(r.origin.mogId, 'working');
+        update(r);
+        return void refresh();
+      }
+      case 'thinking':
+        if (r.view.state === 'queued') r.view = { ...r.view, state: 'planning' };
+        return update(r);
+      case 'call':
+        return onCall(r, e);
+      case 'refused':
+        r.view = { ...r.view, used: e.used };
+        return update(r);
+      case 'slow':
+        r.view = { ...r.view, state: 'slow' };
+        return update(r);
+      case 'ended':
+        return void finish(r, e).catch(fault);
+    }
+  }
+
+  async function refresh(): Promise<void> {
+    try {
+      session = await deps.api.sessionState();
+    } catch {
+      return;
+    }
+    changed();
+  }
+
+  return {
+    async submit(turn, mode, actionTicket) {
+      const opId = deps.newId();
+      let a: AgentTurnAccepted;
+      try {
+        a = await deps.api.submit({
+          mogId: turn.mogId,
+          opId,
+          question: turn.question,
+          mode,
+          ...(actionTicket !== undefined ? { actionTicket } : {}),
+        });
+      } catch (e) {
+        const code = codeOf(e);
+        const why = whyOfRefusal(code);
+        if (why) {
+          await deps.direct(turn, fallbackNotice(why, deps.names()));
+          return;
+        }
+        const text = REFUSAL_TEXT[code];
+        if (text) {
+          deps.note?.(turn.mogId, text);
+          return;
+        }
+        throw e;
+      }
+      const rec: TurnRec = {
+        view: newView(a, turn.question),
+        origin: turn,
+        catalog: new Map(a.catalog.map((c) => [c.workspaceId, c])),
+        crossWorkspace: a.crossWorkspace,
+        agentProfile: a.catalog.find((c) => c.isAgentWorkspace)?.profile,
+        parts: new Map(),
+        fetched: new Set(),
+        pending: new Set(),
+        ended: false,
+        fellBack: false,
+      };
+      recs.set(a.turnId, rec);
+      deps.phase?.(turn.mogId, 'working');
+      update(rec);
+      void refresh();
+      // Events that came before this reply.
+      for (const e of early.get(a.turnId) ?? []) apply(rec, e);
+      early.delete(a.turnId);
+    },
+    onTurnEvent(payload) {
+      const e = asTurnEvent(payload);
+      if (!e) return;
+      const r = recs.get(e.turnId);
+      if (r) return apply(r, e);
+      const list = early.get(e.turnId) ?? [];
+      if (list.length < EARLY_MAX) list.push(e);
+      early.set(e.turnId, list);
+      // The map holds a few turns only.
+      if (early.size > 8) early.delete(early.keys().next().value as string);
+    },
+    onSessionEvent(payload) {
+      const e = asSessionEvent(payload);
+      if (!e) return;
+      if (e.kind === 'started') {
+        if (stale) {
+          for (const [id, r] of recs) if (r.ended) forget(id, r);
+          stale = false;
+        }
+        void refresh();
+        return changed();
+      }
+      deps.followUp?.reset();
+      if (CLEARING.has(e.reason)) {
+        for (const [id, r] of recs) if (r.ended) forget(id, r);
+      } else {
+        stale = true;
+      }
+      session = { ...NO_SESSION };
+      changed();
+      void refresh();
+    },
+    async stop(turnId) {
+      if (!recs.has(turnId)) return;
+      await deps.api.stop(turnId).catch(fault);
+    },
+    async newSession() {
+      await deps.api.endSession().catch(fault);
+      void refresh();
+    },
+    refreshSession: refresh,
+    panel() {
+      const all = [...recs.values()];
+      const live = all.find(
+        (r) => r.view.state === 'planning' || r.view.state === 'running' || r.view.state === 'slow',
+      );
+      const waiting = all.filter((r) => r.view.state === 'queued').slice(0, 3);
+      const earlier = all
+        .filter((r) => r.ended)
+        .sort((a, b) => (b.endedSeq ?? 0) - (a.endedSeq ?? 0))
+        .slice(0, EARLIER_MAX);
+      return {
+        session: { ...session, queued: waiting.length },
+        ...(live ? { live: live.view } : {}),
+        waiting: waiting.map((r) => r.view),
+        earlier: earlier.map((r) => r.view),
+      };
+    },
+    turn: (turnId) => recs.get(turnId)?.view,
+  };
+
+  function forget(id: string, r: TurnRec) {
+    recs.delete(id);
+    try {
+      deps.dropTurn(r.origin.mogId, id);
+    } catch {
+      fault();
+    }
+  }
+}

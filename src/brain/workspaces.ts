@@ -25,7 +25,7 @@ import {
   type WorkspaceAction,
 } from '../shared/hub-workspaces';
 import type { MogId, ProfileName } from '../shared/interfaces';
-import { call, type WorkspaceList, type WorkspaceRow } from '../shared/ipc';
+import { call, type GenieCodeStatus, type WorkspaceList, type WorkspaceRow } from '../shared/ipc';
 import { MOG_PALETTE, nextVariant } from '../shared/mog-palette';
 import { onViewInput, type BrainBus } from './bus';
 import { MOG_CONFIG_DEFAULTS, type MogConfig } from './components/mog-config';
@@ -59,6 +59,9 @@ export const WORKSPACE_TEXT = {
   auth_expired: 'Bottle could not use the new sign-in for this workspace.',
   no_grant: 'Your account has no access to this workspace. Ask your workspace admin for access.',
   offline: 'Bottle cannot reach this workspace. Check your network.',
+  install_failed: 'Bottle could not install Genie Code. Try again later.',
+  checksum_mismatch:
+    'The Genie Code download did not match its checksum. Bottle did not install it.',
 } as const;
 
 /** The text of a sign-in that the app does not run itself. `profile` is a name, never a token. */
@@ -90,7 +93,13 @@ export interface WorkspacesDeps {
   settingsWrite(args: {
     crossWorkspaceData?: boolean;
     genieCallBudget?: 5 | 10 | 20;
+    /** Slice 2a: the profile the agent runs on. `null` means home. */
+    runProfile?: ProfileName | null;
   }): Promise<WorkspaceList>;
+  /** Slice 2a: `genie_code_status`. `recheck` clears the not-eligible cache. */
+  genieCodeStatus?(recheck?: boolean): Promise<GenieCodeStatus>;
+  /** Slice 2a: `genie_code_install` after the user's consent. */
+  genieCodeInstall?(): Promise<GenieCodeStatus>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
   configs: MogConfigClient;
@@ -109,6 +118,12 @@ export interface WorkspacesDeps {
 export interface Workspaces {
   /** The last list that the Rust store gave, if any. */
   last(): WorkspaceList | undefined;
+  /** Slice 2a: the last known Genie Code status, or undefined before the first read. */
+  genieCode(): GenieCodeStatus | undefined;
+  /** Slice 2a: read the Genie Code status again and send the list. Never rejects. */
+  refreshGenieCode(recheck?: boolean): Promise<void>;
+  /** Slice 2a: the available workspaces with their names, for the routing rules. */
+  catalog(): { profile: string; name: string; isHome: boolean; colorVariant: string }[];
   /**
    * "Change workspace…": send the list with no notice, then with the plain settings notice, so
    * the hub switches to Settings → Workspace each time.
@@ -136,6 +151,9 @@ const supportedRow = (r: WorkspaceRow) => r.signIn !== 'unsupported' && r.signIn
 
 export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
   let last: WorkspaceList | undefined;
+  /** Slice 2a: the last Genie Code status and the last rows with their names. */
+  let genie: GenieCodeStatus | undefined;
+  let namedRows: HubWorkspaceRow[] = [];
   /** Serialises the actions, so two clicks never write at once. */
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -221,6 +239,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     extra: { busyProfile?: string; notice?: HubWorkspaceList['notice'] } = {},
   ): Promise<HubWorkspaceList> {
     const rows = await rowsOf(l);
+    namedRows = rows;
     const out: HubWorkspaceList = {
       rows,
       home: l.home,
@@ -228,6 +247,9 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         crossWorkspaceData: l.agent.crossWorkspaceData,
         crossWorkspaceLocked: l.agent.crossWorkspaceLocked,
         genieCallBudget: l.agent.genieCallBudget,
+        // Slice 2a: "Genie Code runs on", and the Genie Code status.
+        ...(l.agent.runProfile !== undefined ? { runProfile: l.agent.runProfile } : {}),
+        ...(genie ? { genieCode: genie } : {}),
       },
     };
     if (l.home === null) {
@@ -249,6 +271,16 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     if (extra.busyProfile !== undefined) out.busyProfile = extra.busyProfile;
     if (extra.notice) out.notice = extra.notice;
     return out;
+  }
+
+  /** Read the Genie Code status. A failed read keeps the last one. */
+  async function readGenie(recheck?: boolean): Promise<void> {
+    if (!deps.genieCodeStatus) return;
+    try {
+      genie = await deps.genieCodeStatus(recheck);
+    } catch {
+      // The status stays as it was.
+    }
   }
 
   const publish = async (
@@ -344,6 +376,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
     switch (a.action) {
       case 'workspaces.ready':
         // The hub opens: read again, and let the store probe the sign-in states.
+        await readGenie();
         return publish(await fetchList(true));
       case 'workspace.set_available': {
         const row = rowOf(a.profile);
@@ -401,13 +434,56 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return publish(
           keep(await deps.settingsWrite({ crossWorkspaceData: a.crossWorkspaceData })),
         );
+      case 'workspace.agent_profile': {
+        // Slice 2a: Rust ends the session after the live turn. The agent profile state changes.
+        const l = keep(await deps.settingsWrite({ runProfile: a.profile }));
+        await readGenie();
+        return publish(l);
+      }
+      case 'genie_code.recheck':
+        await readGenie(true);
+        return publish(last);
+      case 'genie_code.install': {
+        // The busy state shows while the install runs.
+        if (genie) genie = { ...genie, binary: 'installing' };
+        await publish(last);
+        try {
+          genie = await (deps.genieCodeInstall?.() ?? Promise.reject({ error: 'not_implemented' }));
+        } catch (e) {
+          await readGenie();
+          const code = codeOf(e);
+          const text =
+            code === 'checksum_mismatch'
+              ? WORKSPACE_TEXT.checksum_mismatch
+              : WORKSPACE_TEXT.install_failed;
+          return publish(last, { notice: { kind: 'error', text } });
+        }
+        return publish(last);
+      }
     }
   }
 
   return {
     last: () => last,
+    genieCode: () => genie,
+    async refreshGenieCode(recheck) {
+      await readGenie(recheck);
+      await publish(last);
+    },
+    catalog: () =>
+      namedRows
+        .filter(
+          (r) => (r.available || r.isHome) && r.signIn !== 'unsupported' && r.signIn !== 'missing',
+        )
+        .map((r) => ({
+          profile: r.profile,
+          name: r.name,
+          isHome: r.isHome,
+          colorVariant: r.colorVariant,
+        })),
     async refresh(opts) {
       try {
+        await readGenie();
         const l = await fetchList(opts?.refresh);
         await publish(l, opts?.notice ? { notice: opts.notice } : undefined);
       } catch (e) {
@@ -519,6 +595,8 @@ export function ipcWorkspacesDeps(onChanged?: () => void): WorkspacesDeps {
     makeHome: (profile, mogId) =>
       call('workspace_make_home', { profile, ...(mogId !== undefined ? { mogId } : {}) }),
     settingsWrite: (args) => call('workspace_settings_write', args),
+    genieCodeStatus: (recheck) => call('genie_code_status', recheck ? { recheck } : {}),
+    genieCodeInstall: () => call('genie_code_install', { consent: true }),
     reauth: (profile) => call('profile_reauth', { profile }),
     configs,
     store: new IpcLocalMemoryStore(),

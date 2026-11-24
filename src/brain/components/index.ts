@@ -54,6 +54,11 @@ import {
   type ThreadStatus,
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
+import { createAgentCard, wireAgentChips } from '../agent-card';
+import { createAgentClient, ipcAgentApi } from '../agent-run';
+import { createAskRouter, createFollowUpWindow } from '../agent-route';
+import { MOG_PALETTE } from '../../shared/mog-palette';
+import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { wireHubMemory } from '../hub-memory-wiring';
@@ -379,6 +384,111 @@ export function startBrain(): Brain {
         );
       return s;
     };
+    // Slice 2a: the direct home path of ADR 0097 (#573). The router below sends a question here
+    // unless the live Genie Code session takes it (plan Amendment 2, R-1 to R-15).
+    // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
+    // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
+    const directSend = createGenieDirectSend({
+      genie: components.T8,
+      cardFor: stackFor,
+      newOpId: () => crypto.randomUUID(),
+      // #40 (AT-09): each request that ends saves one local exchange row through T10.
+      onEnd: recordGenieExchange,
+      // #573: the MOG shows the work (processing), then the answer (answering, success) or
+      // the failure (error); the card shows next to the MOG when the outcome is on it.
+      onPhase: (mogId, phase, opId) => {
+        lastGenieOp.set(mogId, opId);
+        captureMood.ask(mogId, phase);
+      },
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      arrivals: arrivalGate,
+      // The card's "Change workspace…": the same path as the right-click "Change home
+      // workspace…": show the hub on that MOG's Edit form.
+      changeWorkspace: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+      hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+      // R-8: "Ask other workspaces too" on an answered direct card.
+      offerOthers: (turn, opId) => askRouter.offerOthers(turn, opId),
+    });
+    // Slice 2a: the one live Genie Code session. The client turns `agent:turn` and `agent:session`
+    // events into the card of the turn and the history rows; the follow-up window is R-13.
+    const followUp = createFollowUpWindow(cardClock);
+    const agentLog = createBrainLog();
+    const agentCard = createAgentCard({
+      stackFor,
+      showCard: (mogId) => call('window_card_show', { mogId }),
+      arrivals: arrivalGate,
+      onCardOpen: (open) => followUp.card(open),
+      onFault: () => void agentLog.event('card.render', { ok: 0 }),
+    });
+    const routeNames = () => {
+      const cat = workspaces.catalog();
+      const home = cat.find((c) => c.isHome);
+      const run = workspaces.last()?.agent.runProfile;
+      const agent = (run ? cat.find((c) => c.profile === run) : undefined) ?? home;
+      return {
+        agent: agent?.name ?? 'your home workspace',
+        home: home?.name ?? 'your home workspace',
+      };
+    };
+    const agentClient = createAgentClient({
+      api: ipcAgentApi(),
+      chipOf: (profile) => {
+        const w = workspaces.catalog().find((c) => c.profile === profile);
+        return {
+          name: w?.name ?? profile,
+          colorVariant: w?.colorVariant ?? MOG_PALETTE[0]?.id ?? '',
+        };
+      },
+      names: routeNames,
+      homeProfile: () => workspaces.home(),
+      hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+      newId: () => crypto.randomUUID(),
+      wallNow: () => Date.now(),
+      ...(recordGenieExchange ? { recordCall: recordGenieExchange } : {}),
+      direct: (turn, notice) => directSend(turn, { notice }),
+      showTurn: (mogId, view) => agentCard.show(mogId, view),
+      dropTurn: (mogId, turnId) => {
+        if (agentCard.shown(mogId) === turnId) agentCard.close(mogId);
+      },
+      note: (mogId, text) => {
+        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true });
+        void call('window_card_show', { mogId }).catch(() => undefined);
+      },
+      phase: (mogId, phase) => captureMood.ask(mogId, phase),
+      followUp,
+      log: agentLog,
+    });
+    bus.on(EVENTS['agent.turn'].name, (p) => agentClient.onTurnEvent(p));
+    bus.on(EVENTS['agent.session'].name, (p) => agentClient.onSessionEvent(p));
+    const askRouter = createAskRouter({
+      context: () => ({
+        genieCode: workspaces.genieCode(),
+        workspaces: workspaces.catalog(),
+      }),
+      names: routeNames,
+      followUp,
+      agent: agentClient,
+      direct: directSend,
+      closeAgentCard: (mogId) => agentCard.close(mogId),
+      removeChip: (mogId, opId) => stackFor(mogId).clearControls(`more:${genieBlurbId(opId)}`),
+      note: (mogId, text) =>
+        stackFor(mogId).add({ id: `agent-note:${crypto.randomUUID()}`, text, completed: true }),
+      refreshGenieCode: () => void workspaces.refreshGenieCode(),
+    });
+    // The agent chips of the card: Stop, Open in Agent, Open Settings, "Ask other workspaces too".
+    wireAgentChips(bus, {
+      stop: (turnId) => void agentClient.stop(turnId),
+      openAgent: () => void showHub(),
+      openSettings: () => {
+        void showHub();
+        void workspaces.showSettings();
+      },
+      askOthers: (mogId, opId, ticket) => void askRouter.askOthers(mogId, opId, ticket),
+      cardDone: (mogId) => agentCard.close(mogId),
+    });
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
     // Nothing goes to Genie without ⌥G or a chip press.
     const askGate = createAskGate({
@@ -391,30 +501,9 @@ export function startBrain(): Brain {
       // #163: the target is the MOG's home profile (no hop yet, TODO(#164)). With none,
       // nothing is sent: the pick card asks the user to pick one.
       target: (mogId) => homes.home(mogId),
-      // #573 (ADR 0097): the hand-off seam sends the question straight to Genie One MCP through
-      // T8 `submit` (`mcp_call` `genie_ask`, then the PollActor). No main agent, no retry.
-      send: createGenieDirectSend({
-        genie: components.T8,
-        cardFor: stackFor,
-        newOpId: () => crypto.randomUUID(),
-        // #40 (AT-09): each request that ends saves one local exchange row through T10.
-        onEnd: recordGenieExchange,
-        // #573: the MOG shows the work (processing), then the answer (answering, success) or
-        // the failure (error); the card shows next to the MOG when the outcome is on it.
-        onPhase: (mogId, phase, opId) => {
-          lastGenieOp.set(mogId, opId);
-          captureMood.ask(mogId, phase);
-        },
-        showCard: (mogId) => call('window_card_show', { mogId }),
-        arrivals: arrivalGate,
-        // The card's "Change workspace…": the same path as the right-click "Change home
-        // workspace…": show the hub on that MOG's Edit form.
-        changeWorkspace: () => {
-          void showHub();
-          void workspaces.showSettings();
-        },
-        hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
-      }),
+      // Slice 2a: the router sends the question to the live Genie Code session or to the direct
+      // home path (ADR 0097).
+      send: (turn) => askRouter.send(turn),
       // #557: an ask or a press with no home profile opens the picker; the user picks, then the
       // text goes.
       pickProfile: (mogId, then) => void pick.choose(mogId, then),
@@ -478,9 +567,32 @@ export function startBrain(): Brain {
     // and asks Rust to open it (Rust checks it a third time).
     wireLinkOpen(bus, {
       resolve: async (input, requestId) => {
+        // Slice 2a: a link in an agent answer is for the workspace that answered. The click names a
+        // host; it counts only if it is the host of a workspace that the user switched on (the
+        // trust rule then checks the URL against that host again).
+        const ofAgentAnswer = async (): Promise<{ profile: string; host: string } | undefined> => {
+          const click = asLinkOpenClick(input.payload);
+          if (!click) return undefined;
+          let host = '';
+          try {
+            host = new URL(click.url).host.toLowerCase();
+          } catch {
+            return undefined;
+          }
+          const on = new Set(workspaces.catalog().map((c) => c.profile));
+          const p = (await ipcListProfiles()).find(
+            (x) => on.has(x.name) && bareHost(x.host) === host,
+          );
+          return p ? { profile: p.name, host: p.host } : undefined;
+        };
         if (input.from === 'hub') {
           const ws = requestId ? conversations.workspaceOf(requestId) : undefined;
-          return ws && ws.host !== '' ? { profile: ws.profile, host: ws.host } : undefined;
+          if (ws && ws.host !== '') return { profile: ws.profile, host: ws.host };
+          return requestId ? undefined : ofAgentAnswer();
+        }
+        if (agentCard.shown(input.mogId)) {
+          const w = await ofAgentAnswer();
+          if (w) return w;
         }
         const profile = homes.home(input.mogId);
         if (!profile) return undefined;
