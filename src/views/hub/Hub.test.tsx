@@ -219,14 +219,13 @@ describe('hub sidebar navigation and Conversations (ui-1, #97, #103)', () => {
     expect(el.querySelector('.hub-home-stage')?.getAttribute('data-motion')).toBe('fade');
   });
 
-  it('[#103] the toggle opens the sidebar with Home, Conversations, Agent, Recordings, Memory, Settings', async () => {
+  it('[#103] the toggle opens the sidebar with Home, Conversations, Recordings, Memory, Settings', async () => {
     const { el } = await render(<Hub />);
     await act(async () => toggle(el)?.click());
     expect(el.querySelector('[data-sidebar]')).not.toBeNull();
     expect(items(el).map((b) => b.textContent)).toEqual([
       'Home',
       'Conversations',
-      'Agent',
       'Recordings',
       'Memory',
       'Settings',
