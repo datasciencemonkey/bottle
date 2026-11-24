@@ -1224,8 +1224,8 @@ mod tests {
                 "2026-11-19_0905.opus",
                 1.0,
             )],
-            "databricks-gemini-3-8-flash",
-            "databricks-claude-sonnet-5-5",
+            "system.ai.gemini-3-8-flash",
+            "system.ai.claude-sonnet-5-5",
             &iso_utc(0),
         );
         m.status = status;

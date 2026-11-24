@@ -14,6 +14,8 @@ import {
   CLEAN_DICTATION_LABEL,
   COMBINE_APPLIES,
   COMBINE_LOCKED,
+  DICTATION_ENGINE_LABEL,
+  DICTATION_ENGINE_LOCAL,
   ORCHESTRATOR_LABEL,
 } from './AgentSettings';
 
@@ -37,6 +39,7 @@ const ORCH: HubOrchestratorView = {
   ],
   selected: 'system.ai.claude-haiku-5-5',
   cleanDictation: true,
+  cloudDictation: false,
   state: 'ready',
   homeName: 'Sales',
 };
@@ -128,6 +131,35 @@ describe('AgentSettings', () => {
     expect(clean(off.el)?.getAttribute('aria-checked')).toBe('false');
     await click(clean(off.el));
     expect(clicks()).toEqual([{ action: 'orchestrator.clean_dictation', on: true }]);
+  });
+
+  it('[ADR 0123] "Dictation engine" is a two-way choice, On this Mac by default, that sends the new value', async () => {
+    const eng = (el: Element, v: string) =>
+      el.querySelector<HTMLElement>(`[data-dictation-engine] [data-engine="${v}"]`);
+    const { el } = await render(<AgentSettings list={list()} orchestrator={ORCH} />);
+    const group = el.querySelector('[data-dictation-engine]');
+    expect(group?.getAttribute('role')).toBe('radiogroup');
+    expect(document.getElementById(group?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe(
+      DICTATION_ENGINE_LABEL,
+    );
+    expect(eng(el, 'local')?.getAttribute('aria-checked')).toBe('true');
+    expect(eng(el, 'databricks')?.getAttribute('aria-checked')).toBe('false');
+    expect(el.textContent).toContain('On this Mac');
+    expect(el.querySelector('[data-dictation-engine-help]')?.textContent).toBe(
+      DICTATION_ENGINE_LOCAL,
+    );
+    await click(eng(el, 'databricks'));
+    expect(clicks()).toEqual([{ action: 'orchestrator.cloud_dictation', on: true }]);
+    tauri.reset();
+    const cloud = await render(
+      <AgentSettings list={list()} orchestrator={{ ...ORCH, cloudDictation: true }} />,
+    );
+    expect(eng(cloud.el, 'databricks')?.getAttribute('aria-checked')).toBe('true');
+    expect(cloud.el.querySelector('[data-dictation-engine-help]')?.textContent).toBe(
+      "Databricks: your voice is sent to your home workspace's AI Gateway to transcribe it.",
+    );
+    await click(eng(cloud.el, 'local'));
+    expect(clicks()).toEqual([{ action: 'orchestrator.cloud_dictation', on: false }]);
   });
 
   it('shows quiet status text with the reason when the orchestrator is not ready', async () => {

@@ -2,8 +2,8 @@
   "enabled": false,
   "consentAck": false,
   "storage": null,
-  "transcribeEndpoint": "databricks-gemini-3-8-flash",
-  "notesEndpoint": "databricks-claude-sonnet-5-5",
+  "transcribeEndpoint": "system.ai.gemini-3-8-flash",
+  "notesEndpoint": "system.ai.claude-sonnet-5-5",
   "presetInstructions": "Write short notes in Markdown.",
   "lengthMin": 60,
   "heldNoteShown": false

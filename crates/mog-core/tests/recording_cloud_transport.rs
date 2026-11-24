@@ -322,7 +322,7 @@ fn nfr_21a_nfr_21b_sec_06a_rec_model_calls_use_the_gateway_route_with_tags() {
         br#"{"choices":[{"message":{"content":"[00:00] Speaker 1: Hi."}}]}"#.to_vec(),
     )]);
     let t = transport(&origin);
-    let body = json!({"model":"databricks-gemini-3-8-flash","messages":[]});
+    let body = json!({"model":"system.ai.gemini-3-8-flash","messages":[]});
     let e = t
         .send(
             "p",

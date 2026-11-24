@@ -331,8 +331,8 @@ impl Rig {
                 name: NAME.into(),
                 started_at: "2026-11-20T09:00:00Z".into(),
                 instructions: "Write short notes.".into(),
-                transcribe_endpoint: "databricks-gemini-3-8-flash".into(),
-                notes_endpoint: "databricks-claude-sonnet-5-5".into(),
+                transcribe_endpoint: "system.ai.gemini-3-8-flash".into(),
+                notes_endpoint: "system.ai.claude-sonnet-5-5".into(),
                 mog: "recording".into(),
                 parts: Vec::new(),
             },
@@ -681,8 +681,8 @@ fn put_job(r: &Rig, name: &str, status: Status, parts: &[(&str, bool)], started:
                 e
             })
             .collect(),
-        "databricks-gemini-3-8-flash",
-        "databricks-claude-sonnet-5-5",
+        "system.ai.gemini-3-8-flash",
+        "system.ai.claude-sonnet-5-5",
         started,
     );
     m.status = status;

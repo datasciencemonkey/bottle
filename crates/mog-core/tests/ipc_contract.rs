@@ -1132,7 +1132,7 @@ fn sec_02b_recording_arguments_are_checked() {
         json!({"lengthMin": 120}),
         json!({"storage": {"kind": "my_files", "root": "/Volumes/databricks/home/123/me@example.com/my_files/"}}),
         json!({"storage": {"kind": "volume", "root": "/Volumes/main/calls/bottle_audio"}}),
-        json!({"transcribeEndpoint": "databricks-gemini-3-8-flash", "notesEndpoint": "databricks-claude-sonnet-5-5"}),
+        json!({"transcribeEndpoint": "system.ai.gemini-3-8-flash", "notesEndpoint": "system.ai.claude-sonnet-5-5"}),
         json!({}),
     ] {
         let err =

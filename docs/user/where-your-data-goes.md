@@ -30,6 +30,8 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - Meeting audio is kept encrypted on disk and deleted within 5 minutes after transcription, unless your admin keeps it longer.
 - Bottle uses Databricks speech-to-text only if you or your admin turn it on, after a check passes.
 - Then audio goes to your home workspace in short chunks, and Bottle does not store it there.
+- If you set Dictation engine to Databricks, the audio of each talk-key hold goes to your home workspace to be transcribed.
+- Bottle sends it as one audio file, and does not store it there. If that call fails, Bottle uses the local model.
 - The STT badge on each MOG shows which one is on.
 - If your admin sets local-only speech-to-text, no audio leaves this computer, also when local speech-to-text fails.
 - The local model knows 25 European languages. For another language, Bottle uses Databricks speech-to-text only if it is on. If it is off, the MOG shows "Transcription of this language is not available on this device."

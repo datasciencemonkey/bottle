@@ -1529,7 +1529,7 @@
     "recording_settings_write": {
       "$defs": {
         "EndpointName": {
-          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "pattern": "^[A-Za-z0-9_.-]{1,128}$",
           "type": "string"
         },
         "Instructions": {
@@ -2234,6 +2234,10 @@
         },
         "cleanDictation": {
           "description": "ADR 0122: \"Clean up dictation\".",
+          "type": "boolean"
+        },
+        "cloudDictation": {
+          "description": "ADR 0123: \"Dictation engine: Databricks\".",
           "type": "boolean"
         },
         "crossWorkspaceData": {

@@ -141,6 +141,13 @@ describe('Table SEC-DISC disclosures', () => {
     expect(text('where-data-goes')).toMatch(/tokens stay in the Bottle core/);
   });
 
+  it('[SEC-17] the Databricks dictation engine says that the voice goes to the home workspace', () => {
+    const t = text('stt-location');
+    expect(t).toMatch(/Dictation engine to Databricks/);
+    expect(t).toMatch(/audio of each talk-key hold goes to your home workspace to be transcribed/);
+    expect(t).toMatch(/uses the local model/);
+  });
+
   it('[SEC-17] the summary names cleanup egress and the Appendix B side effects', () => {
     const t = text('where-data-goes');
     expect(t).toMatch(/Dictation text goes to your home workspace for cleanup/);

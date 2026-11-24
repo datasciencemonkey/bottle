@@ -97,6 +97,8 @@ export interface WorkspacesDeps {
     agentEndpoint?: string;
     /** ADR 0122: "Clean up dictation". */
     cleanDictation?: boolean;
+    /** ADR 0123: "Dictation engine: Databricks". */
+    cloudDictation?: boolean;
   }): Promise<WorkspaceList>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
@@ -119,7 +121,11 @@ export interface Workspaces {
   /** The last list that the Rust store gave, if any. */
   last(): WorkspaceList | undefined;
   /** ADR 0122: write the orchestrator model or the dictation switch, then send the list. */
-  writeSettings(args: { agentEndpoint?: string; cleanDictation?: boolean }): Promise<void>;
+  writeSettings(args: {
+    agentEndpoint?: string;
+    cleanDictation?: boolean;
+    cloudDictation?: boolean;
+  }): Promise<void>;
   /** Slice 2a: the available workspaces with their names, for the routing rules. */
   catalog(): { profile: string; name: string; isHome: boolean; colorVariant: string }[];
   /**

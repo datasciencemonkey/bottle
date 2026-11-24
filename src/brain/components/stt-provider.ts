@@ -255,18 +255,28 @@ const errorCode = (e: unknown): string => {
   return typeof c === 'string' ? c : '';
 };
 
-/** A reply is valid for the segment and the provider it asked; cloud text is never empty. */
+/**
+ * A reply is valid for the segment and the provider it asked; cloud text is never empty.
+ * ADR 0123: with the Databricks dictation engine, R4 answers a `local_parakeet` request with its
+ * own cloud transcript (`dbx_gemini`, after a local fallback it is `local_parakeet`). So that one
+ * pair is valid. The reply names its real provider.
+ */
 function validReply(t: unknown, seg: SegmentRef, provider: Provider): Transcript | undefined {
   if (!isRecord(t)) return undefined;
-  if (t['segmentId'] !== seg.segmentId || t['provider'] !== provider) return undefined;
+  const got = t['provider'];
+  const answered =
+    got === provider || (provider === 'local_parakeet' && got === 'dbx_gemini')
+      ? (got as Provider)
+      : undefined;
+  if (t['segmentId'] !== seg.segmentId || answered === undefined) return undefined;
   const { text, raw, model, runtime, latencyMs, lang } = t;
   if (typeof text !== 'string' || typeof raw !== 'string') return undefined;
-  if (provider !== 'local_parakeet' && text.trim() === '') return undefined;
+  if (answered !== 'local_parakeet' && text.trim() === '') return undefined;
   const out: Transcript = {
     segmentId: seg.segmentId,
     text,
     raw,
-    provider,
+    provider: answered,
     model: typeof model === 'string' ? model : '',
     runtime: typeof runtime === 'string' ? runtime : '',
     latencyMs: typeof latencyMs === 'number' && Number.isFinite(latencyMs) ? latencyMs : 0,

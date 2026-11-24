@@ -421,6 +421,7 @@ fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
         genie_call_budget: None,
         agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
         clean_dictation: None,
+        cloud_dictation: None,
     })
     .unwrap();
     assert_eq!(
@@ -555,6 +556,7 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: GenieCallBudget::DEFAULT,
             endpoint: ep("system.ai.claude-haiku-5-5"),
             clean_dictation: true,
+            cloud_dictation: false,
         }
     );
     // A bad budget or model cannot be built, and the command refuses it on the wire.
@@ -579,6 +581,7 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: Some(budget(20)),
             agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
             clean_dictation: Some(false),
+            cloud_dictation: None,
         })
         .unwrap();
     assert_eq!(
@@ -597,6 +600,7 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
             clean_dictation: None,
+            cloud_dictation: None,
         })
         .unwrap();
     assert!(l.agent.cross_workspace_data);
@@ -617,6 +621,37 @@ fn settings_write_refuses_a_non_bool_clean_dictation() {
         .call("workspace_settings_write", json!({"cleanDictation": false}))
         .unwrap();
     assert_eq!(l["agent"]["cleanDictation"], false);
+}
+
+/// ADR 0123: `cloudDictation` is a bool, off by default, and the read-only reader follows it.
+/// A file from before it has no field and reads as off.
+#[test]
+fn adr_0123_cloud_dictation_is_a_bool_off_by_default() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert!(!w.cloud_dictation());
+    assert!(!w.list(false).unwrap().agent.cloud_dictation);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"cloudDictation": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call("workspace_settings_write", json!({"cloudDictation": true}))
+        .unwrap();
+    assert_eq!(l["agent"]["cloudDictation"], true);
+    assert!(w.cloud_dictation());
+    // A later write of another field keeps it.
+    w.call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert!(w.cloud_dictation());
+    // An old file with no field reads as off.
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cloudDictation");
+    write_file(&w, &s, &data);
+    assert!(!w.cloud_dictation());
 }
 
 /// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other

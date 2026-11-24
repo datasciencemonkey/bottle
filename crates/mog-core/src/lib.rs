@@ -17,6 +17,7 @@ pub mod capture;
 pub mod cli_runner;
 pub mod cli_status;
 pub mod clock;
+pub mod cloud_dictation;
 pub mod consent;
 pub mod consent_ipc;
 pub mod egress_policy;

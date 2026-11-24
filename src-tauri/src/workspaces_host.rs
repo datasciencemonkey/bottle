@@ -88,6 +88,13 @@ impl WorkspacesHost {
         Arc::new(move || store.get().and_then(|s| s.orchestrator_model()))
     }
 
+    /// A read-only source of "Dictation engine: Databricks" (ADR 0123). It is `false` until a
+    /// store is set: dictation then stays on this Mac.
+    pub fn cloud_dictation_source(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let store = self.store.clone();
+        Arc::new(move || store.get().is_some_and(|s| s.cloud_dictation()))
+    }
+
     /// Bind R6 to the store, for the sign-in column and the probe.
     pub fn bind_sign_in(&self, source: Arc<dyn SignInSource>) {
         if let Some(s) = self.store.get() {

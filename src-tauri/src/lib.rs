@@ -89,8 +89,14 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
     // #46 (ADR 0082): R4 SttEngine, with the #413 loader (`stt_loader`). `stt_transcribe`
     // takes the results from the store (#514); `BrainSegments` sends `capture.segment` (#514).
     let segments = capture_host::BrainSegments::new(std::sync::Arc::clone(&relay));
+    // ADR 0123: the cloud half of dictation. It reads the Settings choice on each take, so the
+    // model host can come up after R4.
     let stt =
-        mog_core::stt_engine::LocalStt::new(stt_loader(), std::sync::Arc::new(segments), |_| {});
+        mog_core::stt_engine::LocalStt::new(stt_loader(), std::sync::Arc::new(segments), |parts| {
+            parts.cloud = Some(std::sync::Arc::new(model_host::LazyCloudStt(
+                handle.clone(),
+            )));
+        });
     // #21 (CAP-12c, CAP-34, ADR 0078): the RAM-only PTT buffer. R4 is its consumer (#46).
     let ptt = mog_core::audio_device::ptt_buffer::PttBuffer::new(std::sync::Arc::new(
         stt.engine().clone(),

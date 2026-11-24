@@ -6,6 +6,9 @@
 //!   (a reference is not possible: the model fetches URLs itself and cannot sign in);
 //! - notes: one chat call with the instructions and the joined transcript.
 //!
+//! ADR 0123: both models are `system.ai.*` ids (the dotted id passes the endpoint rule), and
+//! [`audio_chat_body`] is the one audio request that cloud dictation shares.
+//!
 //! Live facts (DEFAULT, 2026-11-19, synthetic clips): `audio/ogg` (Opus), `audio/flac` and
 //! `audio/wav` data URLs work; `input_audio` is refused; the request cap is about 30 MB (30 MB
 //! passed, 32 MB dropped the connection), so Bottle keeps one request under [`REQUEST_BUDGET`].
@@ -16,7 +19,7 @@
 use serde_json::{json, Value};
 
 use super::errors::ErrorKind;
-use super::settings_store::is_endpoint_name;
+use super::settings_store::{current_endpoint, is_endpoint_name};
 use super::transcript::RawSegment;
 
 /// The largest model request Bottle sends (bytes).
@@ -97,14 +100,6 @@ pub fn transcribe_request(
     audio: &[u8],
     context: Option<&str>,
 ) -> Result<Value, ErrorKind> {
-    if !is_endpoint_name(endpoint) {
-        return Err(ErrorKind::TranscribeEndpointMissing);
-    }
-    let format = sniff(audio).ok_or(ErrorKind::AudioUnreadable)?;
-    // base64 is 4/3 of the bytes; 64 KiB covers the prompt, the context and the JSON.
-    if audio.len().div_ceil(3) * 4 + 64 * 1024 > REQUEST_BUDGET {
-        return Err(ErrorKind::TooLong);
-    }
     let mut prompt = TRANSCRIBE_PROMPT.to_owned();
     if let Some(c) = context.filter(|c| !c.trim().is_empty()) {
         let tail: String = c
@@ -121,6 +116,27 @@ pub fn transcribe_request(
             "\nKeep the same speaker labels. Timestamps start at [00:00] for this audio.",
         );
     }
+    audio_chat_body(endpoint, &prompt, audio, TRANSCRIBE_MAX_TOKENS)
+}
+
+/// The one audio-to-model request body, shared by call recording and cloud dictation (ADR 0123):
+/// the prompt and the audio inline as an `audio_url` data URL on the chat route. The audio must
+/// be bytes that Bottle encoded (its magic is checked) and must fit [`REQUEST_BUDGET`].
+pub fn audio_chat_body(
+    endpoint: &str,
+    prompt: &str,
+    audio: &[u8],
+    max_tokens: u32,
+) -> Result<Value, ErrorKind> {
+    let endpoint = current_endpoint(endpoint);
+    if !is_endpoint_name(endpoint) {
+        return Err(ErrorKind::TranscribeEndpointMissing);
+    }
+    let format = sniff(audio).ok_or(ErrorKind::AudioUnreadable)?;
+    // base64 is 4/3 of the bytes; 64 KiB covers the prompt, the context and the JSON.
+    if audio.len().div_ceil(3) * 4 + 64 * 1024 > REQUEST_BUDGET {
+        return Err(ErrorKind::TooLong);
+    }
     let url = format!("data:{};base64,{}", format.mime(), base64(audio));
     Ok(json!({
         "model": endpoint,
@@ -128,7 +144,7 @@ pub fn transcribe_request(
             {"type": "text", "text": prompt},
             {"type": "audio_url", "audio_url": {"url": url}},
         ]}],
-        "max_tokens": TRANSCRIBE_MAX_TOKENS,
+        "max_tokens": max_tokens,
     }))
 }
 
@@ -138,6 +154,7 @@ pub fn notes_request(
     instructions: &str,
     transcript: &str,
 ) -> Result<Value, ErrorKind> {
+    let endpoint = current_endpoint(endpoint);
     if !is_endpoint_name(endpoint) {
         return Err(ErrorKind::NotesEndpointMissing);
     }

@@ -185,6 +185,7 @@ const orchestratorState = (state: string) =>
     models: [{ id: 'system.ai.claude-haiku-5-5', label: 'Claude Haiku 5.5' }],
     selected: 'system.ai.claude-haiku-5-5',
     cleanDictation: true,
+    cloudDictation: false,
     state,
     homeName: 'Sales',
   });

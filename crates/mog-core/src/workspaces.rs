@@ -195,6 +195,9 @@ struct AgentData {
     endpoint: OrchestratorModel,
     #[serde(default = "default_clean_dictation")]
     clean_dictation: bool,
+    /// ADR 0123: dictation goes to the home AI Gateway. A file from before reads as false.
+    #[serde(default)]
+    cloud_dictation: bool,
     /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
     /// kept and never written.
     #[serde(default, skip_serializing, rename = "runProfile")]
@@ -454,6 +457,7 @@ impl WorkspaceStore {
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
+                cloud_dictation: false,
                 _legacy_run_profile: None,
             },
         })
@@ -505,6 +509,13 @@ impl WorkspaceStore {
     pub fn orchestrator_model(&self) -> Option<String> {
         let _g = self.guard();
         Some(self.load().ok()?.agent.endpoint.as_str().to_owned())
+    }
+
+    /// "Dictation engine: Databricks" (ADR 0123), read only. `false` when the file cannot be
+    /// read: dictation then stays on the Mac.
+    pub fn cloud_dictation(&self) -> bool {
+        let _g = self.guard();
+        self.load().is_ok_and(|d| d.agent.cloud_dictation)
     }
 
     /// `workspace_list`.
@@ -563,6 +574,7 @@ impl WorkspaceStore {
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
+                cloud_dictation: data.agent.cloud_dictation,
             },
         })
     }
@@ -757,6 +769,9 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.clean_dictation {
                 data.agent.clean_dictation = v;
+            }
+            if let Some(v) = a.cloud_dictation {
+                data.agent.cloud_dictation = v;
             }
             self.save(&data)?;
             data

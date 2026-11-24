@@ -22,7 +22,7 @@ function rig(over: Partial<OrchestratorDeps> = {}) {
   const statusReads: (boolean | undefined)[] = [];
   const writes: unknown[] = [];
   let status: OrchestratorStatus = { state: 'ready', model: HAIKU };
-  let settings = { endpoint: HAIKU, cleanDictation: true };
+  let settings = { endpoint: HAIKU, cleanDictation: true, cloudDictation: false };
   const deps: OrchestratorDeps = {
     models: async () => MODELS,
     status: async (recheck) => {
@@ -36,6 +36,7 @@ function rig(over: Partial<OrchestratorDeps> = {}) {
       settings = {
         endpoint: args.agentEndpoint ?? settings.endpoint,
         cleanDictation: args.cleanDictation ?? settings.cleanDictation,
+        cloudDictation: args.cloudDictation ?? settings.cloudDictation,
       };
     },
     send: async (v) => void sent.push(v),
@@ -68,6 +69,7 @@ describe('orchestrator wiring', () => {
         ],
         selected: HAIKU,
         cleanDictation: true,
+        cloudDictation: false,
         state: 'ready',
         homeName: 'Sales',
       },
@@ -77,7 +79,7 @@ describe('orchestrator wiring', () => {
 
   it('a model that the gateway no longer lists still shows as the selected one', async () => {
     const r = rig();
-    r.setSettings({ endpoint: 'system.ai.old-model', cleanDictation: true });
+    r.setSettings({ endpoint: 'system.ai.old-model', cleanDictation: true, cloudDictation: false });
     r.click({ action: 'orchestrator.ready' });
     await flush();
     expect(r.sent[0]?.models[0]).toEqual({ id: 'system.ai.old-model', label: 'old-model' });
@@ -109,6 +111,25 @@ describe('orchestrator wiring', () => {
     expect(r.o.cleanDictation()).toBe(false);
     const none = rig({ settings: () => undefined });
     expect(none.o.cleanDictation()).toBe(true);
+  });
+
+  it('[ADR 0123] the dictation engine choice writes cloudDictation and the reader follows it', async () => {
+    const r = rig();
+    expect(r.o.cloudDictation()).toBe(false);
+    r.click({ action: 'orchestrator.cloud_dictation', on: true });
+    await flush();
+    expect(r.writes).toEqual([{ cloudDictation: true }]);
+    expect(r.sent.at(-1)?.cloudDictation).toBe(true);
+    expect(r.o.cloudDictation()).toBe(true);
+    r.click({ action: 'orchestrator.cloud_dictation', on: false });
+    await flush();
+    expect(r.o.cloudDictation()).toBe(false);
+    // A bad value writes nothing.
+    r.click({ action: 'orchestrator.cloud_dictation', on: 'yes' });
+    await flush();
+    expect(r.writes).toHaveLength(2);
+    // Off until the list exists.
+    expect(rig({ settings: () => undefined }).o.cloudDictation()).toBe(false);
   });
 
   it('Check again reads the status with recheck, and a failed read keeps the last status', async () => {
