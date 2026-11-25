@@ -78,19 +78,33 @@ function toAnswerPart(p: AgentPartView): AnswerPart {
 const FENCE = /(```[\s\S]*?```)/;
 const INLINE_CODE = /(`[^`\n]*`)/;
 
+/** A `[n]` marker right after another, with no separator: `[1][2]`. */
+const NEXT_MARKER = /^\[(\d+)\]/;
+/** A whole `[n]` marker, anchored both ends, to check one already matched elsewhere. */
+const WHOLE_MARKER = /^\[(\d+)\]$/;
+
 /**
  * Strip a `[n]` citation marker from `text` only when `n` is one of `citationNumbers` (ADR 0122).
  * Pasted outside Bottle a real citation marker has no footnote or footer link to point to, so it
  * would read as a stray reference number, not real content. Everything else that merely looks
  * like one — an array index (`array[1]`), a year (`[2024]`), a real Markdown link (`[1](url)` or
- * `[1][ref]`) — is left alone: the number must be a known citation, the character right before
- * the marker must not be a word character or `]`, and the marker must not be followed by `(` or
- * `[`. With no citation numbers, nothing is stripped.
+ * `[1][ref]`) — is left alone: the number must be a known citation; the character right before
+ * the marker must not be a word character, and if it is `]`, that bracket must itself close a
+ * known citation's own marker (so adjacent markers, `[1][2]`, both strip, but anything else
+ * right before a `]`, word-adjacent or not, still blocks it); the marker must not be followed by
+ * `(`, or by a `[` that is not itself a known citation's own marker (the same rule, forward).
+ * With no citation numbers, nothing is stripped.
  */
 export function stripCitationMarkers(text: string, citationNumbers: readonly number[]): string {
   if (citationNumbers.length === 0) return text;
   const nums = new Set(citationNumbers);
-  const wordOrBracket = /[\w\]]/;
+  /** True when the `[n]` marker ending exactly at `end` is itself a known citation. */
+  const priorMarkerIsCitation = (prose: string, end: number): boolean => {
+    const start = prose.lastIndexOf('[', end - 2);
+    if (start < 0) return false;
+    const m = WHOLE_MARKER.exec(prose.slice(start, end));
+    return m !== null && nums.has(Number(m[1]));
+  };
   const stripProse = (prose: string): string =>
     prose.replace(
       /([ \t]?)\[(\d+)\]/g,
@@ -99,10 +113,22 @@ export function stripCitationMarkers(text: string, citationNumbers: readonly num
         // The character right before the bracket itself (not before `lead`): with a leading
         // space that is always the space, so a space-separated marker is never blocked by this
         // check. With no leading space, it is whatever truly touches the bracket.
-        const beforeBracket = prose[offset + lead.length - 1];
-        if (beforeBracket !== undefined && wordOrBracket.test(beforeBracket)) return whole;
-        const after = prose[offset + whole.length];
-        if (after === '(' || after === '[') return whole;
+        const bracketAt = offset + lead.length;
+        const beforeBracket = prose[bracketAt - 1];
+        if (beforeBracket !== undefined) {
+          if (beforeBracket === ']') {
+            if (!priorMarkerIsCitation(prose, bracketAt)) return whole;
+          } else if (/\w/.test(beforeBracket)) {
+            return whole;
+          }
+        }
+        const after = prose.slice(offset + whole.length);
+        if (after.startsWith('(')) return whole;
+        if (after.startsWith('[')) {
+          const next = NEXT_MARKER.exec(after);
+          const nextIsCitation = next !== null && nums.has(Number(next[1]));
+          if (!nextIsCitation) return whole;
+        }
         return '';
       },
     );

@@ -343,9 +343,15 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     const b = 'b'.repeat(32);
     r.card.show(MOG, view({ turnId: a, state: 'running' }));
     r.card.show(MOG, view({ turnId: b, state: 'queued' }));
+    expect(r.card.isDismissed(a)).toBe(false);
+    expect(r.card.isDismissed(b)).toBe(false);
     r.card.close(MOG);
     r.card.show(MOG, view({ turnId: b, state: 'planning' }));
     expect(r.card.shown(MOG)).toBeUndefined();
+    // [owner request] a turn still open when the card closes is dismissed: its eventual answer
+    // must never be copied to the clipboard.
+    expect(r.card.isDismissed(a)).toBe(true);
+    expect(r.card.isDismissed(b)).toBe(true);
   });
 
   it('a dropped turn leaves the card', () => {

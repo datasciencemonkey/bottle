@@ -642,6 +642,13 @@ describe('AgentTurnCard', () => {
     );
     expect(el.querySelector('[data-agent-copy-note]')?.textContent).toBe('');
   });
+
+  it('[M-B] reserves no note line while the turn is still running (no copy can happen yet)', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'running' })} chips={chips} />,
+    );
+    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
+  });
 });
 
 describe('answer first', () => {

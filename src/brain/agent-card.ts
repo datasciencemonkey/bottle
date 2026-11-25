@@ -279,6 +279,12 @@ export interface AgentCard {
   note(mogId: MogId, text: string): boolean;
   /** The turn on the card of `mogId`, if any. */
   shown(mogId: MogId): string | undefined;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request: true when the user already
+   * closed the card of `turnId` (directly, or by closing the whole agent card while it was still
+   * open) before it finished. A dismissed turn's answer is never copied: the user dismissed it.
+   */
+  isDismissed(turnId: string): boolean;
 }
 
 /** The dismissed turns that the card remembers. */
@@ -405,6 +411,7 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
       }
     },
     shown: (mogId) => owner.get(mogId),
+    isDismissed: (turnId) => dismissed.has(turnId),
   };
 }
 

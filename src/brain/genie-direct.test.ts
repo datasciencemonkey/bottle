@@ -961,7 +961,7 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       }
     });
 
-    it('still calls onAnswered when the user closed the ready pill before the answer landed', async () => {
+    it('[owner decision] never copies when the user closed the ready pill before the answer landed', async () => {
       const c = fakeCard();
       const seen: string[] = [];
       let heldFn: (() => void) | undefined;
@@ -983,9 +983,60 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       send.close(MOG, OP);
       heldFn?.();
       await promise;
-      expect(seen).toEqual(['Churn was 4.2%.']);
+      // Dismissed before it landed: a silent clipboard overwrite would surprise the user.
+      expect(seen).toEqual([]);
       // The card stayed closed: the blurb ended empty, not with the answer.
       expect(c.log.at(-1)).toEqual({ id: `genie:${OP}`, text: '', completed: true });
+    });
+
+    it('[H-A] never copies a partial answer (G-23a, incomplete: true)', async () => {
+      const c = fakeCard();
+      let calls = 0;
+      const send = createGenieDirectSend({
+        genie: fakeBridge([{ ...answerEvent, incomplete: true }]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: () => void calls++,
+      });
+      await send(turn());
+      expect(calls).toBe(0);
+    });
+
+    it('[L-B] never copies an older answer once a newer send has already started', async () => {
+      const c = fakeCard();
+      const seen: string[] = [];
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((r) => (releaseFirst = r));
+      let opCount = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit: () => {
+            opCount++;
+            const opId = `op-${opCount}`;
+            const events =
+              opCount === 1
+                ? (async function* () {
+                    await firstGate;
+                    yield answerEvent;
+                  })()
+                : (async function* () {
+                    yield { ...answerEvent, md: 'Newer answer.' };
+                  })();
+            return { opId, events };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${opCount + 1}`,
+        onAnswered: (_m, opId, md) => void seen.push(`${opId}:${md}`),
+      });
+      const p1 = send(turn());
+      // Let the first send register itself (`latestSend`) before the second starts.
+      await Promise.resolve();
+      const p2 = send(turn());
+      await p2;
+      releaseFirst?.();
+      await p1;
+      expect(seen).toEqual(['op-2:Newer answer.']);
     });
   });
 });

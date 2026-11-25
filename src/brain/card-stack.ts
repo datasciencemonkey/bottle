@@ -40,6 +40,8 @@ export interface CardStackUpdate {
   sttBadge?: string;
   /** Slice 2a: the live agent turn in compact form. The card view shows it instead of the blurbs. */
   agentTurn?: AgentTurnView;
+  /** The owner's "attach Genie's answer to the clipboard" request, for the direct Genie card. */
+  copyNote?: 'copied' | 'failed';
 }
 
 /** Run `fn` at monotonic time `atMs`. Returns a cancel function. */
@@ -78,6 +80,12 @@ export interface CardStack {
   clearControls(owner: string): void;
   /** Slice 2a: set the live agent turn of the card (`agent-card.ts`), or `undefined` to clear it. */
   setAgentTurn(turn: AgentTurnView | undefined): void;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request: the outcome of the direct
+   * Genie answer's copy, or `undefined` to clear it. Independent of `setExpanded`'s content, so
+   * the brain need not resupply the whole answer again just to set or clear this.
+   */
+  setCopyNote(note: 'copied' | 'failed' | undefined): void;
   /** Send the current state again, for a card view that starts to listen late (#498). */
   republish(): void;
   dispose(): void;
@@ -126,6 +134,7 @@ export function createCardStack(
   let sttBadge: string | undefined;
   let expanded: SectionInput | undefined;
   let agentTurn: AgentTurnView | undefined;
+  let copyNote: 'copied' | 'failed' | undefined;
   const row = new ChipRow();
   /** The template controls, by owner, in the order set. */
   const controls = new Map<string, { list: ChipView[]; onClick?: (id: string) => void }>();
@@ -143,6 +152,7 @@ export function createCardStack(
     };
     if (sttBadge !== undefined) u.sttBadge = sttBadge;
     if (agentTurn) u.agentTurn = agentTurn;
+    if (copyNote !== undefined) u.copyNote = copyNote;
     if (expanded)
       u.sections = buildSections(sttBadge === undefined ? expanded : { sttBadge, ...expanded });
     void deps.send(u);
@@ -231,6 +241,11 @@ export function createCardStack(
     },
     setAgentTurn(turn) {
       agentTurn = turn;
+      publish();
+    },
+    setCopyNote(note) {
+      if (note === copyNote) return;
+      copyNote = note;
       publish();
     },
     republish: () => publish(),

@@ -199,6 +199,22 @@ describe('Genie card (#573)', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it('[H-B] shows the quiet copy note from card.copyNote, not a blurb', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', { ...answered, copyNote: 'copied' });
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c?.querySelector('[data-agent-copy-note]')?.textContent).toBe('Copied');
+    // Never a separate blurb: the newest blurb is still the Genie answer text itself.
+    expect(el.querySelectorAll(`[id="${G}"]`)).toHaveLength(0);
+  });
+
+  it('shows no copy note before the brain sets card.copyNote', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c?.querySelector('[data-agent-copy-note]')?.textContent).toBe('');
+  });
+
   it('[#103] a single click on the card body opens Conversations, the same as a double-click', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', answered);

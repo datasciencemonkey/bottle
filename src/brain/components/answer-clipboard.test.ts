@@ -29,8 +29,8 @@ function turn(o: Partial<AgentTurnView> = {}): AgentTurnView {
 }
 
 function fakeDeps(o: Partial<AnswerClipboardDeps> = {}) {
-  const turnNotes: { turnId: string; outcome: CopyOutcome }[] = [];
-  const directNotes: { mogId: string; opId: string; outcome: CopyOutcome }[] = [];
+  const turnNotes: { turnId: string; outcome: CopyOutcome | undefined }[] = [];
+  const directNotes: { mogId: string; opId: string; outcome: CopyOutcome | undefined }[] = [];
   const writes: string[] = [];
   const faults: number[] = [];
   const deps: AnswerClipboardDeps = {
@@ -57,6 +57,22 @@ describe('createAnswerClipboard: onTurnFinished (the orchestrator path, H1)', ()
     await Promise.resolve();
     expect(writes).toEqual(['The answer.']);
     expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
+  });
+
+  it('[M-A] clears its own note a short time after setting it, so it never resurfaces later', async () => {
+    vi.useFakeTimers();
+    const { deps, turnNotes } = fakeDeps();
+    createAnswerClipboard(deps).onTurnFinished(MOG, turn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(turnNotes).toEqual([
+      { turnId: 't1', outcome: 'copied' },
+      { turnId: 't1', outcome: undefined },
+    ]);
+    vi.useRealTimers();
   });
 
   it('reports "failed" when the write answers too_large or unsupported', async () => {

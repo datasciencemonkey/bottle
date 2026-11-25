@@ -48,6 +48,7 @@ import {
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { CopyAnswerNote } from './copy-answer-note';
 import { SafeMarkdown } from './safe-markdown';
 import { MemorySavedLive, NO_SAVED, type MemorySavedApi } from './memory-saved';
 
@@ -781,6 +782,7 @@ export function GenieCard({
               })}
             </ul>
           )}
+          {kind === 'answer' && <CopyAnswerNote outcome={card.copyNote} />}
           {kind === 'failure' && (
             <div className="genie-failure-body" role="alert">
               <p className="genie-title">{FAILURE_TITLE}</p>

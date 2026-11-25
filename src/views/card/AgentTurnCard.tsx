@@ -744,7 +744,9 @@ export function TurnBody({
         underLone={underLone}
         linked={onOpenLink ? linked : undefined}
       />
-      <CopyAnswerNote outcome={turn.copyNote} />
+      {(turn.state === 'done' || turn.copyNote !== undefined) && (
+        <CopyAnswerNote outcome={turn.copyNote} />
+      )}
       {onOpenLink && <GenieOneLinks links={genieLinks} onOpenLink={onOpenLink} />}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}

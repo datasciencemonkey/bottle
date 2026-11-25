@@ -492,18 +492,11 @@ export function startBrain(): Brain {
       // comes from `agent-run.ts`'s current state, not a stale snapshot, and `update()` there
       // also reaches Conversations (`onChange`), not just the card.
       noteTurn: (turnId, outcome) => agentClient.markCopied(turnId, outcome),
-      // The direct path has no `AgentTurnView`: a small blurb under the answer, cleared after
-      // the same 2 s the card's note shows for (`copy-answer-note.tsx`).
-      noteDirect: (mogId, opId, outcome) => {
-        const noteId = `copy-note:${opId}`;
-        const stack = stackFor(mogId);
-        stack.add({
-          id: noteId,
-          text: outcome === 'copied' ? 'Copied' : "Couldn't copy",
-          completed: true,
-        });
-        setTimeout(() => stack.add({ id: noteId, text: '', completed: true }), 2_000);
-      },
+      // The direct path has no `AgentTurnView`: the card stack's own `copyNote` field (not a
+      // blurb — a blurb takes a card slot, can evict the answer, and flips `CardView`'s `genie`
+      // check false, breaking the Genie card's layout). `GenieCard` renders it with the same
+      // `CopyAnswerNote` the turn-based card uses.
+      noteDirect: (mogId, _opId, outcome) => stackFor(mogId).setCopyNote(outcome),
       // No new telemetry span (ADR 0079's closed set is shared with the Rust gate): a failed
       // clipboard write is a card-render-adjacent fault, the same bucket `agentCard` uses above.
       onFault: () => void agentLog.event('card.render', { ok: 0 }),
@@ -554,7 +547,14 @@ export function startBrain(): Brain {
       showTurn: (mogId, view) => agentCard.show(mogId, view),
       // H1: `showTurn` can fire mid-settle (before the late pulls, `summarise` and `syncParts`
       // finish); `finished` is the one point the view is final, and only for an answered turn.
-      finished: (mogId, view) => answerClipboard.onTurnFinished(mogId, view),
+      // Owner decision: a turn the user already dismissed (closed its card, or the whole agent
+      // card while this turn was still open) is never copied either — the same rule as the
+      // direct path's dismissed ready pill, so a silent clipboard overwrite never surprises
+      // someone who already closed the answer.
+      finished: (mogId, view) => {
+        if (agentCard.isDismissed(view.turnId)) return;
+        answerClipboard.onTurnFinished(mogId, view);
+      },
       dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),

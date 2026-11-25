@@ -121,6 +121,15 @@ describe('stripCitationMarkers', () => {
     );
     expect(stripCitationMarkers('See [1][ref] for detail.', [1])).toBe('See [1][ref] for detail.');
   });
+
+  it('[L-A] strips adjacent markers with no separator, [1][2], when both are known citations', () => {
+    expect(stripCitationMarkers('Two sources agree [1][2].', [1, 2])).toBe('Two sources agree.');
+    // The next bracket is not a known citation: it reads as a real reference link, [1][ref], so
+    // the first marker is left alone too.
+    expect(stripCitationMarkers('Two sources agree [1][9].', [1, 2])).toBe(
+      'Two sources agree [1][9].',
+    );
+  });
 });
 
 describe('finishedAnswerText (the owner\'s "attach Genie\'s answer to the clipboard" request)', () => {

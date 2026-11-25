@@ -229,9 +229,16 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
       };
       const apply = async (): Promise<void> => {
         live.delete(opId);
-        // The owner's clipboard-copy request: the answer was delivered, whether or not the user
-        // closed the ready pill (the card's visibility is not the same thing as the answer).
-        if (outcome.t === 'answer') safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md));
+        // A request that started later owns the card: a late outcome of this one is never
+        // copied either (checked here, before `closed` and `latestSend` move on below).
+        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
+        // The owner's clipboard-copy request: never copy a partial answer (G-23a), one a newer
+        // send has already superseded, or one the user dismissed (closed the ready pill) before
+        // it landed — a silent clipboard overwrite of something the user already dismissed would
+        // surprise them (owner decision, reversible: drop the `!closed.has(opId)` check below).
+        if (outcome.t === 'answer' && !outcome.incomplete && !newer && !closed.has(opId)) {
+          safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md));
+        }
         // The user closed the ready pill: the card stays closed. The blurb ends empty.
         if (closed.delete(opId)) {
           // The early sections of this request go too, if they are still the card's.
@@ -269,7 +276,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
         // its final place (no race between the view fit and the R11 move).
         // A request that started later owns the card (its pill may be closed): a late outcome of
         // this one never shows an empty or foreign card window. The blurb and the phase still end.
-        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
         if (deps.showCard && !newer) {
           try {
             await deps.showCard(turn.mogId);

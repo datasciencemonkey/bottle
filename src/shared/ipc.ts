@@ -753,8 +753,9 @@ export interface AgentTurnView {
   };
   notice?: string;
   /** The quiet "Copied to clipboard" / "Couldn't copy" note, brain-set once the
-   * `clipboard_write_text` call of a finished answer resolves. The view fades it on its own. */
-  copyNote?: 'copied' | 'failed';
+   * `clipboard_write_text` call of a finished answer resolves. The brain also clears it (to
+   * `undefined`) a short time later, so it never resurfaces on a remount or a reopened thread. */
+  copyNote?: 'copied' | 'failed' | undefined;
   tokens?: number;
   /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
   seenAt?: number;
@@ -1002,6 +1003,12 @@ export interface CardUpdate {
   pagesChecklist?: PagesChecklistView;
   /** Slice 2a: the live agent turn in compact form, with "Open in Agent". */
   agentTurn?: AgentTurnView;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request, for the direct Genie answer
+   * this card shows (an agent turn's own answer carries its note on `agentTurn.copyNote`
+   * instead). The brain clears it a short time after setting it.
+   */
+  copyNote?: 'copied' | 'failed' | undefined;
 }
 
 /** Why a capture lease stopped (ADR 0055). Mirrors `mog_core::types::CaptureStopReason`. */

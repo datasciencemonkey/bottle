@@ -313,10 +313,11 @@ export interface AgentClient {
   /**
    * The owner's "attach Genie's answer to the clipboard" request: set `copyNote` on the turn's
    * own record and republish it (`showTurn` and the hub's `onChange`), so the card and
-   * Conversations both show the current, not a stale, note. A no-op for a turn the client no
-   * longer holds.
+   * Conversations both show the current, not a stale, note. `undefined` clears it (the brain
+   * does this itself, a short time after setting it, so "Copied" never resurfaces hours later on
+   * a remount or a reopened thread). A no-op for a turn the client no longer holds.
    */
-  markCopied(turnId: string, outcome: 'copied' | 'failed'): void;
+  markCopied(turnId: string, outcome: 'copied' | 'failed' | undefined): void;
   /**
    * The thread (root UUID) of `turnId`. A turn that the client no longer holds (a session end
    * forgot it) gives the thread that it started as a new ask; a bad turn id gives undefined.
