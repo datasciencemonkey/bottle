@@ -80,6 +80,13 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(t).not.toHaveProperty('extra');
   });
 
+  it('keeps a valid copyNote on a turn, so the card and Conversations show "Copied"', () => {
+    expect(asAgentTurnView({ ...turn, copyNote: 'copied' })?.copyNote).toBe('copied');
+    expect(asAgentTurnView({ ...turn, copyNote: 'failed' })?.copyNote).toBe('failed');
+    expect(asAgentTurnView({ ...turn, copyNote: 'other' })).not.toHaveProperty('copyNote');
+    expect(asAgentTurnView(turn)).not.toHaveProperty('copyNote');
+  });
+
   it('drops unknown fields at every level', () => {
     const extra = {
       ...view,

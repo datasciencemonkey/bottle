@@ -222,6 +222,8 @@ export function asAgentTurnView(v: unknown): AgentTurnView | undefined {
   if (notice !== undefined) out.notice = notice;
   if (tokens !== undefined) out.tokens = tokens;
   if (seenAt !== undefined) out.seenAt = seenAt;
+  const copyNote = v['copyNote'];
+  if (copyNote === 'copied' || copyNote === 'failed') out.copyNote = copyNote;
   const s = v['summary'];
   if (s !== undefined) {
     if (!isObj(s) || !isStr(s['md']) || !isSummaryKind(s['kind'])) return undefined;
