@@ -783,6 +783,7 @@ pub const CLIPBOARD_CHECK_FILE: &str = "last-copy.json";
 
 /// What reads the general pasteboard for the `last-copy.json` diagnostic: the type names and the
 /// change count, never content. A trait so a test checks the file with no real pasteboard.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 trait ClipboardDiagnosticReader: Send + Sync {
     fn read(&self) -> (Vec<String>, u64);
 }
@@ -807,12 +808,14 @@ impl ClipboardDiagnosticReader for MacPasteboardReader {
 /// (`set_dir`, from `setup()`, to the app data dir's recordings temp root — the same dir
 /// `recording_host::write_capture_check` uses); before that, or when the write did not answer
 /// `written`, the diagnostic is skipped and `inner`'s own result crosses unchanged either way.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct DiagnosticClipboardComponent<'a, R> {
     inner: &'a dyn GatewayComponents,
     reader: R,
     dir: std::sync::OnceLock<std::path::PathBuf>,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl<'a, R: ClipboardDiagnosticReader> DiagnosticClipboardComponent<'a, R> {
     fn new(inner: &'a dyn GatewayComponents, reader: R) -> Self {
         Self {
@@ -842,6 +845,7 @@ impl<R: ClipboardDiagnosticReader> GatewayComponents for DiagnosticClipboardComp
 
 /// `{types, changeCount}` only (SEC-03: never content), mode 0600. Best effort: a failure here
 /// never fails or blocks the real `clipboard_write_text` call that triggered it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn write_clipboard_diagnostic(dir: &std::path::Path, (types, change_count): (Vec<String>, u64)) {
     let v = json!({ "types": types, "changeCount": change_count });
     let _ = std::fs::create_dir_all(dir);
