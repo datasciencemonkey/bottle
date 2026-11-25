@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eve
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
 const A = '00000000-0000-4000-8000-00000000000a';
-const AGENT = { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 };
+const AGENT = { genieCallBudget: 10 };
 
 describe('V1 hub view', () => {
   beforeEach(() => tauri.reset());

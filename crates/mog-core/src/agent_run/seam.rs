@@ -45,12 +45,11 @@ impl std::fmt::Debug for TurnSpec {
     }
 }
 
-/// One session: the D1, catalog and agent profile snapshot at session start.
+/// One session: the catalog and agent profile snapshot at session start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSpec {
     pub session_id: String,
     pub catalog: Vec<CatalogEntry>,
-    pub cross_workspace: bool,
 }
 
 /// One Genie call of a session. Content-free.
@@ -79,8 +78,6 @@ pub trait SessionGuard: Send + Sync {
     fn begin_turn(&self, session_id: &str, turn: TurnSpec) -> CoreResult<()>;
     fn stop_turn(&self, turn_id: &str, why: StopWhy);
     fn end_turn(&self, turn_id: &str);
-    /// True once a D1-off session got text from the agent workspace (a taint lasts the session).
-    fn tainted(&self, session_id: &str) -> bool;
     /// The whole session, all turns.
     fn calls(&self, session_id: &str) -> Vec<CallRecord>;
     fn call_detail(&self, turn_id: &str, call_id: &str) -> Option<AgentTurnCall>;

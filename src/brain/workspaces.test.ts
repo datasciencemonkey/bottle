@@ -146,8 +146,6 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     expect(r.last()?.home).toBe('work');
     expect(r.last()?.homePick).toBeUndefined();
     expect(r.last()?.agent).toEqual({
-      crossWorkspaceData: false,
-      crossWorkspaceLocked: false,
       genieCallBudget: 10,
     });
   });
@@ -265,7 +263,7 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     await deps.send({
       rows: [],
       home: null,
-      agent: { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 },
+      agent: { genieCallBudget: 10 },
     });
     expect(core.emitTo.mock.calls.map((c) => [c[0], c[1]])).toEqual([
       ['hub', HUB_WORKSPACES_EVENT],
@@ -593,16 +591,14 @@ describe('workspaces: hub actions (ADR 0117)', () => {
     expect(r.configs.files.size).toBe(1);
   });
 
-  it('workspace.cross and workspace.budget write the agent settings', async () => {
+  it('workspace.budget writes the agent settings', async () => {
     const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
     await r.ws.refresh();
-    await r.ws.act({ action: 'workspace.cross', crossWorkspaceData: true });
     await r.ws.act({ action: 'workspace.budget', genieCallBudget: 20 });
     expect(r.calls.filter((c) => c[0] === 'settings_write').map((c) => c[1])).toEqual([
-      { crossWorkspaceData: true },
       { genieCallBudget: 20 },
     ]);
-    expect(r.last()?.agent).toMatchObject({ crossWorkspaceData: true, genieCallBudget: 20 });
+    expect(r.last()?.agent).toMatchObject({ genieCallBudget: 20 });
   });
 
   it('a store failure sends a fixed error notice, never the error text', async () => {
@@ -650,7 +646,6 @@ describe('workspaces: the hub wiring (ADR 0117)', () => {
       { action: 'workspace.edit', profile: 'b' },
       { action: 'workspace.edit', profile: 'b', name: '   ' },
       { action: 'workspace.budget', genieCallBudget: 7 },
-      { action: 'workspace.cross', crossWorkspaceData: 'on' },
       { action: 'workspace.delete', profile: 'b' },
       { action: 'mog.create', name: 'x', home: 'b' },
       'workspaces.ready',

@@ -91,7 +91,6 @@ export interface WorkspacesDeps {
   makeHome(profile: ProfileName, mogId?: MogId): Promise<WorkspaceList>;
   /** `workspace_settings_write`. */
   settingsWrite(args: {
-    crossWorkspaceData?: boolean;
     genieCallBudget?: 5 | 10 | 20;
     /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. */
     agentEndpoint?: string;
@@ -260,8 +259,6 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       rows,
       home: l.home,
       agent: {
-        crossWorkspaceData: l.agent.crossWorkspaceData,
-        crossWorkspaceLocked: l.agent.crossWorkspaceLocked,
         genieCallBudget: l.agent.genieCallBudget,
       },
     };
@@ -466,10 +463,6 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return edit(a);
       case 'workspace.budget':
         return publish(keep(await deps.settingsWrite({ genieCallBudget: a.genieCallBudget })));
-      case 'workspace.cross':
-        return publish(
-          keep(await deps.settingsWrite({ crossWorkspaceData: a.crossWorkspaceData })),
-        );
       default:
         return;
     }
@@ -515,8 +508,6 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
               rows: [],
               home: null,
               agent: {
-                crossWorkspaceData: false,
-                crossWorkspaceLocked: false,
                 genieCallBudget: 10,
               },
               notice,

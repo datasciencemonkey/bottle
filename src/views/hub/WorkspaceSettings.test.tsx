@@ -20,8 +20,6 @@ vi.mock('@tauri-apps/api/event', async () => (await import('../test-tauri')).eve
 vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).windowModule);
 
 const AGENT = {
-  crossWorkspaceData: false,
-  crossWorkspaceLocked: false,
   genieCallBudget: 10,
 } as const;
 const row = (o: Partial<HubWorkspaceRow> & { profile: string }): HubWorkspaceRow => ({

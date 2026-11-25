@@ -109,11 +109,9 @@ function SettingsArea({
   workspaces,
   homeDomains,
   onChoose,
-  agentBusy,
   orchestrator,
 }: {
   hidden: boolean;
-  agentBusy: boolean;
   orchestrator: HubOrchestratorView | undefined;
   recording: HubRecording | undefined;
   workspaces: HubWorkspaceList | undefined;
@@ -129,7 +127,6 @@ function SettingsArea({
         list={workspaces}
         homeDomains={homeDomains}
         onChoose={onChoose}
-        agentBusy={agentBusy}
         orchestrator={orchestrator}
       />
       <MicPreference />
@@ -326,7 +323,6 @@ export function Hub() {
             workspaces={workspaces}
             homeDomains={homeDomains}
             onChoose={onChoose}
-            agentBusy={agent?.live !== undefined || agent?.session.state === 'busy'}
             orchestrator={orchestrator}
           />
           <ForgetDialogHost />

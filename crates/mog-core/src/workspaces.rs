@@ -85,26 +85,6 @@ pub trait ProfileSource: Send + Sync {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>>;
 }
 
-/// SEC-28b: the admin lock on D1 as read from its source. `None` means the read failed.
-/// No admin source exists before slice 3, so it reads "not locked".
-fn read_d1_lock() -> Option<bool> {
-    Some(false)
-}
-
-/// SEC-28b: an admin lock on D1. It fails closed: a lock that cannot be read counts as locked.
-fn d1_locked() -> bool {
-    lock_of(read_d1_lock())
-}
-
-fn lock_of(read: Option<bool>) -> bool {
-    read.unwrap_or(true)
-}
-
-/// D1 as the agent session sees it: the lock forces it off (AC-2b.5).
-fn effective_d1(setting: bool, locked: bool) -> bool {
-    setting && !locked
-}
-
 impl ProfileSource for ProfileService {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
         self.list(refresh)
@@ -201,7 +181,6 @@ fn migrate_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OrchestratorM
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentData {
-    cross_workspace_data: bool,
     genie_call_budget: GenieCallBudget,
     /// ADR 0122: the orchestrator model. A stored value that is not a `system.ai.` id (the old
     /// D9 default `databricks-claude-sonnet-5-5`) reads as the default.
@@ -216,6 +195,11 @@ struct AgentData {
     /// kept and never written.
     #[serde(default, skip_serializing, rename = "runProfile")]
     _legacy_run_profile: Option<serde_json::Value>,
+    /// D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    /// 2026-11-24): cross-workspace data is always on. Read so that a file from before the
+    /// removal still loads; never kept and never written.
+    #[serde(default, skip_serializing, rename = "crossWorkspaceData")]
+    _legacy_cross_workspace_data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,12 +460,12 @@ impl WorkspaceStore {
             home,
             workspaces,
             agent: AgentData {
-                cross_workspace_data: false,
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
                 cloud_dictation: false,
                 _legacy_run_profile: None,
+                _legacy_cross_workspace_data: None,
             },
         })
     }
@@ -600,7 +584,6 @@ impl WorkspaceStore {
             self.probe(&mut rows);
         }
         rows.sort_by(|a, b| b.is_home.cmp(&a.is_home).then(a.profile.cmp(&b.profile)));
-        let locked = d1_locked();
         let home = data
             .home
             .clone()
@@ -610,8 +593,6 @@ impl WorkspaceStore {
             lamp_mog_id: data.lamp_mog_id.clone(),
             workspaces: rows,
             agent: AgentSettings {
-                cross_workspace_data: effective_d1(data.agent.cross_workspace_data, locked),
-                cross_workspace_locked: locked,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
@@ -734,7 +715,7 @@ impl WorkspaceStore {
         self.render(&data, &t7, false)
     }
 
-    /// The agent session snapshot: the catalog with model aliases, D1, D2, the home profile and
+    /// The agent session snapshot: the catalog with model aliases, D2, the home profile and
     /// the orchestrator model. It probes nothing. The catalog holds home and each available
     /// profile that T7 supports, home first. A model alias is the profile name in lower case with
     /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
@@ -785,23 +766,19 @@ impl WorkspaceStore {
         }
         Ok(crate::agent_run::orchestrator::Snapshot {
             catalog,
-            cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
             budget: data.agent.genie_call_budget.get(),
             home_profile: home,
             model: data.agent.endpoint.as_str().to_owned(),
         })
     }
 
-    /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
+    /// `workspace_settings_write`: D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
         let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
-            if let Some(v) = a.cross_workspace_data {
-                data.agent.cross_workspace_data = v;
-            }
             if let Some(v) = a.genie_call_budget {
                 data.agent.genie_call_budget = v;
             }
@@ -867,24 +844,3 @@ impl GatewayComponents for WorkspaceStore {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod d1_lock_tests {
-    use super::{d1_locked, effective_d1};
-
-    #[test]
-    fn ac_2b_5_a_lock_forces_d1_off_and_no_lock_keeps_the_setting() {
-        assert!(!effective_d1(true, true));
-        assert!(!effective_d1(false, true));
-        assert!(effective_d1(true, false));
-        assert!(!effective_d1(false, false));
-        assert!(!d1_locked(), "no admin source before slice 3");
-    }
-
-    #[test]
-    fn l3_a_lock_that_cannot_be_read_counts_as_locked() {
-        assert!(super::lock_of(None));
-        assert!(!super::lock_of(Some(false)));
-        assert!(super::lock_of(Some(true)));
-    }
-}

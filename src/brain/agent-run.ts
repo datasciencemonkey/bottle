@@ -118,7 +118,6 @@ interface TurnRec {
   view: AgentTurnView;
   origin: AgentTurn;
   catalog: Map<string, AgentWorkspace>;
-  crossWorkspace: boolean;
   agentProfile: ProfileName | undefined;
   /** The answered parts, by call id, in the order the calls ended. */
   parts: Map<string, AgentPartView>;
@@ -173,7 +172,6 @@ const CALL_STATES: readonly string[] = [
 const REFUSED_CODES: readonly string[] = [
   'workspace_not_available',
   'budget_reached',
-  'cross_workspace_off',
   'invalid_args',
 ];
 const OUTCOMES: readonly string[] = [
@@ -447,13 +445,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       return;
     }
     r.fetched.add(callId);
-    const ws = r.catalog.get(d.workspaceId);
     const host = await deps.hostOf(d.profile).catch(() => undefined);
     if (recs.get(r.view.turnId) !== r) return;
     const part = partOf(d, {
       chip: deps.chipOf(d.profile),
       host,
-      notShownToAgent: !r.crossWorkspace && ws !== undefined && !ws.isAgentWorkspace,
+      // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+      // 2026-11-24): cross-workspace data is always on, so a part is never hidden for it.
+      notShownToAgent: false,
     });
     if (part) r.parts.set(callId, part);
     syncParts(r);
@@ -733,16 +732,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (r.parts.has(s.callId) || !CALL_ID.test(s.callId)) continue;
       try {
         const d = await deps.api.callDetail(s.turnId, s.callId);
-        // The D1 value of the turn that made the call, not of this turn.
-        const known = recs.get(s.turnId);
-        const src = known ?? r;
-        const ws = src.catalog.get(d.workspaceId);
-        // A turn that is forgotten has no D1 value: fail closed, as if D1 were off.
-        const d1 = known !== undefined || s.turnId === r.view.turnId ? src.crossWorkspace : false;
         const part = partOf(d, {
           chip: deps.chipOf(d.profile),
           fromEarlier: s.turnId !== r.view.turnId,
-          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !d1,
+          // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+          // 2026-11-24): cross-workspace data is always on, so a part is never hidden for it.
+          notShownToAgent: false,
         });
         if (part) r.parts.set(s.callId, part);
       } catch {
@@ -778,8 +773,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     });
     const summary: NonNullable<AgentTurnView['summary']> = {
       md,
-      // Only D1 on can combine: with D1 off the kind stays "note" (AC-2b.6; the owner rule of the answer supersedes its label: the view shows no note label).
-      kind: r.crossWorkspace ? res.answerKind : 'note',
+      // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+      // 2026-11-24): cross-workspace data is always on, so the kind is always the real one.
+      kind: res.answerKind,
       workspaces,
       ...(citations.length > 0 ? { citations } : {}),
     };
@@ -868,7 +864,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         view: newView(a, turn.question),
         origin: turn,
         catalog: new Map(a.catalog.map((c) => [c.workspaceId, c])),
-        crossWorkspace: a.crossWorkspace,
         agentProfile: a.catalog.find((c) => c.isAgentWorkspace)?.profile,
         parts: new Map(),
         fetched: new Set(),

@@ -1016,11 +1016,11 @@ args!(
     }
 );
 args!(
-    /// `workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and
+    /// `workspace_settings_write` (ADR 0117): the D2 Genie call budget (5, 10 or 20) and
     /// the D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and "Clean up dictation".
+    /// D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    /// 2026-11-24): cross-workspace data is always on.
     WorkspaceSettingsWriteArgs {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cross_workspace_data: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

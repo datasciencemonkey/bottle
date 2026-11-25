@@ -836,7 +836,7 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
     for good in [
         json!({"genieCallBudget": 5}),
         json!({"genieCallBudget": 20}),
-        json!({"agentEndpoint": "system.ai.claude-haiku-5-5", "crossWorkspaceData": false}),
+        json!({"agentEndpoint": "system.ai.claude-haiku-5-5"}),
         json!({"cleanDictation": false}),
     ] {
         if let Err(e) = handle("brain", "workspace_settings_write", good.clone()) {

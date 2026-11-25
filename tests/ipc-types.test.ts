@@ -314,9 +314,7 @@ const AGENT_END_REASONS = [
   'quit',
   'wipe',
   'profile_changed',
-  'd1_changed',
   'catalog_changed',
-  'tainted',
   'idle',
 ] as const satisfies AgentSessionEndReason[];
 const AGENT_TURN_VIEW = {
@@ -399,7 +397,6 @@ const agentTyped: Record<string, unknown> = {
     position: 0,
     newSession: true,
     budget: 10,
-    crossWorkspace: false,
     catalog: [
       {
         workspaceId: '1234567890123456',
@@ -468,7 +465,7 @@ const agentTyped: Record<string, unknown> = {
   'AgentSessionEvent.ended': {
     kind: 'ended',
     sessionId: TURN_B,
-    reason: 'd1_changed',
+    reason: 'catalog_changed',
   } satisfies AgentSessionEvent,
   'AgentTurnEvent.queued': { kind: 'queued', turnId: TURN_A, position: 1 } satisfies AgentTurnEvent,
   'AgentTurnEvent.call': {
@@ -483,7 +480,7 @@ const agentTyped: Record<string, unknown> = {
   'AgentTurnEvent.refused': {
     kind: 'refused',
     turnId: TURN_A,
-    code: 'cross_workspace_off',
+    code: 'budget_reached',
     used: 1,
   } satisfies AgentTurnEvent,
   'AgentTurnEvent.slow': { kind: 'slow', turnId: TURN_A } satisfies AgentTurnEvent,
@@ -528,8 +525,6 @@ const agentTyped: Record<string, unknown> = {
     lampMogId: MOG,
     workspaces: [WORKSPACE_ROW],
     agent: {
-      crossWorkspaceData: false,
-      crossWorkspaceLocked: false,
       genieCallBudget: 10,
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,

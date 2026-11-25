@@ -471,7 +471,6 @@ export interface CommandArgs {
   workspace_set_available: { profile: ProfileName; available: boolean; mogId?: MogId };
   workspace_make_home: { profile: ProfileName; mogId?: MogId };
   workspace_settings_write: {
-    crossWorkspaceData?: boolean;
     genieCallBudget?: GenieCallBudget;
     /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Anything else is refused. */
     agentEndpoint?: string;
@@ -521,10 +520,9 @@ export interface WorkspaceRow {
   isHome: boolean;
   signIn: WorkspaceSignIn;
 }
-/** D1, the SEC-28b admin lock, D2, the D9 orchestrator model and "Clean up dictation". */
+/** D2, the D9 orchestrator model and "Clean up dictation". D1 "Combine across workspaces" is
+ * removed (ADR 0122 amendment, owner decision 2026-11-24): cross-workspace data is always on. */
 export interface AgentSettings {
-  crossWorkspaceData: boolean;
-  crossWorkspaceLocked: boolean;
   genieCallBudget: GenieCallBudget;
   /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default `system.ai.claude-haiku-5-5`. */
   endpoint: string;
@@ -583,7 +581,6 @@ export interface AgentTurnAccepted {
   position: number;
   newSession: boolean;
   budget: GenieCallBudget;
-  crossWorkspace: boolean;
   catalog: AgentWorkspace[];
 }
 
@@ -617,9 +614,7 @@ export type AgentSessionEndReason =
   | 'quit'
   | 'wipe'
   | 'profile_changed'
-  | 'd1_changed'
   | 'catalog_changed'
-  | 'tainted'
   | 'idle';
 export interface AgentSessionState {
   state: 'none' | 'idle' | 'busy';
@@ -655,7 +650,7 @@ export type AgentTurnEvent =
   | {
       kind: 'refused';
       turnId: string;
-      code: 'workspace_not_available' | 'budget_reached' | 'cross_workspace_off' | 'invalid_args';
+      code: 'workspace_not_available' | 'budget_reached' | 'invalid_args';
       used: number;
     }
   | { kind: 'slow'; turnId: string }
@@ -854,7 +849,7 @@ export const IPC_ERROR_CODES = [
   'stt_setup_unavailable',
   /**
    * `agent_turn_*` and `agent_session_*` (ADR 0122). Model-facing only, never an
-   * IPC code: budget_reached, cross_workspace_off, no_active_turn, run_stopped.
+   * IPC code: budget_reached, ask_home_first, no_active_turn, run_stopped.
    */
   'ask_not_approved',
   'agent_queue_full',

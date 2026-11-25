@@ -12,8 +12,6 @@ import {
   AgentSettings,
   BUDGET_HELP,
   CLEAN_DICTATION_LABEL,
-  COMBINE_APPLIES,
-  COMBINE_LOCKED,
   DICTATION_ENGINE_LABEL,
   DICTATION_ENGINE_LOCAL,
   ORCHESTRATOR_LABEL,
@@ -50,7 +48,7 @@ const list = (): HubWorkspaceList => ({
     row({ profile: 'pat', name: 'Token only', signIn: 'unsupported' }),
   ],
   home: 'sales',
-  agent: { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 },
+  agent: { genieCallBudget: 10 },
 });
 const clicks = () => inputEmits().map((e) => (e as { payload: unknown }).payload);
 const act2 = (fn: () => void) => act(async () => fn());
@@ -203,102 +201,17 @@ describe('AgentSettings', () => {
     );
   });
 
-  const withAgent = (a: Partial<HubWorkspaceList['agent']>): HubWorkspaceList => {
-    const l = list();
-    return { ...l, agent: { ...l.agent, ...a } };
-  };
-  const combine = (el: Element) => el.querySelector<HTMLElement>('[data-agent-combine]');
-
-  it('[D1] "Combine across workspaces" is a labelled switch, off by default, with its help text', async () => {
+  it('has no switch for D1 "Combine across workspaces" (removed, ADR 0122 amendment)', async () => {
     const { el } = await render(<AgentSettings list={list()} />);
-    const sw = combine(el);
-    expect(sw?.getAttribute('role')).toBe('switch');
-    expect(sw?.getAttribute('aria-checked')).toBe('false');
-    expect(sw?.hasAttribute('disabled')).toBe(false);
-    const label = document.getElementById(sw?.getAttribute('aria-labelledby') ?? '');
-    expect(label?.textContent).toBe('Combine across workspaces');
-    const help = document.getElementById(sw?.getAttribute('aria-describedby') ?? '');
-    // The help starts with the plan sentence.
-    expect(
-      help?.textContent?.startsWith(
-        'Answers from your other workspaces go to the orchestrator model in Sales.',
-      ),
-    ).toBe(true);
-    expect(help?.textContent).toContain(
-      'When on, it can read them, combine them, and use one in a question to another workspace.',
-    );
-    expect(help?.textContent).toContain(
-      'When off, you see each answer. The agent sees only a receipt.',
-    );
-    // Only the title toggles the switch: the long help is outside the label.
-    expect(el.querySelector('label[for]')?.contains(help ?? null)).toBe(false);
-    expect(el.querySelector('label[for]')?.textContent).toBe('Combine across workspaces');
-    expect(el.querySelector('[data-agent-combine-locked]')).toBeNull();
-    // The live region is there, and empty.
-    expect(el.querySelector('[data-agent-combine-applies]')?.textContent).toBe('');
-    // The label toggles the switch only when it is not locked.
-    expect(el.querySelector('label[for]')).not.toBeNull();
+    expect(el.querySelector('[data-agent-combine]')).toBeNull();
+    expect(el.textContent ?? '').not.toMatch(/combine across workspaces/i);
   });
 
-  it('[D1] a click on the title toggles the switch, and a click on the help text does not', async () => {
-    const { el } = await render(<AgentSettings list={list()} />);
-    const title = el.querySelector<HTMLElement>('label[for] span');
-    await click(title);
-    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: true }]);
-    tauri.reset();
-    const sw = combine(el);
-    const help = document.getElementById(sw?.getAttribute('aria-describedby') ?? '');
-    await click(help);
-    expect(clicks()).toEqual([]);
-  });
-
-  it('[D1] the disclosure line says that other answers stay out unless the switch is on', async () => {
+  it('the disclosure line says the model may combine answers from more than one workspace', async () => {
     const { el } = await render(<AgentSettings list={list()} />);
     expect(el.querySelector('[data-agent-disclosure]')?.textContent).toContain(
-      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+      'It may combine answers from more than one of your workspaces into one answer.',
     );
-  });
-
-  it('[D1] the switch writes the setting through workspace.cross, on and off', async () => {
-    const { el } = await render(<AgentSettings list={list()} />);
-    await click(combine(el));
-    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: true }]);
-    tauri.reset();
-    const on = await render(<AgentSettings list={withAgent({ crossWorkspaceData: true })} />);
-    expect(combine(on.el)?.getAttribute('aria-checked')).toBe('true');
-    await click(combine(on.el));
-    expect(clicks()).toEqual([{ action: 'workspace.cross', crossWorkspaceData: false }]);
-  });
-
-  it('[AC-2b.5] a locked switch is off, disabled and says "Set by your admin"', async () => {
-    const { el } = await render(
-      <AgentSettings list={withAgent({ crossWorkspaceData: true, crossWorkspaceLocked: true })} />,
-    );
-    const sw = combine(el);
-    expect(sw?.getAttribute('aria-checked')).toBe('false');
-    expect(sw?.hasAttribute('disabled')).toBe(true);
-    const locked = el.querySelector('[data-agent-combine-locked]');
-    expect(locked?.textContent).toBe(COMBINE_LOCKED);
-    expect(locked?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
-    // A locked row has no label link, so no pointer cursor and no click-through.
-    expect(el.querySelector('label[for]')).toBeNull();
-    expect(sw?.getAttribute('aria-describedby')).toContain(locked?.id ?? 'none');
-    await click(sw);
-    expect(clicks()).toEqual([]);
-  });
-
-  it('[AC-2b.4] says "Applies to your next question." only after a change during a turn, and not when locked', async () => {
-    const applies = (el: Element) => el.querySelector('[data-agent-combine-applies]')?.textContent;
-    const { el, root } = await render(<AgentSettings list={list()} busy />);
-    // A turn runs, and the user changed nothing: no note.
-    expect(applies(el)).toBe('');
-    await click(combine(el));
-    expect(applies(el)).toBe(COMBINE_APPLIES);
-    // The turn ended: the note goes.
-    await act(async () => root.render(<AgentSettings list={list()} busy={false} />));
-    expect(applies(el)).toBe('');
-    const l = await render(<AgentSettings list={withAgent({ crossWorkspaceLocked: true })} busy />);
-    expect(applies(l.el)).toBe('');
   });
 
   it('[D2] the budget is a labelled radio group; a click sends the value', async () => {

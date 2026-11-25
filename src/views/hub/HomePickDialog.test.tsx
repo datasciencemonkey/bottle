@@ -163,7 +163,7 @@ describe('HomePickDialog', () => {
 
   it('Escape hides it without sending anything; a different pick shows it again', async () => {
     const { el } = await render(<Hub />);
-    const agent = { crossWorkspaceData: false, crossWorkspaceLocked: false, genieCallBudget: 10 };
+    const agent = { genieCallBudget: 10 };
     const rows = ['sales', 'ops'].map((p) => ({
       profile: p,
       name: p === 'ops' ? 'Ops' : 'Sales',

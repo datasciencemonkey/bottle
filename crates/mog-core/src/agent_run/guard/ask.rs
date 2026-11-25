@@ -5,16 +5,16 @@
 //! 1. The session is open and its live turn runs. Else `run_stopped`, or `no_active_turn`.
 //! 2. The arguments are valid. Else `invalid_args`.
 //! 3. The alias is in the catalog of the session. Else `workspace_not_available`.
-//! 4. With D1 off and a tainted session, the alias must be the agent workspace. Else
-//!    `cross_workspace_off`.
-//! 5. `used < budget` (D2, per turn). The reservation counts. Else `budget_reached`.
-//! 6. The live [`crate::workspaces::WorkspaceGate`] allows the profile. Else
+//! 4. `used < budget` (D2, per turn). The reservation counts. Else `budget_reached`.
+//! 5. The live [`crate::workspaces::WorkspaceGate`] allows the profile. Else
 //!    `workspace_not_available`, and the reservation goes back.
-//! 7. One conversation per workspace per turn, one message in flight. A second call to the same
+//! 6. One conversation per workspace per turn, one message in flight. A second call to the same
 //!    workspace waits as Queued.
-//! 8. `genie_ask` goes through the one R8 transport, then the Rust poll loop runs.
-//! 9. The result is a receipt, or a text block after the quarantine check ([`super::receipt`]).
-//! 10. One content-free `AgentActionLog` entry. It is written before the send: no entry, no call.
+//! 7. `genie_ask` goes through the one R8 transport, then the Rust poll loop runs.
+//! 8. The result is a text block after the quarantine check ([`super::receipt`]). Cross-workspace
+//!    data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1 removed), so every
+//!    answered call gets text, never a receipt.
+//! 9. One content-free `AgentActionLog` entry. It is written before the send: no entry, no call.
 //!
 //! The third refusal of a turn stops it (`refusals`).
 
@@ -49,7 +49,6 @@ fn refusal_code(c: AgentRefusal) -> &'static str {
     match c {
         AgentRefusal::WorkspaceNotAvailable => "workspace_not_available",
         AgentRefusal::BudgetReached => "budget_reached",
-        AgentRefusal::CrossWorkspaceOff => "cross_workspace_off",
         AgentRefusal::InvalidArgs => "invalid_args",
     }
 }
@@ -234,7 +233,7 @@ impl AgentGuard {
         if question_reaches_out(&question, &user_q) {
             return Err(self.refuse(sid, &turn_id, AgentRefusal::InvalidArgs));
         }
-        // 3, 4, 5 on one lock: the reservation is atomic with the checks.
+        // 3, 4 on one lock: the reservation is atomic with the checks.
         enum Verdict {
             Stopped(&'static str),
             Refuse(AgentRefusal),
@@ -250,13 +249,9 @@ impl AgentGuard {
             let Some(sess) = st.sessions.get_mut(sid) else {
                 return Err(ToolOut::refusal(RUN_STOPPED));
             };
-            let d1 = sess.spec.cross_workspace;
             let entry = sess.spec.catalog.iter().find(|c| c.alias == alias).cloned();
             match entry {
                 None => Verdict::Refuse(AgentRefusal::WorkspaceNotAvailable),
-                Some(e) if !d1 && sess.tainted && !e.is_agent_workspace => {
-                    Verdict::Refuse(AgentRefusal::CrossWorkspaceOff)
-                }
                 Some(e) => {
                     let turn = sess.turns.get_mut(&turn_id);
                     match turn {
@@ -275,7 +270,7 @@ impl AgentGuard {
             Verdict::Refuse(c) => return Err(self.refuse(sid, &turn_id, c)),
             Verdict::Go(p) => p,
         };
-        // 6: the live gate, so a workspace switched off applies at once. The reservation goes back.
+        // 5: the live gate, so a workspace switched off applies at once. The reservation goes back.
         if !self.deps.gate.allows(&profile) {
             if let Some(t) = self
                 .lock()
@@ -352,7 +347,7 @@ impl AgentGuard {
         self.emit(vec![event]);
     }
 
-    /// Check 7: wait for the place of the workspace in this turn. `Err` is the result of a call
+    /// Check 6: wait for the place of the workspace in this turn. `Err` is the result of a call
     /// that was stopped before it was sent.
     fn take_slot(&self, sid: &str, a: &Admitted) -> Result<Option<String>, ToolOut> {
         let mut st = self.lock();
@@ -387,13 +382,13 @@ impl AgentGuard {
         }
     }
 
-    /// Checks 8 to 10 for one admitted call.
+    /// Checks 7 to 9 for one admitted call.
     fn run_call(&self, sid: &str, a: &Admitted) -> ToolOut {
         let conversation = match self.take_slot(sid, a) {
             Ok(c) => c,
             Err(out) => return out,
         };
-        // 10: the entry is written before the send. No entry, no call.
+        // 9: the entry is written before the send. No entry, no call.
         let args_bytes = (a.alias.len() + a.question.len()) as u64;
         if self
             .deps
@@ -425,7 +420,7 @@ impl AgentGuard {
                 Err(_) => self.opts.sleeper.sleep(WAIT_SLICE * 2, &a.cancel),
             }
         };
-        // 8: the send, through the one R8.
+        // 7: the send, through the one R8.
         let mut args = JsonObject::new();
         args.insert("question".into(), a.question.clone().into());
         if let Some(c) = &conversation {
@@ -553,13 +548,6 @@ impl AgentGuard {
         let event = {
             let mut st = self.lock();
             if let Some(sess) = st.sessions.get_mut(sid) {
-                let d1 = sess.spec.cross_workspace;
-                let is_agent_ws = sess
-                    .spec
-                    .catalog
-                    .iter()
-                    .any(|c| c.alias == a.alias && c.is_agent_workspace);
-                let as_text = is_agent_ws || d1;
                 let (used, budget) = sess
                     .turns
                     .get(&a.turn_id)
@@ -570,18 +558,14 @@ impl AgentGuard {
                 match ended.outcome {
                     Some(o) => {
                         reply = o.reply.as_ref().map(McpCallReply::from);
-                        let (text, w) = if as_text {
-                            receipt::text_block(&a.call_id, &a.alias, &o, ws_url.as_deref())
-                        } else {
-                            (receipt::receipt(&a.call_id, &a.alias, &o), None)
-                        };
+                        // Cross-workspace data is always on (ADR 0122 amendment, owner decision
+                        // 2026-11-24: D1 removed), so every answered call gets text, never a
+                        // receipt.
+                        let (text, w) =
+                            receipt::text_block(&a.call_id, &a.alias, &o, ws_url.as_deref());
                         if w.is_some() {
                             // The user view hides a withheld reply.
                             reply = None;
-                        } else if as_text && o.state == AgentCallState::Answered && !d1 {
-                            // The session got text from the agent workspace: the taint lasts
-                            // the session.
-                            sess.tainted = true;
                         }
                         withheld = w;
                         state = o.state;

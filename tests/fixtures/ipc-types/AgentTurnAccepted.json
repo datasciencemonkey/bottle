@@ -4,7 +4,6 @@
   "position": 0,
   "newSession": true,
   "budget": 10,
-  "crossWorkspace": false,
   "catalog": [
     {
       "workspaceId": "1234567890123456",

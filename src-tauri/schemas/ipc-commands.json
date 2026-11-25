@@ -2245,7 +2245,7 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and\nthe D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and \"Clean up dictation\".",
+      "description": "`workspace_settings_write` (ADR 0117): the D2 Genie call budget (5, 10 or 20) and\nthe D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and \"Clean up dictation\".\nD1 \"Combine across workspaces\" is removed (ADR 0122 amendment, owner decision\n2026-11-24): cross-workspace data is always on.",
       "properties": {
         "agentEndpoint": {
           "anyOf": [
@@ -2264,12 +2264,6 @@
         "cloudDictation": {
           "description": "ADR 0123: \"Dictation engine: Databricks\".",
           "type": "boolean"
-        },
-        "crossWorkspaceData": {
-          "type": [
-            "boolean",
-            "null"
-          ]
         },
         "genieCallBudget": {
           "anyOf": [

@@ -3,8 +3,6 @@
   "quit",
   "wipe",
   "profile_changed",
-  "d1_changed",
   "catalog_changed",
-  "tainted",
   "idle"
 ]

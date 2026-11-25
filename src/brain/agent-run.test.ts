@@ -64,7 +64,6 @@ function accepted(turnId: string, over: Partial<AgentTurnAccepted> = {}): AgentT
     position: 0,
     newSession: true,
     budget: 10,
-    crossWorkspace: false,
     catalog: [SALES, FIN],
     ...over,
   };
@@ -347,38 +346,36 @@ describe('a finished call and a finished turn', () => {
       deepLink: 'https://fake.test/l',
       workspaceHost: 'https://fake-sales.fake.test',
     });
-    // D1 is off: the Finance text did not go to the agent.
-    expect(live?.parts[1]?.notShownToAgent).toBe(true);
+    // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    // 2026-11-24): cross-workspace data is always on, so every workspace's text goes to the
+    // agent.
+    expect(live?.parts[1]?.notShownToAgent).toBeUndefined();
     expect(live?.parts[0]?.notShownToAgent).toBeUndefined();
     expect(live?.calls.every((c) => c.state === 'ready' && c.endedAt === 13_000)).toBe(true);
   });
 
-  it('[AC-2b.6] a combined answer only counts with D1 on; with D1 off the kind is "note"', async () => {
-    for (const on of [false, true]) {
-      const r = rig();
-      r.script.submit.push(accepted(T1, { crossWorkspace: on }));
-      await r.client.submit(turn(), 'ask');
-      r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
-      r.script.result = {
-        answer: 'Both fall.',
-        answerKind: 'combined',
-        sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
-      };
-      r.ev(callEv(T1, C1, SALES, 'answered'));
-      r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
-      await r.settle();
-      expect(r.client.panel().earlier[0]?.summary?.kind).toBe(on ? 'combined' : 'note');
-    }
+  it('a combined answer always counts as combined (D1 is removed, ADR 0122 amendment)', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
+    r.script.result = {
+      answer: 'Both fall.',
+      answerKind: 'combined',
+      sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
+    };
+    r.ev(callEv(T1, C1, SALES, 'answered'));
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    await r.settle();
+    expect(r.client.panel().earlier[0]?.summary?.kind).toBe('combined');
   });
 
-  it('[AC-2b.5] an earlier source takes the D1 value of its own turn; a forgotten turn fails closed', async () => {
+  it('an earlier source and a forgotten turn are both shown to the agent (D1 is removed)', async () => {
     const r = rig();
-    // T1 ran with D1 off and ended; it stays known.
     await answered(r);
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
     await r.settle();
-    // T2 runs with D1 on and cites the Finance call of T1 (D1 off), and one of a forgotten turn.
-    r.script.submit.push(accepted(T2, { crossWorkspace: true }));
+    r.script.submit.push(accepted(T2));
     await r.client.submit(turn(), 'ask');
     const GONE = 'e'.repeat(32);
     r.script.details.set(
@@ -401,11 +398,9 @@ describe('a finished call and a finished turn', () => {
     const done = r.client.panel().earlier.find((t) => t.turnId === T2);
     expect(done?.summary?.kind).toBe('combined');
     const byCall = Object.fromEntries((done?.parts ?? []).map((p) => [p.callId, p]));
-    // (a) the earlier turn is present and had D1 off: the agent never saw it.
-    expect(byCall[C2]?.notShownToAgent).toBe(true);
-    // (b) the earlier turn is forgotten: fail closed.
-    expect(byCall['c-0000000e']?.notShownToAgent).toBe(true);
-    // The current turn has D1 on: the agent saw it.
+    // Cross-workspace data is always on: every source, earlier or forgotten, is shown.
+    expect(byCall[C2]?.notShownToAgent).toBeUndefined();
+    expect(byCall['c-0000000e']?.notShownToAgent).toBeUndefined();
     expect(byCall['c-00000003']?.notShownToAgent).toBeUndefined();
   });
 
@@ -462,14 +457,19 @@ describe('a finished call and a finished turn', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
     await r.settle();
     const s = r.client.panel().earlier[0]?.summary as { md: string; citations?: unknown[] };
-    // D1 is off: the Finance part is withheld from the agent, so its [2] goes, as does [3].
-    expect(s.md).toBe('Sales [1] and finance, not or [x].');
-    expect(s.citations).toMatchObject([{ n: 1, callId: C1, workspace: { name: SALES.name } }]);
-    expect(s.citations).toHaveLength(1);
+    // Cross-workspace data is always on: both valid markers ([1], [2]) stay; only [3] and [x] go.
+    expect(s.md).toBe('Sales [1] and finance [2], not or [x].');
+    expect(s.citations).toMatchObject([
+      { n: 1, callId: C1, workspace: { name: SALES.name } },
+      { n: 2, callId: C2, workspace: { name: FIN.name } },
+    ]);
+    expect(s.citations).toHaveLength(2);
     // The turn row saves which workspace each number names, and the part row it reaches.
     const salesRow = r.history.find((h) => h.backend === undefined && h.profile === SALES.profile);
+    const financeRow = r.history.find((h) => h.backend === undefined && h.profile === FIN.profile);
     expect(r.history.find((h) => h.backend === 'genie_agent')?.citations).toEqual([
       { n: 1, profile: SALES.profile, requestId: salesRow?.opId },
+      { n: 2, profile: FIN.profile, requestId: financeRow?.opId },
     ]);
   });
 

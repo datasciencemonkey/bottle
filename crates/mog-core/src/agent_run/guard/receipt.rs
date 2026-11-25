@@ -1,8 +1,9 @@
-//! What the model gets back from one `ask_genie` (checks 9 and 10 of Section 2.3): a receipt, or a
-//! text block after the quarantine check. The model never sees a profile, a host or a token.
+//! What the model gets back from one `ask_genie` (checks 8 and 9 of Section 2.3): a text block
+//! after the quarantine check, or an unanswered status. The model never sees a profile, a host
+//! or a token.
 //!
-//! With D1 off, text goes to the model only for the agent workspace. For every other workspace the
-//! model gets a receipt: counts and states, no answer text (AC-2a.5).
+//! Cross-workspace data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1
+//! removed), so every answered call gets the text, for every workspace (AC-2a.5).
 
 use std::fmt;
 
@@ -13,10 +14,6 @@ use crate::local_store::quarantine::is_answer_injection;
 use crate::mcp_transport::McpReply;
 use crate::types::{AgentCallState, AgentWithheld};
 
-/// The note of a receipt of an answered call.
-pub const RECEIPT_NOTE: &str = "Shown to the user. You cannot see it.";
-/// The note of a receipt of a call with no answer.
-pub const NO_ANSWER_NOTE: &str = "No answer came back.";
 /// The note of a withheld text.
 pub const WITHHELD_NOTE: &str = "Held back as suspicious. The user can decide about it.";
 /// The longest answer text that goes to the model, in chars.
@@ -110,21 +107,6 @@ fn is_error_state(s: AgentCallState) -> bool {
     !matches!(s, AgentCallState::Answered | AgentCallState::NoAnswer)
 }
 
-fn rows_of(r: &McpReply) -> Value {
-    r.structured_content
-        .get("total_row_count")
-        .and_then(Value::as_u64)
-        .map_or(Value::Null, Value::from)
-}
-
-fn has_link(r: &McpReply) -> bool {
-    r.structured_content
-        .get("deep_link")
-        .and_then(Value::as_str)
-        .is_some_and(|l| !l.is_empty())
-        || r.text.contains("](http")
-}
-
 /// Cut `s` to at most `max` chars.
 fn cut(s: &str, max: usize) -> &str {
     s.char_indices().nth(max).map_or(s, |(i, _)| &s[..i])
@@ -135,25 +117,6 @@ fn attr(v: &str) -> String {
     v.replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
-}
-
-/// The receipt for a call that the model must not read (D1 off, a workspace that is not the
-/// agent workspace).
-pub fn receipt(call_id: &str, alias: &str, o: &Outcome) -> ToolOut {
-    let answered = o.state == AgentCallState::Answered;
-    let v = json!({
-        "callId": call_id,
-        "workspace": alias,
-        "status": state_name(o.state),
-        "rows": o.reply.as_ref().map_or(Value::Null, rows_of),
-        "answerChars": o.answer.as_deref().map_or(0, |a| a.chars().count()),
-        "hasLink": o.reply.as_ref().is_some_and(has_link),
-        "note": if answered { RECEIPT_NOTE } else { NO_ANSWER_NOTE },
-    });
-    ToolOut {
-        text: v.to_string(),
-        is_error: is_error_state(o.state),
-    }
 }
 
 /// The text block for a call that the model may read. A quarantine hit withholds it. The second
@@ -246,19 +209,6 @@ mod tests {
             http_status: 200,
             rpc_error: None,
         }
-    }
-
-    #[test]
-    fn a_receipt_has_counts_and_no_answer_text() {
-        let o = outcome_of_terminal(done("completed", "ANSWER-CANARY revenue 42"));
-        let r = receipt("c-1", "finance", &o);
-        assert!(!r.text.contains("ANSWER-CANARY"), "{}", r.text);
-        let v: Value = serde_json::from_str(&r.text).unwrap();
-        assert_eq!(v["rows"], 7);
-        assert_eq!(v["hasLink"], true);
-        assert_eq!(v["answerChars"], 24);
-        assert_eq!(v["note"], RECEIPT_NOTE);
-        assert!(!r.is_error);
     }
 
     #[test]

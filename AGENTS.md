@@ -42,8 +42,11 @@ Binding decisions for the MVP:
     a short notice. Local Parakeet stays the default and the fallback.
   - **Ask (⌥G):** the model runs a tool loop in Rust (`agent_run::orchestrator`). It has two tools:
     `ask_genie(workspace, question)` and `submit_answer`. Every `ask_genie` call goes through the guard
-    (`agent_run/guard`): switched-on workspaces only, a budget, quarantine, and receipts when "Combine across
-    workspaces" is off. Combined answers cite each workspace as [1] [2], and each marker links to that workspace's answer.
+    (`agent_run/guard`): switched-on workspaces only, a budget and quarantine. "Combine across workspaces" (D1) is
+    removed (ADR 0122 amendment, owner decision 2026-11-24): cross-workspace data is always on. Combined answers cite
+    each workspace as [1] [2], and each marker links to that workspace's answer. The orchestrator model must ask the
+    home workspace first, and widen to the rest only after home answers that it has no data or cannot answer, unless
+    the question names another workspace directly (ADR 0122 amendment, "Home first").
   - **Direct Genie is the fallback.** If the model is not reachable, ⌥G asks Genie One on the home workspace
     (ADR 0097 path) and shows a short notice. The parts on main: TokenBroker (R6), McpTransport (R8, tool allowlist
     `genie_ask`, `genie_poll_response`, `genie_get_query_result`, `genie_cancel_response`), PollActor and GenieBridge (T8).

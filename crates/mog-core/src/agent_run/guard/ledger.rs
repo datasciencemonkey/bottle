@@ -72,7 +72,6 @@ pub(crate) struct TurnRec {
 
 pub(crate) struct SessionRec {
     pub spec: SessionSpec,
-    pub tainted: bool,
     pub live: Option<String>,
     pub turns: HashMap<String, TurnRec>,
     pub calls: Vec<CallRec>,
@@ -207,7 +206,6 @@ impl SessionGuard for AgentGuard {
             id,
             SessionRec {
                 spec,
-                tainted: false,
                 live: None,
                 turns: HashMap::new(),
                 calls: Vec::new(),
@@ -282,13 +280,6 @@ impl SessionGuard for AgentGuard {
         }
         drop(st);
         self.cv.notify_all();
-    }
-
-    fn tainted(&self, session_id: &str) -> bool {
-        self.lock()
-            .sessions
-            .get(session_id)
-            .is_some_and(|s| s.tainted)
     }
 
     fn calls(&self, session_id: &str) -> Vec<CallRecord> {

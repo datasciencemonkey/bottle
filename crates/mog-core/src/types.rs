@@ -923,14 +923,11 @@ impl JsonSchema for GenieCallBudget {
     }
 }
 
-/// The agent settings (ADR 0117 D1, D2).
+/// The agent settings (ADR 0117 D2). D1 "Combine across workspaces" is removed (ADR 0122
+/// amendment, owner decision 2026-11-24): cross-workspace data is always on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSettings {
-    /// D1 "Combine across workspaces". Default false.
-    pub cross_workspace_data: bool,
-    /// SEC-28b: an admin lock forces D1 off. Always false until slice 3.
-    pub cross_workspace_locked: bool,
     /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
     pub genie_call_budget: GenieCallBudget,
     /// D9, ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default
@@ -987,7 +984,6 @@ pub struct AgentTurnAccepted {
     pub position: u32,
     pub new_session: bool,
     pub budget: GenieCallBudget,
-    pub cross_workspace: bool,
     pub catalog: Vec<AgentWorkspace>,
 }
 
@@ -1139,9 +1135,7 @@ pub enum AgentSessionEndReason {
     Quit,
     Wipe,
     ProfileChanged,
-    D1Changed,
     CatalogChanged,
-    Tainted,
     Idle,
 }
 
@@ -1196,7 +1190,6 @@ pub enum AgentSessionEvent {
 pub enum AgentRefusal {
     WorkspaceNotAvailable,
     BudgetReached,
-    CrossWorkspaceOff,
     InvalidArgs,
 }
 
