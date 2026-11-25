@@ -656,12 +656,17 @@ fn rec_retry_from_writing_notes_runs_only_the_notes() {
     http.json(MODEL, 200, claude("## Summary\nOK"));
     files_ok(&http);
     let mut j = job(vec![]);
-    j.notes_endpoint = "my-fixed-model".into();
+    // ADR 0123, the general rule ("E"): a `system.ai.*` id the user actually chose (not the
+    // default) passes through as given.
+    j.notes_endpoint = "system.ai.my-fixed-model".into();
     let out = service(&http).retry(P, &j, &mut |_| {});
     assert_eq!(out.status, Status::Done, "{out:?}");
     let calls = http.seen_on(MODEL);
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].json.as_ref().unwrap()["model"], "my-fixed-model");
+    assert_eq!(
+        calls[0].json.as_ref().unwrap()["model"],
+        "system.ai.my-fixed-model"
+    );
     assert!(uploads(&http)
         .iter()
         .any(|(p, b)| p.ends_with(".notes.md") && b == b"## Summary\nOK"));

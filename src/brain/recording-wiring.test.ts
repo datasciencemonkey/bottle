@@ -399,6 +399,89 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(rows[0]).toMatchObject({ id: '2026-11-24_1741', status: 'uploading' });
   });
 
+  it('[REC-H9] a missed job event is caught up by a bounded poll while a take is in flight', async () => {
+    // "A" review 2026-11-25/26: `recording.job` is not sticky and nothing else polls, so if
+    // the next status-change event never reaches the brain, the row must still catch up on
+    // its own instead of sitting on "Uploading…" forever.
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    // A controlled list: only this one take, so the fixture's own in-flight row never muddies
+    // the catch-up assertions below.
+    t.fake.rows.length = 0;
+    t.fake.rows.push({
+      id: '2026-11-25_0628',
+      name: '2026-11-25_0628',
+      startedAt: 100,
+      durationS: 19,
+      status: 'uploading',
+    });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    const readsAfterStop = t.fake.api.list.mock.calls.length;
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows).toMatchObject([
+      { id: '2026-11-25_0628', status: 'uploading' },
+    ]);
+    // The take finishes server-side, but no job event ever tells the brain.
+    const row = t.fake.rows.find((r) => r.id === '2026-11-25_0628');
+    if (row) row.status = 'done';
+    await s.runUntil(10_000, { settle: true });
+    await flush();
+    expect(t.fake.api.list.mock.calls.length).toBeGreaterThan(readsAfterStop);
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows).toMatchObject([
+      { id: '2026-11-25_0628', status: 'done' },
+    ]);
+  });
+
+  it('[REC-H9] the catch-up poll stops once every row is at a terminal status', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.fake.rows.length = 0;
+    t.fake.rows.push({
+      id: '2026-11-25_0628',
+      name: '2026-11-25_0628',
+      startedAt: 100,
+      durationS: 19,
+      status: 'done',
+    });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    const reads = t.fake.api.list.mock.calls.length;
+    await s.runUntil(60_000, { settle: true });
+    await flush();
+    // Already done at the one read the stop triggers: no catch-up poll is ever armed.
+    expect(t.fake.api.list.mock.calls.length).toBe(reads);
+  });
+
+  it('[REC-D] a new take becomes the selected row when it starts, and stays selected when it stops', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    expect(t.fake.api.detail).toHaveBeenLastCalledWith('2026-11-25_0628');
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.id).toBe('2026-11-25_0628');
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    expect(t.fake.api.detail).toHaveBeenLastCalledWith('2026-11-25_0628');
+  });
+
   it('[REC-H8] a refused start shows its plain text with one action', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.api.start.mockRejectedValue({ error: 'recording_busy' });

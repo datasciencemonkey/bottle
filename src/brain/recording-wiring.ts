@@ -81,6 +81,8 @@ export interface RecState {
   startedAtMs?: number;
   endsAtMs?: number;
   systemAudio?: 'ok' | 'silent_or_denied' | 'mic_only';
+  /** The recording's folder name (matches `RecSummary.id`/`.name`): "A", review 2026-11-25. */
+  name?: string;
 }
 
 /** One recording in the volume (`recording_list`). */
@@ -431,9 +433,40 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   };
 
   let recOn = false;
+  /** The name of the recording the device runs or just stopped (so Stop can select and read
+   * its own row at once, "D" review 2026-11-25/26), or `undefined` with none known yet. */
+  let currentName: string | undefined;
   /** Whether the last state read `silent_or_denied` while recording (the hint timer tracks it). */
   let systemAudioSilent = false;
   let systemAudioHintTimer: (() => void) | undefined;
+  /** The one pending catch-up poll, or `undefined` with none scheduled. */
+  let catchUpTimer: (() => void) | undefined;
+  /**
+   * How long to wait before re-reading the list while a take is still uploading,
+   * transcribing or writing notes ("A" review 2026-11-25/26): `recording.job` is not sticky
+   * and nothing else polls, so a missed or dropped event must not leave the row stale for
+   * good. Short on purpose: a take usually moves on in seconds, and this only ever fires
+   * while something is still in flight.
+   */
+  const CATCH_UP_MS = 3_000;
+  const IN_FLIGHT_STATUSES: ReadonlySet<RecordingStatus> = new Set([
+    'recording',
+    'uploading',
+    'transcribing',
+    'writing_notes',
+  ]);
+  /** Re-read the list shortly, only while a row is still in flight, so a missed job event
+   * (or a slow first read right after launch) still catches up on its own. One timer at a
+   * time: each call replaces the one before it. */
+  const scheduleCatchUp = () => {
+    catchUpTimer?.();
+    catchUpTimer = undefined;
+    if (gone || !rows.some((r) => IN_FLIGHT_STATUSES.has(r.status))) return;
+    catchUpTimer = schedule(clock.now() + CATCH_UP_MS, () => {
+      catchUpTimer = undefined;
+      void refreshList();
+    });
+  };
   /**
    * The silence has lasted past `SYSTEM_AUDIO_HINT_MS` (#593 follow-up). Kept separate from
    * `error`: a real error always wins in `publish`, but this stays true underneath it, so the
@@ -473,10 +506,23 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (on !== recOn) {
       recOn = on;
       deps.mood?.callRecording(on);
-      if (on) void warnIfLocalOnly();
-      // The call ended (Stop, ⌥R or the length): read the list now, so its row shows at once
-      // and goes on to uploading, transcribing and notes, also with no job event yet.
-      else void refreshList();
+      if (on) {
+        // "D" review 2026-11-25/26: a new take becomes the selected row the moment it starts,
+        // not only once it stops, so the detail pane never keeps showing an old recording
+        // while this one runs.
+        if (s.name) {
+          currentName = s.name;
+          void showDetail(s.name);
+        }
+        void warnIfLocalOnly();
+      } else {
+        // The call ended (Stop, ⌥R or the length): read the list now, so its row shows at
+        // once and goes on to uploading, transcribing and notes, also with no job event yet.
+        // Re-select the same take (its own id does not change at the stop) so Stop does not
+        // leave an older recording's detail showing.
+        if (currentName) void showDetail(currentName);
+        void refreshList();
+      }
     }
     if (!on) clearSystemAudioHint();
     publish();
@@ -585,6 +631,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r.status);
     if (batch && !batch.running) batch = undefined;
     publishList();
+    scheduleCatchUp();
   }
 
   /** Upload all: each waiting recording through the retry path, one at a time, oldest first. */
@@ -680,6 +727,10 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       if (j.partsTotal !== undefined) row.partsTotal = j.partsTotal;
       if (j.onDeviceOnly) row.onDeviceOnly = true;
       publishList();
+      // `recording.job` is not sticky and nothing else polls ("A" review 2026-11-25/26): keep
+      // a bounded catch-up armed in case the next event is missed, until the row reaches a
+      // terminal status.
+      scheduleCatchUp();
     } else void refreshList();
     if (j.status === 'done' && before !== 'done') {
       deps.notify?.(NOTES_READY_TEXT);
@@ -841,6 +892,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   return () => {
     gone = true;
     systemAudioHintTimer?.();
+    catchUpTimer?.();
     offInput();
     offState();
     offJob();
@@ -855,6 +907,7 @@ export function recStateOf(s: RecordingState): RecState {
   if (s.systemAudio === 'ok' || s.systemAudio === 'silent_or_denied')
     out.systemAudio = s.systemAudio;
   else if (s.systemAudio === 'unavailable') out.systemAudio = 'mic_only';
+  if (s.name !== undefined) out.name = s.name;
   return out;
 }
 

@@ -326,11 +326,17 @@ struct FakeHost {
     builds: Arc<AtomicUsize>,
     live: Arc<AtomicUsize>,
     hang: Option<Duration>,
+    /// The stream's own `Drop` sleeps this long (simulates a real `AudioDeviceStop` on a tap
+    /// whose IO proc never ran: review of the owner's 2026-11-25 report).
+    drop_hang: Option<Duration>,
 }
 
-struct FakeStream(Arc<AtomicUsize>);
+struct FakeStream(Arc<AtomicUsize>, Option<Duration>);
 impl Drop for FakeStream {
     fn drop(&mut self) {
+        if let Some(d) = self.1 {
+            std::thread::sleep(d);
+        }
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -348,7 +354,7 @@ impl MicHost for FakeHost {
         *self.data.lock().unwrap() = Some(on_data);
         *self.fault.lock().unwrap() = Some(on_fault);
         self.live.fetch_add(1, Ordering::SeqCst);
-        Ok(FakeStream(Arc::clone(&self.live)))
+        Ok(FakeStream(Arc::clone(&self.live), self.drop_hang))
     }
     fn play(&mut self, _stream: &FakeStream) -> Result<(), DeviceError> {
         Ok(())
@@ -629,6 +635,74 @@ fn rec_a_late_adopted_system_open_gets_a_fresh_silence_grace_not_instant_silence
         session.snapshot()
     );
     let _ = session.stop(StopCause::User);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Regression (owner review, 2026-11-25, "C"): a real Core Audio `AudioDeviceStop` on a tap
+/// whose IO proc never ran can take far longer than `SystemAudioDevice`'s own `close_wait`
+/// (the real stream's `Drop`, not the message round trip `close` bounds). `stop` must not then
+/// wait for that slow teardown either, through `tap.disarm` or the writer join: the user's
+/// Stop must resolve close to `close_wait`, not to the stream's real drop time.
+#[test]
+fn rec_stop_does_not_wait_for_a_slow_system_audio_teardown() {
+    let host = FakeHost {
+        drop_hang: Some(Duration::from_millis(600)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn_with_close_wait(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_secs(5),
+        Duration::from_millis(50),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-stop-slow-close");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    session.start(opts("stop-slow-close", 60)).unwrap();
+    for _ in 0..200 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the fake tap must open"
+    );
+    let t0 = std::time::Instant::now();
+    session.stop(StopCause::User).unwrap();
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "stop must not wait for the stream's own slow teardown (close_wait is 50 ms, the \
+         real drop takes 600 ms): took {elapsed:?}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 

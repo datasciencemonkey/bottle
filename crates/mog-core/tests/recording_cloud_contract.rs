@@ -406,6 +406,35 @@ fn rec_component_list_leaves_out_the_recording_running_now() {
     assert!(rows[0].get("errorKind").is_none(), "{v}");
 }
 
+/// Regression ("A", owner review 2026-11-25/26): a transport fault on the volume listing
+/// itself (offline, a token hiccup, a slow network right after launch) must never blank the
+/// whole list. Every recording exists locally first, whether or not it ever reaches the
+/// volume, so `recording_list` must still show the local and live rows even when the one
+/// network call that lists the volume's own job.json files fails outright.
+#[test]
+fn rec_component_list_shows_local_rows_even_when_the_volume_listing_itself_fails() {
+    let http = Arc::new(ScriptedHttp::new());
+    // Not a 404 (an empty volume, already handled): a genuine transport fault.
+    http.on(
+        "files.list_directory",
+        Err(mog_core::error::CoreError::Unavailable {
+            component: "R7",
+            reason: "offline",
+        }),
+    );
+    let local: Arc<dyn LocalAudio> =
+        Arc::new(FakeLocal::new(vec![(NAME.to_owned(), 1_795_097_100_000)]));
+    let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "the local recording must still show: {v}");
+    assert_eq!(rows[0]["id"], NAME);
+    assert_eq!(rows[0]["status"], "failed");
+    assert_eq!(rows[0]["onDeviceOnly"], true);
+}
+
 #[test]
 fn rec_component_retry_refuses_the_recording_running_now() {
     // Same review item: Retry on that name must never upload or delete the part the encoder

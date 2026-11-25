@@ -946,10 +946,16 @@ impl RecordingCloud for CloudAdapter {
         profile: &ProfileName,
         storage: &RecordingStorage,
     ) -> RecordingResult<Vec<RecordingSummary>> {
+        // A transport fault on the volume listing itself (offline, a token hiccup, a slow
+        // network right after launch) must never blank the whole list (review of #592, "A",
+        // 2026-11-25/26): every recording exists locally first, whether or not it has ever
+        // reached the volume, so the local and live rows below still have to show. A 404
+        // (nothing in the volume yet) already reads as zero rows here (`cloud::list`); a
+        // genuine fault now reads the same way instead of refusing the whole call.
         let rows = self
             .service
             .list(profile.as_str(), Self::root(storage))
-            .map_err(err)?;
+            .unwrap_or_default();
         let active = self.local.active();
         let now = (self.now_ms)();
         // A job.json that is neither done nor failed and stopped changing belongs to a run that

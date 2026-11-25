@@ -6,8 +6,14 @@
 //!    process's output except Bottle's own process (so Bottle's sounds are not recorded), set
 //!    private and unmuted (the user still hears the call);
 //! 2. the tap (`AudioHardwareCreateProcessTap`);
-//! 3. a private aggregate device whose only input is the tap (tap auto start, drift
-//!    compensation on);
+//! 3. a private aggregate device whose input is the tap (tap auto start, drift compensation
+//!    on) **and** the system's default output device, set as the aggregate's main (clock)
+//!    sub-device. Apple's process-tap recipe and the `AudioCap` sample both build the
+//!    aggregate this way: a tap alone has no clock, so its IO proc never runs (review of
+//!    2026-11-25, CAP-10c: an earlier build with a tap-only aggregate opened in 22 ms but
+//!    delivered zero blocks; `firstSystemMs` stayed `None`). The output device never plays
+//!    anything through this aggregate (it is not in the output scope the app uses); it only
+//!    lends its clock.
 //! 4. an IO proc on the aggregate device that hands the tap's float frames to the data
 //!    callback. `play` starts the IO proc; dropping the [`TapStream`] stops it and destroys the
 //!    IO proc, the aggregate device and the tap, in that order.
@@ -36,10 +42,12 @@ use objc2::runtime::{AnyClass, AnyObject};
 use objc2::AnyThread;
 use objc2_core_audio::{
     kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey,
-    kAudioAggregateDeviceNameKey, kAudioAggregateDeviceTapAutoStartKey,
-    kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey,
-    kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioSubTapDriftCompensationKey,
+    kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
+    kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceTapAutoStartKey,
+    kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey, kAudioDevicePropertyDeviceUID,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyTranslatePIDToProcessObject,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+    kAudioSubDeviceDriftCompensationKey, kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey,
     kAudioSubTapUIDKey, kAudioTapPropertyFormat, AudioDeviceCreateIOProcID,
     AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop,
     AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
@@ -153,9 +161,57 @@ fn key(k: &CStr) -> Retained<NSString> {
     NSString::from_str(k.to_str().unwrap_or_default())
 }
 
-/// The aggregate device description: private, not stacked, the tap as its only input.
+/// The system's default output device, for the aggregate's clock (see the [module docs](self)).
+fn default_output_device() -> Result<AudioObjectID, DeviceError> {
+    let address = global(kAudioHardwarePropertyDefaultOutputDevice);
+    let mut device: AudioObjectID = 0;
+    let mut size = std::mem::size_of::<AudioObjectID>() as u32;
+    // SAFETY: valid pointers to locals of the sizes passed.
+    status(unsafe {
+        AudioObjectGetPropertyData(
+            kAudioObjectSystemObject as AudioObjectID,
+            NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut device).cast(),
+        )
+    })?;
+    if device == 0 {
+        return Err(codes::DEVICE_FAILED);
+    }
+    Ok(device)
+}
+
+/// The UID of Core Audio device `device`, for the aggregate's sub-device list and its main
+/// (clock) sub-device key.
+fn device_uid(device: AudioObjectID) -> Result<Retained<NSString>, DeviceError> {
+    let address = global(kAudioDevicePropertyDeviceUID);
+    let mut out: *mut NSString = std::ptr::null_mut();
+    let mut size = std::mem::size_of::<*mut NSString>() as u32;
+    // SAFETY: valid pointers to locals of the sizes passed.
+    status(unsafe {
+        AudioObjectGetPropertyData(
+            device,
+            NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut out).cast(),
+        )
+    })?;
+    // SAFETY: `kAudioDevicePropertyDeviceUID` hands back one retained `CFString`/`NSString*`
+    // (Apple's rule for this property: the caller owns it and must release it); `Retained::
+    // from_raw` takes that one retain count, the same as a `Copy`-style Core Foundation call.
+    unsafe { Retained::from_raw(out) }.ok_or(codes::DEVICE_FAILED)
+}
+
+/// The aggregate device description: private, not stacked, the tap as its tap list, and the
+/// default output device as its only sub-device **and** its main (clock) sub-device — the
+/// clock a tap-only aggregate does not have (see the [module docs](self)).
 fn aggregate_description(
     tap_uid: &NSString,
+    output_uid: &NSString,
     uid: &str,
 ) -> Retained<NSMutableDictionary<NSString, AnyObject>> {
     let yes = NSNumber::new_bool(true);
@@ -164,6 +220,13 @@ fn aggregate_description(
     sub_tap.insert(&*key(kAudioSubTapUIDKey), tap_uid as &AnyObject);
     sub_tap.insert(&*key(kAudioSubTapDriftCompensationKey), &yes as &AnyObject);
     let taps = NSArray::from_retained_slice(&[sub_tap]);
+    let sub_device = NSMutableDictionary::<NSString, AnyObject>::new();
+    sub_device.insert(&*key(kAudioSubDeviceUIDKey), output_uid as &AnyObject);
+    sub_device.insert(
+        &*key(kAudioSubDeviceDriftCompensationKey),
+        &yes as &AnyObject,
+    );
+    let sub_devices = NSArray::from_retained_slice(&[sub_device]);
     let d = NSMutableDictionary::<NSString, AnyObject>::new();
     d.insert(
         &*key(kAudioAggregateDeviceNameKey),
@@ -180,6 +243,14 @@ fn aggregate_description(
         &yes as &AnyObject,
     );
     d.insert(&*key(kAudioAggregateDeviceTapListKey), &taps as &AnyObject);
+    d.insert(
+        &*key(kAudioAggregateDeviceSubDeviceListKey),
+        &sub_devices as &AnyObject,
+    );
+    d.insert(
+        &*key(kAudioAggregateDeviceMainSubDeviceKey),
+        output_uid as &AnyObject,
+    );
     d
 }
 
@@ -221,12 +292,17 @@ impl MicHost for TapHost {
         let format = tap_format(tap)?;
         // SAFETY: plain Objective-C calls.
         let tap_uid = unsafe { desc.UUID().UUIDString() };
+        // The aggregate needs a real device for its clock, or its IO proc never runs (see the
+        // module docs): the default output device lends it, but plays nothing through this
+        // aggregate.
+        let output_device = default_output_device()?;
+        let output_uid = device_uid(output_device)?;
         let uid = format!(
             "app.bottle.recording.tap.{}.{}",
             std::process::id(),
             INSTANCE.fetch_add(1, Ordering::Relaxed)
         );
-        let dict = aggregate_description(&tap_uid, &uid);
+        let dict = aggregate_description(&tap_uid, &output_uid, &uid);
         // SAFETY: NSDictionary is toll-free bridged to CFDictionary.
         let cf: &CFDictionary = unsafe { &*(Retained::as_ptr(&dict) as *const CFDictionary) };
         let mut aggregate: AudioObjectID = 0;
@@ -402,5 +478,52 @@ impl crate::recording_capture::permissions::PermissionAsker for MacPermissionAsk
                     drop(stream);
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The aggregate device recipe fix (review of 2026-11-25, CAP-10c): the aggregate must
+    /// carry the output device as a real sub-device, set as the main (clock) sub-device, next
+    /// to the tap — not the tap alone. No Core Audio HAL call runs here (no hardware needed):
+    /// this only checks the dictionary this app builds, against Apple's documented
+    /// process-tap recipe and the `AudioCap` sample.
+    #[test]
+    fn aggregate_description_gives_the_aggregate_a_real_clock() {
+        let tap_uid = NSString::from_str("tap-uid-fake");
+        let output_uid = NSString::from_str("output-uid-fake");
+        let dict = aggregate_description(&tap_uid, &output_uid, "app.bottle.recording.tap.test");
+
+        // The tap is still the (only) tap list entry.
+        let taps = dict
+            .objectForKey(&*key(kAudioAggregateDeviceTapListKey))
+            .expect("tap list key");
+        let taps: &NSArray<AnyObject> =
+            unsafe { &*(Retained::as_ptr(&taps) as *const NSArray<AnyObject>) };
+        assert_eq!(taps.len(), 1);
+
+        // The output device is a sub-device: this is the clock the tap alone does not have.
+        let subs = dict
+            .objectForKey(&*key(kAudioAggregateDeviceSubDeviceListKey))
+            .expect("sub-device list key (the fix: a tap-only aggregate has no clock)");
+        let subs: &NSArray<AnyObject> =
+            unsafe { &*(Retained::as_ptr(&subs) as *const NSArray<AnyObject>) };
+        assert_eq!(subs.len(), 1, "exactly the output device, nothing else");
+
+        // The main (clock) sub-device is that same output device's UID.
+        let main = dict
+            .objectForKey(&*key(kAudioAggregateDeviceMainSubDeviceKey))
+            .expect("main sub-device key");
+        let main: &NSString = unsafe { &*(Retained::as_ptr(&main) as *const NSString) };
+        assert_eq!(main.to_string(), "output-uid-fake");
+
+        // Still private, not stacked, tap auto-start on: unchanged from before the fix.
+        let is_private = dict
+            .objectForKey(&*key(kAudioAggregateDeviceIsPrivateKey))
+            .expect("private key");
+        let is_private: &NSNumber = unsafe { &*(Retained::as_ptr(&is_private) as *const NSNumber) };
+        assert!(is_private.as_bool());
     }
 }
