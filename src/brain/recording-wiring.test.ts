@@ -498,6 +498,56 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
   });
 
+  it('[REC-H8] the hint is not lost for good: it shows once the blocking error clears', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.click({ action: 'recording.start' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    t.fake.api.retry.mockRejectedValue({ error: 'network' });
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS);
+    await flush();
+    // Blocked: the unrelated real error wins over the hint (not shown), but the hint is not
+    // discarded either.
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
+
+    // The recording ends; the error is untouched (it has nothing to do with system audio).
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
+    // A later `recording.start` clears the stale error at once.
+    t.click({ action: 'recording.start' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+    // Once silence lasts past the hint window again, with nothing left blocking it, the hint
+    // shows: the earlier block never lost it for good.
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    await s.runUntil(s.clock.now() + SYSTEM_AUDIO_HINT_MS);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(SYSTEM_AUDIO_HINT);
+  });
+
+  it('[REC-H8] sound arriving clears a failed Open System Settings notice too', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    t.fake.api.openSystemAudioSettings.mockRejectedValue({ error: 'host_failed' });
+    t.click({ action: 'recording.system_audio' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
+      SYSTEM_AUDIO_SETTINGS_OPEN_FAILED,
+    );
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'ok' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+  });
+
   it('[REC-H8] a real system_audio_denied error keeps its own red alert meaning', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.api.retry.mockRejectedValue({ error: 'system_audio_denied' });

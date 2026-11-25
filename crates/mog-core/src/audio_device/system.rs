@@ -156,8 +156,11 @@ impl SystemAudioStatus {
     }
 
     /// The worker resolves `generation` with a real outcome (CAP-10c): write `status` and the
-    /// diagnostics together, and mark the generation done so a concurrently timed-out `open`
-    /// does not then clobber this. A stale resolve for a generation a newer `open` has already
+    /// diagnostics together, under the same lock, and mark the generation done so a
+    /// concurrently timed-out `open` does not then clobber this. The `status` write happens
+    /// while the lock is still held (not after releasing it): otherwise the opener's own
+    /// `mark_timed_out` could run between the two and write `Unavailable` last, leaving `done`
+    /// true but `status` wrong. A stale resolve for a generation a newer `open` has already
     /// superseded (`begin_open` moved `resolution.generation` on) is dropped.
     fn resolve(
         &self,
@@ -166,22 +169,23 @@ impl SystemAudioStatus {
         open_ms: u64,
         timed_out: bool,
     ) {
-        {
-            let mut res = lock(&self.0.resolution);
-            if res.generation != generation {
-                return;
-            }
-            res.open_ms = open_ms;
-            res.timed_out = timed_out;
-            res.done = true;
+        let mut res = lock(&self.0.resolution);
+        if res.generation != generation {
+            return;
         }
-        self.set(availability);
+        res.open_ms = open_ms;
+        res.timed_out = timed_out;
+        res.done = true;
+        self.0
+            .availability
+            .store(availability.to_u8(), Ordering::SeqCst);
     }
 
     /// `open` itself gave up waiting for `generation`. Writes `Unavailable` and the
     /// diagnostics only when the worker has not resolved this exact generation already
     /// (CAP-10c): otherwise this would clobber a `Live` (or a genuine refusal) the worker just
-    /// settled. Returns whether it wrote.
+    /// settled. The `status` write happens under the same lock as the `done` check, for the
+    /// same reason as `resolve`. Returns whether it wrote.
     fn mark_timed_out(&self, generation: u64, open_ms: u64) -> bool {
         let mut res = lock(&self.0.resolution);
         if res.generation != generation || res.done {
@@ -189,8 +193,10 @@ impl SystemAudioStatus {
         }
         res.open_ms = open_ms;
         res.timed_out = true;
-        drop(res);
-        self.set(SystemAudioAvailability::Unavailable);
+        self.0.availability.store(
+            SystemAudioAvailability::Unavailable.to_u8(),
+            Ordering::SeqCst,
+        );
         true
     }
 }
@@ -567,5 +573,63 @@ impl AudioDevice for RecordingDevice {
             AudioSource::Mic => self.mic.close(source),
             AudioSource::SystemAudio => self.system.close(source),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CAP-10c: the worker's `resolve` lands first, then the opener's own `mark_timed_out`
+    /// (late: the worker already answered). `mark_timed_out` must not write, and `status` must
+    /// stay `Live` with `done` set.
+    #[test]
+    fn resolve_then_mark_timed_out_ends_live_with_done_set() {
+        let status = SystemAudioStatus::default();
+        status.begin_open(1);
+        status.resolve(1, SystemAudioAvailability::Live, 100, false);
+        let wrote = status.mark_timed_out(1, 200);
+        assert!(
+            !wrote,
+            "a resolved generation must refuse a later mark_timed_out"
+        );
+        assert_eq!(status.get(), SystemAudioAvailability::Live);
+        assert!(lock(&status.0.resolution).done);
+    }
+
+    /// CAP-10c: the opener's `mark_timed_out` lands first (the usual, on-time-timeout case),
+    /// then the worker's `resolve` corrects it late. `status` must end `Live` with `done` set
+    /// (the race this guards: a `resolve` that releases its lock before writing `status` could
+    /// let `mark_timed_out` write `Unavailable` after it, leaving `done` true but the status
+    /// wrong).
+    #[test]
+    fn mark_timed_out_then_resolve_ends_live_with_done_set() {
+        let status = SystemAudioStatus::default();
+        status.begin_open(1);
+        let wrote = status.mark_timed_out(1, 50);
+        assert!(wrote);
+        assert_eq!(status.get(), SystemAudioAvailability::Unavailable);
+        assert!(!lock(&status.0.resolution).done);
+        status.resolve(1, SystemAudioAvailability::Live, 300, true);
+        assert_eq!(status.get(), SystemAudioAvailability::Live);
+        assert!(lock(&status.0.resolution).done);
+    }
+
+    /// A `resolve` for a generation a newer `open` has already superseded (`begin_open` moved
+    /// `resolution.generation` on) must not touch the newer generation's own status or
+    /// diagnostics.
+    #[test]
+    fn a_stale_resolve_for_a_superseded_generation_is_dropped() {
+        let status = SystemAudioStatus::default();
+        status.begin_open(1);
+        status.begin_open(2);
+        status.resolve(1, SystemAudioAvailability::Live, 999, true);
+        assert_eq!(
+            status.get(),
+            SystemAudioAvailability::Off,
+            "untouched by the stale resolve"
+        );
+        assert_eq!(lock(&status.0.resolution).generation, 2);
+        assert!(!lock(&status.0.resolution).done);
     }
 }

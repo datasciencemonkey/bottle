@@ -553,6 +553,86 @@ fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
 }
 
 #[test]
+fn rec_a_late_adopted_system_open_gets_a_fresh_silence_grace_not_instant_silence() {
+    // Like the test above, but the sim clock moves past the 5 s CAP-10a window while the open
+    // is still pending (the owner's review: an 8.6 s build well past both the open timeout and
+    // the silence window). Without a reset, the first tick after adoption would compute
+    // `quiet` against the stale arm-time stamp and read `silent_or_denied` at once.
+    let host = FakeHost {
+        hang: Some(Duration::from_millis(150)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_millis(30),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-cap10c-silence");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    session.start(opts("cap-10c-silence", 60)).unwrap();
+    // The 5 s CAP-10a window elapses (on the sim clock) while the real open is still pending
+    // (on the real, wall-clock `hang`).
+    clock.advance(Duration::from_millis(6_000));
+    for _ in 0..200 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the late build was adopted"
+    );
+    for _ in 0..100 {
+        session.tick();
+        if matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio != SystemAudioState::Unavailable
+        ) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ),
+        "a late adoption must get a fresh silence grace, not an instant `silent_or_denied`: got {:?}",
+        session.snapshot()
+    );
+    let _ = session.stop(StopCause::User);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn adr_0103_a_fatal_system_stream_error_marks_it_unavailable() {
     let host = FakeHost::default();
     let h = host.clone();

@@ -265,12 +265,11 @@ fn rec_open_system_audio_settings_keeps_its_first_injected_opener() {
     );
 }
 
-/// With nothing injected, the component falls back to the real opener
-/// (`open_url_on_this_thread`), which opens nothing off macOS. Runs only there: on macOS it
-/// would really open System Settings, which no test may do.
+/// With nothing injected, the component's default opener refuses outright (CAP-10c review: it
+/// must never call the real `NSWorkspace` off the main thread on its own). Safe on every OS,
+/// including macOS: the default never touches `open_url_on_this_thread`.
 #[test]
-#[cfg(not(target_os = "macos"))]
-fn rec_open_system_audio_settings_refuses_with_no_pane_off_macos() {
+fn rec_open_system_audio_settings_refuses_with_no_opener_injected() {
     let (c, _) = component(RecordingSettings::default());
     assert_eq!(
         code(c.call("recording_open_system_audio_settings", json!({}))),

@@ -240,6 +240,18 @@ impl RecordingTap {
         self.shared.last_system_sound_ms.load(Ordering::SeqCst)
     }
 
+    /// A system audio tap just went live (CAP-10c), maybe long after the arm (a late-adopted
+    /// open, review of #593's ~8.6 s build). Reset the silence clock to now, so the CAP-10a 5 s
+    /// check starts fresh from the moment sound could first flow, instead of reading the
+    /// silence window that already elapsed while the tap was still unavailable as an instant
+    /// `silent_or_denied`. `fetch_max`: never moves the clock backward past a real sound a
+    /// frame may have already stamped.
+    pub fn note_system_live(&self) {
+        self.shared
+            .last_system_sound_ms
+            .fetch_max(now_ms(&*self.shared.clock), Ordering::SeqCst);
+    }
+
     /// Blocks dropped since the arm because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::SeqCst)

@@ -26,7 +26,10 @@
 //!   `unavailable` the moment the device's own status ([`SystemAudioStatus::get`]) says `Live`,
 //!   even when that is a late adoption of a slow tap build long after `open` itself gave up
 //!   (`audio_device::system`). A tap that stays genuinely unavailable (no backend, a refused
-//!   permission) just never reports `Live`, so this never fires for it.
+//!   permission) just never reports `Live`, so this never fires for it. [`RecordingSession::tick`]
+//!   resets the CAP-10a silence clock ([`RecordingTap::note_system_live`]) at that same moment,
+//!   so a late adoption reads `ok` (or a fresh 5 s grace), not an instant `silent_or_denied`
+//!   from a silence window that elapsed while the tap was still unavailable.
 //!
 //! Time: the length preset and the 5 s check run on the injected [`MonotonicClock`];
 //! `started_at_ms` / `ends_at_ms` are wall clock epoch ms for the UI. Nothing here logs audio,
@@ -650,11 +653,19 @@ impl RecordingSession {
             active
         };
         let _finishing = FinishingGuard { session: self };
-        // CAP-10c: read the system audio state before `capture.stop` closes the device (that
-        // close sets the device's own status to `Off`, which `system_state` would then read
-        // back as this recording's own `unavailable` — this recording's state is whatever it
-        // was the moment it stopped, not "closed because it just stopped").
-        let system_audio = self.system_state();
+        // CAP-10c: a mic loss or a panic stop has already torn the lease (and so the device)
+        // down by the time this runs, so the device's own status no longer reflects this
+        // recording's state (it may already read `Off`, or whatever the fault left behind) —
+        // use the last state the ticker actually saw instead of re-querying it. For every
+        // other cause, read it fresh, and before `capture.stop` below closes the device (that
+        // close also sets the device's own status to `Off`, which `system_state` would then
+        // read back as this recording's own `unavailable` — this recording's state is
+        // whatever it was the moment it stopped, not "closed because it just stopped").
+        let system_audio = if matches!(cause, StopCause::MicLost | StopCause::Panic) {
+            active.info.system_audio
+        } else {
+            self.system_state()
+        };
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
@@ -742,6 +753,16 @@ impl RecordingSession {
             drop(st);
             let _ = self.stop(StopCause::LengthReached);
             return None;
+        }
+        // CAP-10c: a late-adopted tap (the device itself going `Unavailable` -> `Live` well
+        // after the open call gave up, review of #593's ~8.6 s build) must not read as an
+        // instant `silent_or_denied` from a silence window that already elapsed while it was
+        // still unavailable. Reset the silence clock before `system_state` reads it, so this
+        // same tick sees `ok` (or a fresh 5 s grace), not a stale silence reading.
+        if active.info.system_audio == SystemAudioState::Unavailable
+            && self.system.get() == SystemAudioAvailability::Live
+        {
+            self.tap.note_system_live();
         }
         let next = self.system_state();
         // CAP-10c: a late-adopted tap going `Unavailable` -> `Live` must reach the brain too,

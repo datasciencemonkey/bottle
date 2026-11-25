@@ -385,7 +385,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         instructions,
       };
     }
-    if (error) m.error = error;
+    // A real error always wins; the calm hint only shows in its place, never over it (#593
+    // follow-up). Computed fresh on every publish, so the hint reappears at once as soon as a
+    // real error that was blocking it clears, with no need to catch that at the clearing site.
+    const shown = error ?? (systemAudioHintDue ? SYSTEM_AUDIO_HINT : undefined);
+    if (shown) m.error = shown;
     if (settingsError) m.settingsError = settingsError;
     toHub(HUB_RECORDING_EVENT, m);
   };
@@ -430,12 +434,22 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   /** Whether the last state read `silent_or_denied` while recording (the hint timer tracks it). */
   let systemAudioSilent = false;
   let systemAudioHintTimer: (() => void) | undefined;
+  /**
+   * The silence has lasted past `SYSTEM_AUDIO_HINT_MS` (#593 follow-up). Kept separate from
+   * `error`: a real error always wins in `publish`, but this stays true underneath it, so the
+   * hint reappears on its own the moment that real error clears, with no lost opportunity.
+   */
+  let systemAudioHintDue = false;
 
-  /** Cancel a pending hint timer and clear a shown hint. Real errors are untouched. */
+  /** Cancel a pending hint timer, drop the due flag, and clear a shown hint or settings-open
+   * failure (sound arrived, or the recording ended). Real errors are untouched. */
   const clearSystemAudioHint = () => {
     systemAudioHintTimer?.();
     systemAudioHintTimer = undefined;
-    if (error === SYSTEM_AUDIO_HINT) error = undefined;
+    systemAudioHintDue = false;
+    if (error === SYSTEM_AUDIO_HINT || error === SYSTEM_AUDIO_SETTINGS_OPEN_FAILED) {
+      error = undefined;
+    }
   };
 
   const setState = (s: RecState) => {
@@ -448,13 +462,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (silentNow && !systemAudioSilent) {
       systemAudioHintTimer = schedule(clock.now() + SYSTEM_AUDIO_HINT_MS, () => {
         systemAudioHintTimer = undefined;
-        // A real error (a local-only storage warning, a refused start, a genuine
-        // system_audio_denied from elsewhere, ...) always wins: the calm hint only shows when
-        // nothing else is already showing.
-        if (error === undefined) {
-          error = SYSTEM_AUDIO_HINT;
-          publish();
-        }
+        systemAudioHintDue = true;
+        publish();
       });
     } else if (!silentNow && systemAudioSilent) {
       clearSystemAudioHint();

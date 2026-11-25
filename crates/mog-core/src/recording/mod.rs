@@ -287,10 +287,12 @@ pub const SYSTEM_AUDIO_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
 /// Open `url` with the OS, right here on the calling thread (CAP-10c). macOS only
-/// (`NSWorkspace`, which AppKit expects on the main thread — the src-tauri host dispatches
-/// there, through `AppHandle::run_on_main_thread`, before calling this; `recording_*` commands
-/// otherwise run off the main thread, `ipc.rs::runs_off_main_thread`). Every other OS opens
-/// nothing. This is `RecordingComponent`'s default opener when nothing injects one.
+/// (`NSWorkspace`); every other OS opens nothing. **Call this only when already on the main
+/// thread**: AppKit expects it there. This is never `RecordingComponent`'s default opener (see
+/// [`default_open_url`]) for exactly that reason — the src-tauri host's injected opener
+/// (`recording_cloud_host::install_open_url`) is the one place that calls it, after dispatching
+/// there itself through `AppHandle::run_on_main_thread` (`recording_*` commands otherwise run
+/// off the main thread, `ipc.rs::runs_off_main_thread`).
 pub fn open_url_on_this_thread(url: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -309,8 +311,11 @@ pub fn open_url_on_this_thread(url: &str) -> bool {
     }
 }
 
+/// `RecordingComponent`'s opener until the host injects one (CAP-10c): refuses outright
+/// (`host_failed`). It never calls [`open_url_on_this_thread`] itself — that would call AppKit
+/// off the main thread, which this seam exists to avoid.
 fn default_open_url() -> UrlOpenFn {
-    Arc::new(open_url_on_this_thread)
+    Arc::new(|_url: &str| false)
 }
 
 pub struct RecordingComponent {
@@ -375,8 +380,7 @@ impl RecordingComponent {
     }
 
     /// Inject the opener of `recording_open_system_audio_settings` (CAP-10c), once; a later
-    /// call is ignored. Until this runs, the default is [`open_url_on_this_thread`] (no main
-    /// thread dispatch).
+    /// call is ignored. Until this runs, [`default_open_url`] refuses every call outright.
     pub fn set_open_url(&self, opener: UrlOpenFn) {
         let _ = self.open_url.set(opener);
     }

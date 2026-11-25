@@ -461,6 +461,10 @@ pub fn run() {
             // R8 for `mcp_call` (#467). If its HTTP client cannot start, the app still runs;
             // `mcp_call` then answers `host_failed`.
             let _ = mcp_host::install(handle);
+            // CAP-10c (#593 follow-up): the `recording_open_system_audio_settings` opener, main
+            // thread dispatch included. Independent of the cloud install below (review of
+            // 0442d9e0): that one has earlier fallible steps and must not gate this.
+            recording_cloud_host::install_open_url(handle);
             // ADR 0103 (PR C): the recording cloud host, on the R6 of mcp_host.
             let _ = recording_cloud_host::install(handle);
             // ADR 0122: `model_invoke` and the orchestrator chat client, on the same R6.
