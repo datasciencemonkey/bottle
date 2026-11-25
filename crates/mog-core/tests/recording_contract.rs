@@ -1,11 +1,13 @@
 //! The call recording contract of ADR 0103: the settings defaults, the Rust knob gate on
 //! `recording_start`, the error-kind codes and the content-free `Debug` of the transcript types.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mog_core::error::CoreError;
 use mog_core::ipc_gateway::{GatewayComponents, ERROR_CODES};
-use mog_core::recording::{MemorySettingsStore, RecordingComponent, RecordingSettingsStore};
+use mog_core::recording::{
+    MemorySettingsStore, RecordingComponent, RecordingSettingsStore, SYSTEM_AUDIO_SETTINGS_URL,
+};
 use mog_core::types::{
     RecordingDetail, RecordingErrorKind, RecordingSegment, RecordingSettings, RecordingStatus,
     RecordingSummary, RECORDING_DEFAULT_ENDPOINT, RECORDING_DEFAULT_INSTRUCTIONS,
@@ -157,9 +159,8 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
     }
     // `recording_open_system_audio_settings` needs no profile and no `connect_capture` link
     // (CAP-10c, #593 follow-up), so it is not one of the stubs above: it is a real host
-    // handler and, on macOS, really opens the System Settings pane. No test calls it here;
-    // see `cap_10c_recording_open_system_audio_settings_refuses_with_no_pane_off_macos` below
-    // for the part that is safe to run on every machine.
+    // handler with its own `rec_open_system_audio_settings_*` tests below, which inject a fake
+    // opener (or run only off macOS) so nothing here ever really opens System Settings.
 }
 
 #[test]
@@ -216,10 +217,57 @@ fn sec_03_every_error_kind_maps_to_an_ipc_code() {
 }
 
 // CAP-10c (#593 follow-up): `recording_open_system_audio_settings` needs no profile and no
-// `connect_capture` link, unlike `recording_start`. This only runs off macOS: on macOS the
-// command really opens the System Settings pane (CAP-10c, `recording/mod.rs`), and no test may
-// do that on the machine that runs it. Linux and Windows CI (AGENTS.md's merge gate) exercise
-// the refusal path below; a human reviewer checks the macOS branch by reading it.
+// `connect_capture` link, unlike `recording_start`. `RecordingComponent::set_open_url` injects
+// the opener, so the two tests below run on every OS with a fake that opens nothing, checking
+// the exact URL and the mapping of a refusal to `host_failed` — the real NSWorkspace call
+// behind the default opener is not exercised by any test (it would really open System Settings
+// on the machine that runs it); a human reviewer checks that one line by reading it.
+
+#[test]
+fn rec_open_system_audio_settings_asks_the_injected_opener_for_the_right_url() {
+    let (c, _) = component(RecordingSettings::default());
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let s = seen.clone();
+    c.set_open_url(Arc::new(move |url: &str| {
+        *s.lock().unwrap() = Some(url.to_owned());
+        true
+    }));
+    assert_eq!(
+        c.call("recording_open_system_audio_settings", json!({})),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        seen.lock().unwrap().as_deref(),
+        Some(SYSTEM_AUDIO_SETTINGS_URL)
+    );
+}
+
+#[test]
+fn rec_open_system_audio_settings_maps_a_false_opener_to_host_failed() {
+    let (c, _) = component(RecordingSettings::default());
+    c.set_open_url(Arc::new(|_url: &str| false));
+    assert_eq!(
+        code(c.call("recording_open_system_audio_settings", json!({}))),
+        "host_failed"
+    );
+}
+
+/// A later `set_open_url` is ignored (mirrors `set_cloud`): the first opener wins, same as the
+/// first `connect_capture`/`set_cloud` call.
+#[test]
+fn rec_open_system_audio_settings_keeps_its_first_injected_opener() {
+    let (c, _) = component(RecordingSettings::default());
+    c.set_open_url(Arc::new(|_url: &str| true));
+    c.set_open_url(Arc::new(|_url: &str| false));
+    assert_eq!(
+        c.call("recording_open_system_audio_settings", json!({})),
+        Ok(json!({}))
+    );
+}
+
+/// With nothing injected, the component falls back to the real opener
+/// (`open_url_on_this_thread`), which opens nothing off macOS. Runs only there: on macOS it
+/// would really open System Settings, which no test may do.
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn rec_open_system_audio_settings_refuses_with_no_pane_off_macos() {

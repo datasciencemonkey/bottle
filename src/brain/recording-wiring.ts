@@ -29,6 +29,7 @@ import {
   RECORDING_VIEW_ID,
   recordingNotice,
   SYSTEM_AUDIO_HINT,
+  SYSTEM_AUDIO_SETTINGS_OPEN_FAILED,
   VOLUME_PATH,
   type HubRecording,
   type HubRecordingDetail,
@@ -447,8 +448,13 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     if (silentNow && !systemAudioSilent) {
       systemAudioHintTimer = schedule(clock.now() + SYSTEM_AUDIO_HINT_MS, () => {
         systemAudioHintTimer = undefined;
-        error = SYSTEM_AUDIO_HINT;
-        publish();
+        // A real error (a local-only storage warning, a refused start, a genuine
+        // system_audio_denied from elsewhere, ...) always wins: the calm hint only shows when
+        // nothing else is already showing.
+        if (error === undefined) {
+          error = SYSTEM_AUDIO_HINT;
+          publish();
+        }
       });
     } else if (!silentNow && systemAudioSilent) {
       clearSystemAudioHint();
@@ -780,8 +786,12 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void stop();
         break;
       case 'recording.system_audio':
-        // A failure (no host handler, or no such OS pane) shows a plain text, never nothing.
-        void api.openSystemAudioSettings().catch((e: unknown) => showError(e));
+        // A failure (no host handler, or the OS refused to open the pane) shows plain steps
+        // with no action, never nothing: Retry would just fail the same way again.
+        void api.openSystemAudioSettings().catch(() => {
+          error = SYSTEM_AUDIO_SETTINGS_OPEN_FAILED;
+          publish();
+        });
         break;
       case 'recordings.ready':
         void refreshList();

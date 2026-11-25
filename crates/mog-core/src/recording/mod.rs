@@ -271,11 +271,55 @@ impl RecordingSettingsStore for MemorySettingsStore {
 /// opener; PR C).
 pub type LinkOpener = Arc<dyn Fn(&ProfileName, &str) -> CoreResult<()> + Send + Sync>;
 
+/// Opens a URL with the OS and reports whether it actually opened (CAP-10c, the
+/// `recording_open_system_audio_settings` fix-it). `RecordingComponent::set_open_url` injects
+/// one; a test injects a fake that opens nothing, so the mapping to `host_failed` and the exact
+/// URL can be checked without ever really opening anything.
+pub type UrlOpenFn = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The macOS Privacy & Security pane that covers System Audio Recording: the one
+/// `recording_open_system_audio_settings` opens. Apple groups System Audio Recording with
+/// Screen Recording under one "Screen & System Audio Recording" pane, confirmed by hand
+/// (`docs/spikes/SP-01.md`); its stable URL anchor is `Privacy_ScreenCapture`. Apple documents
+/// no separate `Privacy_AudioCapture` anchor, so this is the one that actually opens the right
+/// pane.
+pub const SYSTEM_AUDIO_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+/// Open `url` with the OS, right here on the calling thread (CAP-10c). macOS only
+/// (`NSWorkspace`, which AppKit expects on the main thread — the src-tauri host dispatches
+/// there, through `AppHandle::run_on_main_thread`, before calling this; `recording_*` commands
+/// otherwise run off the main thread, `ipc.rs::runs_off_main_thread`). Every other OS opens
+/// nothing. This is `RecordingComponent`'s default opener when nothing injects one.
+pub fn open_url_on_this_thread(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+        let ns_url = NSString::from_str(url);
+        match NSURL::URLWithString(&ns_url) {
+            Some(u) => NSWorkspace::sharedWorkspace().openURL(&u),
+            None => false,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        false
+    }
+}
+
+fn default_open_url() -> UrlOpenFn {
+    Arc::new(open_url_on_this_thread)
+}
+
 pub struct RecordingComponent {
     settings: Arc<dyn RecordingSettingsStore>,
     capture: Mutex<Option<CaptureLink>>,
     /// Set once in the app `setup`, after R6 and the rate bucket exist (PR C).
     cloud: std::sync::OnceLock<(Arc<dyn RecordingCloud>, LinkOpener)>,
+    /// Set once in the app `setup` (CAP-10c); [`default_open_url`] until then.
+    open_url: std::sync::OnceLock<UrlOpenFn>,
 }
 
 /// What PR B connects to the component once the capture host runs (ADR 0103): the capture
@@ -310,6 +354,7 @@ impl RecordingComponent {
             settings,
             capture: Mutex::new(None),
             cloud: std::sync::OnceLock::new(),
+            open_url: std::sync::OnceLock::new(),
         }
     }
 
@@ -327,6 +372,20 @@ impl RecordingComponent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Inject the opener of `recording_open_system_audio_settings` (CAP-10c), once; a later
+    /// call is ignored. Until this runs, the default is [`open_url_on_this_thread`] (no main
+    /// thread dispatch).
+    pub fn set_open_url(&self, opener: UrlOpenFn) {
+        let _ = self.open_url.set(opener);
+    }
+
+    fn open_url(&self) -> UrlOpenFn {
+        match self.open_url.get() {
+            Some(f) => f.clone(),
+            None => default_open_url(),
+        }
     }
 
     /// Connect the cloud side (PR C) and the link opener, once. A later call is ignored.
@@ -368,33 +427,6 @@ fn refused(code: &'static str) -> CoreError {
 
 fn reply<T: serde::Serialize>(v: &T) -> CoreResult<Value> {
     serde_json::to_value(v).map_err(|_| refused("host_failed"))
-}
-
-/// Open the macOS pane that covers System Audio Recording (ADR 0103 fix-it, the
-/// `recording_open_system_audio_settings` command: the red alert's "Open System Settings"
-/// button). Apple groups System Audio Recording with Screen Recording under one "Screen &
-/// System Audio Recording" pane, confirmed by hand (`docs/spikes/SP-01.md`); its stable URL
-/// anchor is `Privacy_ScreenCapture`. Apple documents no separate `Privacy_AudioCapture`
-/// anchor, so `Privacy_ScreenCapture` is the one that actually opens the right pane. Other
-/// OSes have no such pane, so this fails there: the brain surfaces a plain failure rather than
-/// a button that silently does nothing.
-fn open_system_audio_settings() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2_app_kit::NSWorkspace;
-        use objc2_foundation::{NSString, NSURL};
-        const URL: &str =
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-        let url = NSString::from_str(URL);
-        match NSURL::URLWithString(&url) {
-            Some(url) => NSWorkspace::sharedWorkspace().openURL(&url),
-            None => false,
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
 }
 
 impl GatewayComponents for RecordingComponent {
@@ -508,7 +540,7 @@ impl GatewayComponents for RecordingComponent {
             // The "Allow System Audio Recording" fix-it (ipc.rs): no profile, no capture link,
             // no args. macOS only; refuses on every other OS.
             "recording_open_system_audio_settings" => {
-                if open_system_audio_settings() {
+                if (self.open_url())(SYSTEM_AUDIO_SETTINGS_URL) {
                     Ok(serde_json::json!({}))
                 } else {
                     Err(refused("host_failed"))

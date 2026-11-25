@@ -41,24 +41,22 @@ pub const TICK_EVERY: Duration = Duration::from_millis(250);
 /// none elsewhere. Its frames go to `tap`. A device whose thread does not start is the
 /// unavailable device (the recording goes on mic-only).
 pub fn system_audio_device(tap: &RecordingTap) -> (Box<dyn AudioDevice>, SystemAudioStatus) {
-    use mog_core::audio_device::system::{OPEN_TIMEOUT, OPEN_TIMEOUT_FIRST};
+    use mog_core::audio_device::system::OPEN_TIMEOUT;
     #[cfg(target_os = "macos")]
     let spawned = SystemAudioDevice::spawn(
         mog_core::audio_device::system_macos::TapHost::new,
         Box::new(tap.system_sink()),
-        OPEN_TIMEOUT_FIRST,
         OPEN_TIMEOUT,
     );
     #[cfg(target_os = "windows")]
     let spawned = SystemAudioDevice::spawn(
         mog_core::audio_device::system_windows::LoopbackHost::new,
         Box::new(tap.system_sink()),
-        OPEN_TIMEOUT_FIRST,
         OPEN_TIMEOUT,
     );
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let spawned: std::io::Result<(SystemAudioDevice, SystemAudioStatus)> = {
-        let _ = (tap, OPEN_TIMEOUT, OPEN_TIMEOUT_FIRST);
+        let _ = (tap, OPEN_TIMEOUT);
         Ok(SystemAudioDevice::unavailable())
     };
     let (device, status) = spawned.unwrap_or_else(|_| SystemAudioDevice::unavailable());

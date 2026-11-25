@@ -22,6 +22,11 @@
 //! - **CAP-10a.** When system audio has had no block with sound for 5 s, `system_audio` is
 //!   `silent_or_denied` (a denied System Audio Recording permission gives digital silence on
 //!   macOS). Sound clears it. The recording never stops for it.
+//! - **CAP-10c.** [`RecordingSession::system_state`] has no latch: `system_audio` leaves
+//!   `unavailable` the moment the device's own status ([`SystemAudioStatus::get`]) says `Live`,
+//!   even when that is a late adoption of a slow tap build long after `open` itself gave up
+//!   (`audio_device::system`). A tap that stays genuinely unavailable (no backend, a refused
+//!   permission) just never reports `Live`, so this never fires for it.
 //!
 //! Time: the length preset and the 5 s check run on the injected [`MonotonicClock`];
 //! `started_at_ms` / `ends_at_ms` are wall clock epoch ms for the UI. Nothing here logs audio,
@@ -645,6 +650,11 @@ impl RecordingSession {
             active
         };
         let _finishing = FinishingGuard { session: self };
+        // CAP-10c: read the system audio state before `capture.stop` closes the device (that
+        // close sets the device's own status to `Off`, which `system_state` would then read
+        // back as this recording's own `unavailable` — this recording's state is whatever it
+        // was the moment it stopped, not "closed because it just stopped").
+        let system_audio = self.system_state();
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
@@ -654,7 +664,6 @@ impl RecordingSession {
         self.active(false);
         lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
-        let system_audio = self.system_state(&active.info);
         let (parts, held) = match active.writer.join() {
             Ok(Ok(done)) => done,
             // A write error: hand off what was finished (the open part may be cut short).
@@ -703,10 +712,13 @@ impl RecordingSession {
         lock(&self.state).finishing.clone()
     }
 
-    fn system_state(&self, info: &ActiveInfo) -> SystemAudioState {
-        if info.system_audio == SystemAudioState::Unavailable
-            || self.system.get() != SystemAudioAvailability::Live
-        {
+    /// The system audio state right now, from the device's own live status (CAP-10c: no latch
+    /// on the active info). A late-adopted tap (`SystemAudioDevice`'s worker setting `status`
+    /// to `Live` well after `open` itself gave up) is picked up here on the very next tick, the
+    /// same as any other status change: `Unavailable` is never sticky once the tap is really
+    /// open.
+    fn system_state(&self) -> SystemAudioState {
+        if self.system.get() != SystemAudioAvailability::Live {
             return SystemAudioState::Unavailable;
         }
         let quiet = self
@@ -731,9 +743,10 @@ impl RecordingSession {
             let _ = self.stop(StopCause::LengthReached);
             return None;
         }
-        let next = self.system_state(&active.info);
-        let changed = next != active.info.system_audio
-            && active.info.system_audio != SystemAudioState::Unavailable;
+        let next = self.system_state();
+        // CAP-10c: a late-adopted tap going `Unavailable` -> `Live` must reach the brain too,
+        // so this no longer excludes `Unavailable` from `changed` (that was the latch).
+        let changed = next != active.info.system_audio;
         if changed {
             active.info.system_audio = next;
         }

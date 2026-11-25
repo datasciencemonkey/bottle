@@ -110,6 +110,15 @@ export const SYSTEM_AUDIO_HINT: RecordingNotice = {
   role: 'status',
 };
 
+/**
+ * `recording.system_audio` itself failed (no host handler for this OS, or the OS refused to
+ * open the pane; #593 follow-up). Plain steps, no action: a button that would only run the
+ * same failing call again helps nobody.
+ */
+export const SYSTEM_AUDIO_SETTINGS_OPEN_FAILED: RecordingNotice = {
+  text: 'Open System Settings > Privacy & Security > Screen & System Audio Recording, then allow Bottle.',
+};
+
 /** The error kinds of the core and the job, and their plain words. */
 export const RECORDING_ERRORS = {
   transcribe_endpoint_missing: {

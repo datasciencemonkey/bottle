@@ -386,13 +386,8 @@ fn adr_0103_system_audio_opens_on_its_own_thread_and_mixes_to_mono() {
     let host = FakeHost::default();
     let got = Collect::default();
     let h = host.clone();
-    let (dev, status) = SystemAudioDevice::spawn(
-        move || h,
-        Box::new(got.clone()),
-        Duration::from_secs(5),
-        Duration::from_secs(5),
-    )
-    .unwrap();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(got.clone()), Duration::from_secs(5)).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Off);
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Live);
@@ -424,7 +419,6 @@ fn adr_0103_a_failed_system_audio_open_is_tolerated_as_unavailable() {
         move || h,
         Box::new(Collect::default()),
         Duration::from_secs(5),
-        Duration::from_secs(5),
     )
     .unwrap();
     // A recording goes on mic-only: open does not fail the lease.
@@ -443,7 +437,6 @@ fn adr_0103_a_slow_system_audio_open_times_out_and_cleans_up() {
     let (dev, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(Collect::default()),
-        Duration::from_millis(50),
         Duration::from_millis(50),
     )
     .unwrap();
@@ -479,7 +472,6 @@ fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
         move || h,
         Box::new(tap.system_sink()),
         Duration::from_millis(30),
-        Duration::from_millis(30),
     )
     .unwrap();
     let events = Arc::new(Events::default());
@@ -504,9 +496,10 @@ fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
         },
     );
     *events.0.lock().unwrap() = Some(Arc::clone(&session));
-    session.start(opts("cap-10c", 60)).unwrap();
+    let info = session.start(opts("cap-10c", 60)).unwrap();
     // The open already answered `Unavailable` (mic-only, for now); the late build+play has not
     // resolved yet.
+    assert_eq!(info.system_audio, SystemAudioState::Unavailable);
     for _ in 0..100 {
         if status.get() == SystemAudioAvailability::Live {
             break;
@@ -518,7 +511,35 @@ fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
         SystemAudioAvailability::Live,
         "the late build was adopted"
     );
+    // CAP-10c: `system_state` has no latch, so the session follows the device's own late
+    // adoption on the very next tick (the host's ticker calls this every 250 ms); it must not
+    // stay stuck at `unavailable` (the owner's exact symptom). No sound was ever fed to the
+    // tap and the sim clock never advanced, so once live this reads `ok`, not
+    // `silent_or_denied`.
+    for _ in 0..100 {
+        session.tick();
+        if matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ),
+        "a late-adopted tap must leave `unavailable` once it is really live: got {:?}",
+        session.snapshot()
+    );
     let done = session.stop(StopCause::User).unwrap();
+    assert_eq!(
+        done.system_audio,
+        SystemAudioState::Ok,
+        "`FinishedRecording.system_audio` must reflect the late adoption too, not stay stuck"
+    );
     assert!(
         done.system_open_timed_out,
         "the resolution took longer than its timeout"
@@ -538,7 +559,6 @@ fn adr_0103_a_fatal_system_stream_error_marks_it_unavailable() {
     let (dev, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(Collect::default()),
-        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -588,7 +608,6 @@ fn cap_01a_recording_device_routes_each_source_to_its_backend() {
     let (sys, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(Collect::default()),
-        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -682,7 +701,6 @@ fn rig_full(sys_fail: bool, part_max_samples: Option<u64>, part_format: PartForm
     let (sys, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(tap.system_sink()),
-        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -1065,7 +1083,6 @@ fn rec_finishing_name_covers_the_window_snapshot_already_reads_idle() {
     let (sys, status) = SystemAudioDevice::spawn(
         FakeHost::default,
         Box::new(tap.system_sink()),
-        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();

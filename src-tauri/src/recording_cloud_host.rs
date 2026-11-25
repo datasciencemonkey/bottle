@@ -3,7 +3,9 @@
 //! [`crate::mcp_host`] (the token never leaves R6), the managed T7 profile hosts and the one
 //! [`SharedRateBucket`] (G-09a). It points the settings store of the `recording_*` component at
 //! `<app config dir>/recording-settings.json` (no secret). Links open with the OS opener, only
-//! for a Catalog Explorer URL on the profile host.
+//! for a Catalog Explorer URL on the profile host. It also gives the component its
+//! `recording_open_system_audio_settings` opener (CAP-10c): the real macOS pane open, run on
+//! the main thread through `AppHandle::run_on_main_thread`.
 //!
 //! The service is blocking: the host runs it on a worker thread. The `recording_*` commands of
 //! the contract PR (`issue/rec-0-contract`) route here once it lands. The caller passes the home
@@ -907,6 +909,26 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
                 open_link(&*op, &host, url)
             }),
         );
+        // CAP-10c (#593 follow-up): "Open System Settings" really opens a macOS pane
+        // (`NSWorkspace`), which AppKit expects on the main thread; `recording_*` commands run
+        // off it (`ipc.rs::runs_off_main_thread`). Bounce the call there and wait, bounded, for
+        // its answer over a one-shot channel (the same shape as `SystemAudioDevice`'s own
+        // worker replies).
+        let app = handle.clone();
+        component.set_open_url(Arc::new(move |url: &str| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let owned = url.to_owned();
+            if app
+                .run_on_main_thread(move || {
+                    let _ = tx.send(mog_core::recording::open_url_on_this_thread(&owned));
+                })
+                .is_err()
+            {
+                return false;
+            }
+            rx.recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap_or(false)
+        }));
     }
     handle.manage(RecordingCloudHost {
         service,

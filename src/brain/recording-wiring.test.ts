@@ -13,6 +13,7 @@ import {
   RECORDING_TEXT,
   RECORDING_VIEW_ID,
   SYSTEM_AUDIO_HINT,
+  SYSTEM_AUDIO_SETTINGS_OPEN_FAILED,
   type HubRecording,
   type HubRecordingDetail,
   type HubRecordings,
@@ -480,6 +481,23 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
   });
 
+  it('[REC-H8] a real error already showing is not overwritten by the hint timer', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    // A real error shows up before the hint timer fires.
+    t.fake.api.retry.mockRejectedValue({ error: 'network' });
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.network);
+  });
+
   it('[REC-H8] a real system_audio_denied error keeps its own red alert meaning', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.api.retry.mockRejectedValue({ error: 'system_audio_denied' });
@@ -490,12 +508,14 @@ describe('recording wiring (brain, ADR 0103)', () => {
     );
   });
 
-  it('[REC-H8] a failed Open System Settings shows a plain text, never nothing', async () => {
+  it('[REC-H8] a failed Open System Settings shows plain steps with no action, never nothing', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.api.openSystemAudioSettings.mockRejectedValue({ error: 'host_failed' });
     t.click({ action: 'recording.system_audio' });
     await flush();
-    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.failed);
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
+      SYSTEM_AUDIO_SETTINGS_OPEN_FAILED,
+    );
   });
 
   it('[REC-H9] the Recordings list is newest first; a failed row has its plain text', async () => {

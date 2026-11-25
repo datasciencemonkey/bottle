@@ -99,13 +99,8 @@ fn rec_a_late_build_that_succeeds_is_adopted_not_left_live_and_untracked() {
     let h = host.clone();
     // A short open timeout on both: `play` (150 ms) outlives it (30 ms), like the bug's ~8.6 s
     // `AudioDeviceStart` outliving the review's 8 s timeout.
-    let (dev, status) = SystemAudioDevice::spawn(
-        move || h,
-        Box::new(sink),
-        Duration::from_millis(30),
-        Duration::from_millis(30),
-    )
-    .unwrap();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(sink), Duration::from_millis(30)).unwrap();
 
     dev.open(AudioSource::SystemAudio).unwrap();
     // The caller gives up at once: mic-only for now, never left unresolved.
@@ -143,13 +138,8 @@ fn rec_a_close_during_a_late_build_reliably_drops_it_and_never_adopts() {
     let got = Arc::new(AtomicUsize::new(0));
     let sink = CountSink(Arc::clone(&got));
     let h = host.clone();
-    let (dev, status) = SystemAudioDevice::spawn(
-        move || h,
-        Box::new(sink),
-        Duration::from_millis(30),
-        Duration::from_millis(30),
-    )
-    .unwrap();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(sink), Duration::from_millis(30)).unwrap();
 
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Unavailable);
@@ -170,32 +160,70 @@ fn rec_a_close_during_a_late_build_reliably_drops_it_and_never_adopts() {
 }
 
 #[test]
-fn rec_the_first_open_gets_its_own_longer_timeout() {
-    // `play` takes 80 ms: within the first open's 200 ms timeout (so generation 1 succeeds
-    // in time, no late adoption needed), but past the later 20 ms timeout for generation 2.
-    let host = SlowPlayHost::new(Duration::from_millis(80));
+fn rec_a_close_that_gives_up_early_still_drops_the_late_build_and_stays_off() {
+    // `close_wait` (30 ms) is well short of the build (300 ms): `close` must not block on it,
+    // and the late build must still end up dropped with `status` left at `Off`.
+    let host = SlowPlayHost::new(Duration::from_millis(300));
     let got = Arc::new(AtomicUsize::new(0));
     let sink = CountSink(Arc::clone(&got));
     let h = host.clone();
-    let (dev, status) = SystemAudioDevice::spawn(
+    let (dev, status) = SystemAudioDevice::spawn_with_close_wait(
         move || h,
         Box::new(sink),
-        Duration::from_millis(200),
-        Duration::from_millis(20),
+        Duration::from_millis(30),
+        Duration::from_millis(30),
     )
     .unwrap();
 
-    // Generation 1: resolves within its own (longer) timeout.
-    dev.open(AudioSource::SystemAudio).unwrap();
-    assert_eq!(status.get(), SystemAudioAvailability::Live);
-    assert!(!status.timed_out(), "the first open had time to spare");
-    dev.close(AudioSource::SystemAudio);
-    wait_for(|| host.dropped.load(Ordering::SeqCst) == 1);
-
-    // Generation 2: the same 80 ms build now outlives the shorter later timeout.
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Unavailable);
+    let before = std::time::Instant::now();
+    dev.close(AudioSource::SystemAudio);
+    assert!(
+        before.elapsed() < Duration::from_millis(300),
+        "close must give up at close_wait, not wait for the build"
+    );
+    assert_eq!(status.get(), SystemAudioAvailability::Off);
+
+    // The build resolves later regardless; it must be dropped, and `status` must stay `Off`.
+    wait_for(|| host.dropped.load(Ordering::SeqCst) == 1);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(status.get(), SystemAudioAvailability::Off);
+}
+
+#[test]
+fn rec_open_close_open_while_the_first_play_is_still_blocked() {
+    let host = SlowPlayHost::new(Duration::from_millis(300));
+    let got = Arc::new(AtomicUsize::new(0));
+    let sink = CountSink(Arc::clone(&got));
+    let h = host.clone();
+    let (dev, status) = SystemAudioDevice::spawn_with_close_wait(
+        move || h,
+        Box::new(sink),
+        Duration::from_millis(30),
+        Duration::from_millis(30),
+    )
+    .unwrap();
+
+    // Generation 1: open, then close while its `play` is still blocked.
+    dev.open(AudioSource::SystemAudio).unwrap();
+    dev.close(AudioSource::SystemAudio);
+    assert_eq!(status.get(), SystemAudioAvailability::Off);
+
+    // Generation 2: open again right away, while generation 1's `play` is still running.
+    dev.open(AudioSource::SystemAudio).unwrap();
+    assert_eq!(status.get(), SystemAudioAvailability::Unavailable);
+
+    // Generation 1's late build resolves and must be dropped, never adopted (`wanted` now
+    // names generation 2).
+    wait_for(|| host.dropped.load(Ordering::SeqCst) >= 1);
+    assert_ne!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "generation 1's late build must never be adopted once generation 2 is wanted"
+    );
+
+    // Generation 2's own build is still pending; only once it resolves may `status` go live.
     wait_for(|| status.get() == SystemAudioAvailability::Live);
-    assert!(status.timed_out(), "generation 2 used the shorter timeout");
     dev.close(AudioSource::SystemAudio);
 }
