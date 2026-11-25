@@ -846,7 +846,7 @@ export function GenieCard({
                 {kind === 'answer' && databricksUrl !== undefined && (
                   <DatabricksLink url={databricksUrl} onOpen={openLink} />
                 )}
-                {kind === 'answer' && (
+                {kind === 'answer' && opId !== undefined && (
                   <button
                     type="button"
                     className="genie-copy"

@@ -113,6 +113,8 @@ describe('AgentTurnCard', () => {
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
     const btn = el.querySelector('button[data-action="copy"]') as HTMLButtonElement;
     expect(btn.getAttribute('aria-label')).toBe('Copy');
+    // [round 2] a visible text label, not an icon-only button easy to confuse with Markdown.
+    expect(btn.textContent).toBe('Copy');
     await click(btn);
     expect(inputEmits()).toContainEqual({
       mogId: MOG,

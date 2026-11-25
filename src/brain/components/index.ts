@@ -626,6 +626,7 @@ export function startBrain(): Brain {
     agentClear.fn = () => {
       agentClient.clear();
       void hubRef.current?.push();
+      lastDirectAnswer.clear();
     };
     agentClear.fence = () => agentClient.fence();
     bus.on(EVENTS['agent.turn'].name, (p) => {

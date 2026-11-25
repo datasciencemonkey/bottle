@@ -510,6 +510,9 @@ describe('[ADR 0124 amendment] hub Conversations Copy and Copy Markdown buttons'
     const markdown = el.querySelector('button[data-action="copy-markdown"]') as HTMLButtonElement;
     expect(copy.getAttribute('aria-label')).toBe('Copy');
     expect(markdown.getAttribute('aria-label')).toBe('Copy as Markdown');
+    // [round 2] distinct visible text, not two identical icon-only buttons.
+    expect(copy.textContent).toBe('Copy');
+    expect(markdown.textContent).toBe('Markdown');
     await act(async () => void copy.click());
     await act(async () => void markdown.click());
     expect(copyEmits()).toEqual([

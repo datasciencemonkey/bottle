@@ -20,6 +20,7 @@ import {
   DISMISS_FADE_MS,
   FADE_MS,
   FAILURE_TITLE,
+  GenieCard,
   OPEN_IN_BOTTLE_LABEL,
   SHOW_LESS_LABEL,
   SHOW_MORE_LABEL,
@@ -213,6 +214,19 @@ describe('Genie card (#573)', () => {
     });
     // It does not open the hub Conversations or close the card (no `target` click).
     expect(clicks().filter((c) => c.payload.target !== undefined)).toEqual([]);
+  });
+
+  it('[round 2 LOW] hides the Copy button when the card has no exchange id', async () => {
+    // Rendered directly (not through CardView's blurb-stack merge, which always keys a
+    // `kind: 'answer'` card on a `genie:`-prefixed blurb id in practice): this checks the
+    // component's own defensive guard when `opIdOfGenieBlurb` finds none.
+    const { el, root } = await render(
+      <GenieCard mogId={ID} card={{ ...answered, blurbs: [ask] } as CardUpdate} />,
+    );
+    roots.push(root);
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c).not.toBeNull();
+    expect(c?.querySelector('button[data-action="copy"]')).toBeNull();
   });
 
   it('[H-B] shows the quiet copy note from card.copyNote, not a blurb', async () => {

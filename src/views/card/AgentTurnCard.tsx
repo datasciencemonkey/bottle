@@ -23,7 +23,7 @@
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { ChevronRight, Copy, EyeOff } from 'lucide-react';
+import { ChevronRight, Copy, EyeOff, FileCode } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
@@ -532,6 +532,10 @@ export interface TurnBodyProps {
 
 export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
 export const COPY_LABEL = 'Copy';
+/** Round 2 (Opus review): the two buttons used to be icon-only and identical, so a visible
+ * text label and a different icon tell them apart; the title and `aria-label` of the
+ * Markdown button stay the fuller {@link COPY_MARKDOWN_LABEL}. */
+const MARKDOWN_SHORT_LABEL = 'Markdown';
 
 /** The footer of a turn: the planner and the tokens, then the controls. */
 export function TurnFooter({ turn, actions }: { turn: AgentTurnView; actions?: ReactNode }) {
@@ -776,6 +780,7 @@ export function TurnBody({
               onClick={onCopy}
             >
               <Copy aria-hidden="true" size={12} strokeWidth={2} />
+              {COPY_LABEL}
             </button>
           )}
           {turn.state === 'done' && onCopyMarkdown && finishedAnswerText(turn) !== undefined && (
@@ -787,7 +792,8 @@ export function TurnBody({
               aria-label={COPY_MARKDOWN_LABEL}
               onClick={onCopyMarkdown}
             >
-              <Copy aria-hidden="true" size={12} strokeWidth={2} />
+              <FileCode aria-hidden="true" size={12} strokeWidth={2} />
+              {MARKDOWN_SHORT_LABEL}
             </button>
           )}
         </div>

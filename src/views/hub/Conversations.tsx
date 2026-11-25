@@ -45,7 +45,7 @@ import {
   type ThreadComposerThread,
 } from '../../shared/hub-conversations';
 import { paletteColorOf } from '../../shared/mog-palette';
-import { Check, Copy, ExternalLink } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileCode } from 'lucide-react';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { Button } from '../ui/button';
@@ -298,6 +298,10 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
 const COPY_MARKDOWN_CHECK_MS = 1_500;
 export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
 export const COPY_LABEL = 'Copy';
+/** Round 2 (Opus review): the two buttons used to be icon-only and identical, so a visible
+ * text label and a different icon tell them apart; the tooltip and `aria-label` of the
+ * Markdown button stay the fuller {@link COPY_MARKDOWN_LABEL}. */
+const MARKDOWN_SHORT_LABEL = 'Markdown';
 
 /** One exchange of a thread: its question, meta line, answer and key numbers (#145). */
 function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string | undefined }) {
@@ -417,13 +421,14 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
               <Button
                 type="button"
                 variant="ghost"
-                size="icon"
-                className="size-6"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
                 data-action="copy"
                 aria-label={COPY_LABEL}
                 onClick={copyFormatted}
               >
                 {copiedFormatted ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {COPY_LABEL}
               </Button>
             </TooltipTrigger>
             <TooltipContent>{COPY_LABEL}</TooltipContent>
@@ -433,13 +438,14 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
               <Button
                 type="button"
                 variant="ghost"
-                size="icon"
-                className="size-6"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
                 data-action="copy-markdown"
                 aria-label={COPY_MARKDOWN_LABEL}
                 onClick={copyMarkdown}
               >
-                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {copied ? <Check className="size-3.5" /> : <FileCode className="size-3.5" />}
+                {MARKDOWN_SHORT_LABEL}
               </Button>
             </TooltipTrigger>
             <TooltipContent>{COPY_MARKDOWN_LABEL}</TooltipContent>
