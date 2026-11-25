@@ -78,12 +78,17 @@ fn parse_args(args: &Value) -> Option<(String, String)> {
     Some((w.to_owned(), q.to_owned()))
 }
 
-/// The links of a text: `http(s)://…` and `www.…`, lower case, trailing punctuation cut.
+/// The links of a text: `http(s)://…`, `www.…` and a bare domain with a path, lower case,
+/// trailing punctuation cut.
 fn links_of(text: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     // The pattern is a constant; a test runs it.
     let re = RE.get_or_init(|| {
-        Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"'`)\]]+"#).expect("link pattern")
+        // A scheme or `www.` link, or a bare domain with a path (`evil.example/x`).
+        Regex::new(
+            r#"(?i)\b(?:https?://|www\.)[^\s<>"'`)\]]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+/[^\s<>"'`)\]]*"#,
+        )
+        .expect("link pattern")
     });
     re.find_iter(text)
         .map(|m| {

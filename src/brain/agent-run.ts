@@ -278,7 +278,7 @@ export interface AgentClient {
     turn: AgentTurn,
     mode: AgentMode,
     actionTicket?: string,
-    /** The thread this turn continues (the hub thread composer). Else see `lastAnswered`. */
+    /** The thread this turn continues (the hub thread composer). Else see `currentThread`. */
     threadId?: string,
   ): Promise<void>;
   onTurnEvent(payload: unknown): void;
@@ -338,8 +338,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let seq = 0;
   /** The session ended in a way that leaves its failed turns on screen until the next start. */
   let stale = false;
-  /** The thread of the newest answered turn: a ⌥G follow-up continues it (R-13). */
-  let lastAnswered: string | undefined;
   /**
    * The thread whose turns the core holds as its model history: the thread of the newest new ask
    * (the core clears the history on a new ask). Undefined with no session.
@@ -710,10 +708,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         r.origin.mogId,
         out === 'answered' ? 'answered' : out === 'stopped' ? 'cancelled' : 'failed',
       );
-    if (out === 'answered') {
-      deps.followUp?.answered();
-      lastAnswered = r.threadId;
-    }
+    if (out === 'answered') deps.followUp?.answered();
     void refresh();
   }
 
@@ -838,7 +833,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   }
 
   return {
-    async submit(turn, mode, actionTicket, threadId) {
+    async submit(turn, asked, actionTicket, threadId) {
+      // A ⌥G follow-up continues the thread the core holds. With none, it is a new ask: the
+      // thread of an older answer is not the model history any more.
+      const mode =
+        asked === 'follow_up' && threadId === undefined && currentThread === undefined
+          ? 'ask'
+          : asked;
       const opId = deps.newId();
       let a: AgentTurnAccepted;
       try {
@@ -877,9 +878,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         fellBack: false,
         // A new ask starts a thread (its root is this turn); a follow-up joins one.
         threadId:
-          threadId ??
-          (mode === 'follow_up' ? (currentThread ?? lastAnswered) : undefined) ??
-          uuidOfTurn(a.turnId),
+          threadId ?? (mode === 'follow_up' ? currentThread : undefined) ?? uuidOfTurn(a.turnId),
         recorded: false,
         rowIds: new Map(),
         noRecord: false,
@@ -918,7 +917,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         return changed();
       }
       deps.followUp?.reset();
-      lastAnswered = undefined;
       currentThread = undefined;
       // A Wipe leaves nothing on disk: no turn, ended or not, writes a row after it, and a write
       // that is already in flight finds the fence moved.
@@ -1014,7 +1012,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       for (const [again, r] of [...deferredRows])
         if (r.threadId === threadId) deferredRows.delete(again);
       for (const [id, r] of recs) if (r.threadId === threadId && r.settled) forget(id, r);
-      if (lastAnswered === threadId) lastAnswered = undefined;
       if (currentThread === threadId) currentThread = undefined;
       changed();
     },

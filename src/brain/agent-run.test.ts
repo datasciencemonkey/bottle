@@ -1185,6 +1185,18 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     expect(r.client.inSession(uuidOfTurn(T1))).toBe(false);
   });
 
+  it('a ⌥G follow-up with no current thread goes as a new ask, never to an older answer', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'idle' });
+    await ask(r, T2, 'Later?', 'follow_up');
+    expect(r.calls.filter((c) => c.startsWith('submit:'))).toEqual([
+      'submit:ask:op',
+      'submit:ask:op',
+    ]);
+    expect(turnRows(r).at(-1)?.threadId).toBe(uuidOfTurn(T2));
+  });
+
   it('[AC-C5] a follow-up with no thread id goes to the thread of the last answered turn', async () => {
     const r = rig();
     await ask(r, T1, 'First?');
