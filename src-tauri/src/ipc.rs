@@ -704,6 +704,9 @@ pub fn runs_off_main_thread(command: &str) -> bool {
                 | "capture_start"
                 | "capture_resume"
                 | "insert_text"
+                // ADR 0124: it can wait for `insertion::PASTE_LOCK`, which `insert_text` can
+                // hold for its own ~0.4 s paste sequence.
+                | "clipboard_write_text"
                 | "mcp_call"
                 // ADR 0122: a blocking HTTPS call to the AI Gateway.
                 | "model_invoke"
@@ -758,9 +761,8 @@ fn os_insert() -> Option<&'static dyn GatewayComponents> {
 
 /// The `clipboard_write_text` component of this OS (macOS, Windows and Linux's own
 /// `unsupported` component all exist, so this is always `Some`; no `host_failed` build target).
-/// A single NSPasteboard/Win32 clipboard write of up to 100 KB does not wait, so (unlike
-/// `insert_text`) it needs no worker and no main-thread hop: it runs on the calling thread
-/// (`clipboard_write_text` is not in `runs_off_main_thread` below).
+/// It runs on a worker (`runs_off_main_thread` below), because it takes the same
+/// `insertion::PASTE_LOCK` `insert_text` holds for its own paste sequence, and that can wait.
 fn os_clipboard_write() -> Option<&'static dyn GatewayComponents> {
     use std::sync::OnceLock;
     #[cfg(target_os = "macos")]

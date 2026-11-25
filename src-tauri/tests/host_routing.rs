@@ -362,6 +362,9 @@ fn arc_3_cap_02a_g_04a_window_ops_capture_start_and_mcp_call_run_off_the_main_th
                         | "capture_start"
                         | "capture_resume"
                         | "insert_text"
+                        // ADR 0124: it can wait for `insertion::PASTE_LOCK`, which `insert_text`
+                        // can hold for its own ~0.4 s paste sequence.
+                        | "clipboard_write_text"
                         | "mcp_call"
                         // ADR 0122: a blocking HTTPS call to the AI Gateway.
                         | "model_invoke"
@@ -810,6 +813,7 @@ fn arc_3_cap_02a_g_04a_schedule_runs_window_ops_capture_start_and_mcp_call_on_a_
                     | "capture_start"
                     | "capture_resume"
                     | "insert_text"
+                    | "clipboard_write_text"
                     | "mcp_call"
                     | "model_invoke"
                     | "agent_start"

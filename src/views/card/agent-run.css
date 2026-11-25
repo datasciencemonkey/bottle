@@ -110,17 +110,26 @@
 }
 
 /* The owner's "attach Genie's answer to the clipboard" request: a quiet "Copied" / "Couldn't
-   copy" note next to the answer. No banner, no toast stack. */
+   copy" note next to the answer. No banner, no toast stack. The outer line stays mounted and
+   reserves its own height (one line at this font size), so the note's entrance and exit never
+   move the answer above or below it. */
 .agent-copy-note {
   display: flex;
   align-items: center;
-  gap: 4px;
   margin: 0;
-  color: var(--mog-text-muted);
+  min-height: calc(var(--mog-text-xs) * var(--mog-leading));
   font-size: var(--mog-text-xs);
+  line-height: var(--mog-leading);
 }
 
-.agent-copy-note[data-tone='bad'] {
+.agent-copy-note-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mog-text-muted);
+}
+
+.agent-copy-note-line[data-tone='bad'] {
   color: var(--mog-destructive-text);
 }
 

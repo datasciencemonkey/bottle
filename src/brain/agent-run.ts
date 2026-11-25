@@ -101,6 +101,13 @@ export interface AgentClientDeps {
   showTurn(mogId: MogId, turn: AgentTurnView): void;
   /** The card of a turn that left (a removed turn, a cleared session). */
   dropTurn(mogId: MogId, turnId: string): void;
+  /**
+   * An `answered` turn reached its final view: `view.parts` and `view.summary` are settled (the
+   * late pulls, `summarise` and `syncParts` have all run). Never fires for a stopped, failed or
+   * otherwise unanswered turn. The owner's "attach Genie's answer to the clipboard" request
+   * (`answer-clipboard.ts`) hooks here, not `showTurn`, which can still fire mid-settle.
+   */
+  finished?(mogId: MogId, view: AgentTurnView): void;
   /** A one-line pop-up on the card of `mogId` (the queue is full). */
   note?(mogId: MogId, text: string): void;
   /** The MOG mood follows the turn. */
@@ -303,6 +310,13 @@ export interface AgentClient {
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request: set `copyNote` on the turn's
+   * own record and republish it (`showTurn` and the hub's `onChange`), so the card and
+   * Conversations both show the current, not a stale, note. A no-op for a turn the client no
+   * longer holds.
+   */
+  markCopied(turnId: string, outcome: 'copied' | 'failed'): void;
   /**
    * The thread (root UUID) of `turnId`. A turn that the client no longer holds (a session end
    * forgot it) gives the thread that it started as a new ask; a bad turn id gives undefined.
@@ -698,6 +712,15 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     if (recs.get(id) !== r) return;
     syncParts(r);
     update(r);
+    // The view is now settled (parts and summary final): the one point an `answered` turn may
+    // trigger the owner's clipboard copy. `deps.finished` never fires for any other outcome.
+    if (out === 'answered') {
+      try {
+        deps.finished?.(r.origin.mogId, r.view);
+      } catch {
+        fault();
+      }
+    }
     // A turn that the session end cut off writes its row when the `agent:session` event arrives:
     // the core sends the turn `ended` first and the session `ended{wipe}` right after, and a Wipe
     // must leave no turn row.
@@ -986,6 +1009,12 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       };
     },
     turn: (turnId) => recs.get(turnId)?.view,
+    markCopied(turnId, outcome) {
+      const r = recs.get(turnId);
+      if (!r) return;
+      r.view = { ...r.view, copyNote: outcome };
+      update(r);
+    },
     threadOf: (turnId) =>
       recs.get(turnId)?.threadId ?? (TURN_ID.test(turnId) ? uuidOfTurn(turnId) : undefined),
     threadMog: (threadId) => [...recs.values()].find((r) => r.threadId === threadId)?.origin.mogId,

@@ -7,10 +7,12 @@
 //! [`CoreError::IpcRefused`] with a code from `ipc_gateway::ERROR_CODES`.
 
 use crate::error::{CoreError, CoreResult};
+use crate::insertion::PASTE_LOCK;
 use crate::ipc::{ClipboardWriteTextArgs, Geometry};
 use crate::ipc_gateway::GatewayComponents;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::PoisonError;
 
 const ID: &str = "R11";
 
@@ -202,31 +204,47 @@ pub struct MacPasteboard;
 #[cfg(target_os = "macos")]
 impl ClipboardBackend for MacPasteboard {
     fn write(&self, formats: &[ClipboardFormat]) -> CoreResult<()> {
+        use objc2::rc::autoreleasepool;
         use objc2::runtime::ProtocolObject;
-        use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
+        use objc2_app_kit::{
+            NSPasteboard, NSPasteboardContentsOptions, NSPasteboardItem, NSPasteboardWriting,
+        };
         use objc2_foundation::{NSArray, NSData, NSString};
 
-        let item = NSPasteboardItem::new();
-        for format in formats {
-            let ty = NSString::from_str(format.name);
-            if !item.setData_forType(&NSData::with_bytes(&format.data), &ty) {
-                return Err(CoreError::NotImplemented { component: ID });
+        // A worker thread has no autorelease pool of its own: drain the AppKit objects here (as
+        // `insertion::macos`'s own pasteboard calls already do).
+        autoreleasepool(|_| {
+            let item = NSPasteboardItem::new();
+            for format in formats {
+                let ty = NSString::from_str(format.name);
+                if !item.setData_forType(&NSData::with_bytes(&format.data), &ty) {
+                    return Err(CoreError::NotImplemented { component: ID });
+                }
             }
-        }
-        let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.clearContents();
-        let objects =
-            NSArray::from_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_ref(&*item)]);
-        if pasteboard.writeObjects(&objects) {
-            Ok(())
-        } else {
-            self.clear()?;
-            Err(CoreError::NotImplemented { component: ID })
-        }
+            let pasteboard = NSPasteboard::generalPasteboard();
+            // Bottle is a one-machine app (ADR 0124): every clipboard write stays off Universal
+            // Clipboard, so business data (a Genie answer, or dictated text) never syncs to the
+            // user's other Apple devices.
+            pasteboard
+                .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+            let objects =
+                NSArray::from_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_ref(&*item)]);
+            if pasteboard.writeObjects(&objects) {
+                Ok(())
+            } else {
+                self.clear()?;
+                Err(CoreError::NotImplemented { component: ID })
+            }
+        })
     }
 
     fn clear(&self) -> CoreResult<()> {
-        objc2_app_kit::NSPasteboard::generalPasteboard().clearContents();
+        use objc2::rc::autoreleasepool;
+        use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions};
+        autoreleasepool(|_| {
+            NSPasteboard::generalPasteboard()
+                .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+        });
         Ok(())
     }
 }
@@ -314,6 +332,10 @@ impl<B: ClipboardBackend + Copy> GatewayComponents for ClipboardWriteTextCompone
         let Some((backend, platform)) = self.target else {
             return Ok(json!({ "result": ClipboardWriteOutcome::Unsupported }));
         };
+        // The same lock `insertion::insert_text` takes (ADR 0124): this write must never land
+        // between that paste's clipboard snapshot and its chord, or the answer, not the
+        // dictation, would land in the focused app.
+        let _paste = PASTE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         ClipboardWriter::new(backend)
             .write_durable_text_for(platform, &a.text)
             .map_err(|_| refused("host_failed"))?;
@@ -516,6 +538,36 @@ mod clipboard_tests {
         let rec = Recorder::default();
         let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
         assert!(c.call("insert_text", json!({})).is_err());
+    }
+
+    #[test]
+    fn clipboard_write_text_waits_for_the_paste_lock_insert_text_holds() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let (tx, rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            // Simulates `insertion::insert_text` mid-paste: it holds the same lock.
+            let guard = crate::insertion::PASTE_LOCK
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            scope.spawn(|| {
+                tx.send(()).unwrap();
+                let reply = c
+                    .call("clipboard_write_text", json!({"text": "hi"}))
+                    .unwrap();
+                assert_eq!(reply, json!({"result": "written"}));
+                tx.send(()).unwrap();
+            });
+            // The call started, but the lock this test still holds must block it.
+            rx.recv().unwrap();
+            assert!(rx.recv_timeout(Duration::from_millis(80)).is_err());
+            drop(guard);
+            // Released: the write goes through soon after.
+            rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
     }
 
     #[test]

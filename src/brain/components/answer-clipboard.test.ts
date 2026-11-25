@@ -29,7 +29,8 @@ function turn(o: Partial<AgentTurnView> = {}): AgentTurnView {
 }
 
 function fakeDeps(o: Partial<AnswerClipboardDeps> = {}) {
-  const notes: { mogId: string; turnId: string; outcome: CopyOutcome }[] = [];
+  const turnNotes: { turnId: string; outcome: CopyOutcome }[] = [];
+  const directNotes: { mogId: string; opId: string; outcome: CopyOutcome }[] = [];
   const writes: string[] = [];
   const faults: number[] = [];
   const deps: AnswerClipboardDeps = {
@@ -39,66 +40,51 @@ function fakeDeps(o: Partial<AnswerClipboardDeps> = {}) {
       return 'written';
     },
     whenClear: (fn) => fn(),
-    note: (mogId, t, outcome) => notes.push({ mogId, turnId: t.turnId, outcome }),
+    noteTurn: (turnId, outcome) => turnNotes.push({ turnId, outcome }),
+    noteDirect: (mogId, opId, outcome) => directNotes.push({ mogId, opId, outcome }),
     onFault: () => faults.push(1),
     ...o,
   };
-  return { deps, notes, writes, faults };
+  return { deps, turnNotes, directNotes, writes, faults };
 }
 
-describe('createAnswerClipboard', () => {
+describe('createAnswerClipboard: onTurnFinished (the orchestrator path, H1)', () => {
   it('[owner request] copies the finished answer and reports "copied"', async () => {
-    const { deps, notes, writes } = fakeDeps();
+    const { deps, turnNotes, writes } = fakeDeps();
     const clipboard = createAnswerClipboard(deps);
-    clipboard.onTurn(MOG, turn());
+    clipboard.onTurnFinished(MOG, turn());
     await Promise.resolve();
     await Promise.resolve();
     expect(writes).toEqual(['The answer.']);
-    expect(notes).toEqual([{ mogId: MOG, turnId: 't1', outcome: 'copied' }]);
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
   });
 
   it('reports "failed" when the write answers too_large or unsupported', async () => {
     for (const result of ['too_large', 'unsupported'] as const) {
-      const { deps, notes } = fakeDeps({ write: async () => result });
-      createAnswerClipboard(deps).onTurn(MOG, turn());
+      const { deps, turnNotes } = fakeDeps({ write: async () => result });
+      createAnswerClipboard(deps).onTurnFinished(MOG, turn());
       await Promise.resolve();
       await Promise.resolve();
-      expect(notes).toEqual([{ mogId: MOG, turnId: 't1', outcome: 'failed' }]);
+      expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'failed' }]);
     }
   });
 
   it('reports "failed" and calls onFault when the write throws, never with the answer text', async () => {
-    const { deps, notes, faults } = fakeDeps({
+    const { deps, turnNotes, faults } = fakeDeps({
       write: async () => {
         throw new Error('fake: the answer, leaked');
       },
     });
-    createAnswerClipboard(deps).onTurn(MOG, turn());
+    createAnswerClipboard(deps).onTurnFinished(MOG, turn());
     await Promise.resolve();
     await Promise.resolve();
     expect(faults).toEqual([1]);
-    expect(notes).toEqual([{ mogId: MOG, turnId: 't1', outcome: 'failed' }]);
-  });
-
-  it('never copies a turn that is not done (running, stopped, failed, needs_you)', async () => {
-    for (const state of [
-      'planning',
-      'running',
-      'slow',
-      'stopped',
-      'failed',
-      'needs_you',
-    ] as const) {
-      const { deps, writes } = fakeDeps();
-      createAnswerClipboard(deps).onTurn(MOG, turn({ state }));
-      await Promise.resolve();
-      expect(writes).toEqual([]);
-    }
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'failed' }]);
   });
 
   it('never copies a withheld (quarantined) lone answer', async () => {
     const { deps, writes } = fakeDeps();
-    createAnswerClipboard(deps).onTurn(
+    createAnswerClipboard(deps).onTurnFinished(
       MOG,
       turn({
         parts: [
@@ -119,13 +105,13 @@ describe('createAnswerClipboard', () => {
     expect(writes).toEqual([]);
   });
 
-  it('copies exactly once per finished turn, even if showTurn fires again with the same state', async () => {
+  it('copies exactly once per turn, even if called again with the same state', async () => {
     const { deps, writes } = fakeDeps();
     const clipboard = createAnswerClipboard(deps);
     const t = turn();
-    clipboard.onTurn(MOG, t);
-    clipboard.onTurn(MOG, t);
-    clipboard.onTurn(MOG, t);
+    clipboard.onTurnFinished(MOG, t);
+    clipboard.onTurnFinished(MOG, t);
+    clipboard.onTurnFinished(MOG, t);
     await Promise.resolve();
     await Promise.resolve();
     expect(writes).toEqual(['The answer.']);
@@ -134,8 +120,8 @@ describe('createAnswerClipboard', () => {
   it('the toggle off means no copy, but still marks the turn handled (no later retry)', async () => {
     const { deps, writes } = fakeDeps({ enabled: () => false });
     const clipboard = createAnswerClipboard(deps);
-    clipboard.onTurn(MOG, turn());
-    clipboard.onTurn(MOG, turn());
+    clipboard.onTurnFinished(MOG, turn());
+    clipboard.onTurnFinished(MOG, turn());
     await Promise.resolve();
     expect(writes).toEqual([]);
   });
@@ -147,26 +133,77 @@ describe('createAnswerClipboard', () => {
         held = fn;
       },
     });
-    createAnswerClipboard(deps).onTurn(MOG, turn());
+    createAnswerClipboard(deps).onTurnFinished(MOG, turn());
     expect(writes).toEqual([]);
     held?.();
     await Promise.resolve();
     expect(writes).toEqual(['The answer.']);
   });
 
-  it('copies a combined summary with its [n] markers stripped', async () => {
+  it('copies a combined summary with its own [n] markers stripped', async () => {
     const { deps, writes } = fakeDeps();
-    createAnswerClipboard(deps).onTurn(
+    createAnswerClipboard(deps).onTurnFinished(
       MOG,
       turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [{ id: 'answer', md: 'x' }],
+          },
+          {
+            callId: 'c2',
+            workspace: { name: 'Finance', colorVariant: 'rose' },
+            sections: [{ id: 'answer', md: 'y' }],
+          },
+        ],
         summary: {
           md: 'Revenue grew [1].',
           kind: 'combined',
-          workspaces: [{ name: 'Sales', colorVariant: 'coral' }],
+          workspaces: [],
+          citations: [{ n: 1, callId: 'c1', workspace: { name: 'Sales', colorVariant: 'coral' } }],
         },
       }),
     );
     await Promise.resolve();
     expect(writes).toEqual(['Revenue grew.']);
+  });
+});
+
+describe('createAnswerClipboard: onDirectAnswered (the direct Genie path, H2)', () => {
+  it('copies the verbatim direct answer and reports "copied"', async () => {
+    const { deps, directNotes, writes } = fakeDeps();
+    createAnswerClipboard(deps).onDirectAnswered(MOG, 'op-1', 'Revenue was $5M.');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue was $5M.']);
+    expect(directNotes).toEqual([{ mogId: MOG, opId: 'op-1', outcome: 'copied' }]);
+  });
+
+  it('never copies an empty answer', async () => {
+    const { deps, writes } = fakeDeps();
+    createAnswerClipboard(deps).onDirectAnswered(MOG, 'op-1', '   ');
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+  });
+
+  it('copies exactly once per opId', async () => {
+    const { deps, writes } = fakeDeps();
+    const clipboard = createAnswerClipboard(deps);
+    clipboard.onDirectAnswered(MOG, 'op-1', 'Revenue was $5M.');
+    clipboard.onDirectAnswered(MOG, 'op-1', 'Revenue was $5M.');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue was $5M.']);
+  });
+
+  it('a turn key and a direct key with the same literal id never collide', async () => {
+    const { deps, writes } = fakeDeps();
+    const clipboard = createAnswerClipboard(deps);
+    clipboard.onTurnFinished(MOG, turn({ turnId: 'same-id' }));
+    clipboard.onDirectAnswered(MOG, 'same-id', 'A different direct answer.');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.', 'A different direct answer.']);
   });
 });

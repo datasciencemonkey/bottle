@@ -76,6 +76,12 @@ export interface GenieDirectDeps {
   /** "Change workspace…": show the hub on this MOG's Edit form (the home workspace field). */
   changeWorkspace?: ((mogId: MogId) => unknown) | undefined;
   /**
+   * The owner's "attach Genie's answer to the clipboard" request: a real Genie answer (never a
+   * clarify question, a failure or a stop) came back, once, verbatim. Called whether or not the
+   * user closed the ready pill: the answer was still delivered.
+   */
+  onAnswered?: ((mogId: MogId, opId: string, md: string) => void) | undefined;
+  /**
    * UX slice 1: the arrival gate. While the user holds the talk key, the terminal event changes
    * only the pill to "Answer ready" (an answer) and the card update waits for `whenClear`.
    */
@@ -223,6 +229,9 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
       };
       const apply = async (): Promise<void> => {
         live.delete(opId);
+        // The owner's clipboard-copy request: the answer was delivered, whether or not the user
+        // closed the ready pill (the card's visibility is not the same thing as the answer).
+        if (outcome.t === 'answer') safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md));
         // The user closed the ready pill: the card stays closed. The blurb ends empty.
         if (closed.delete(opId)) {
           // The early sections of this request go too, if they are still the card's.

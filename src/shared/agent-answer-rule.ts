@@ -74,34 +74,73 @@ function toAnswerPart(p: AgentPartView): AnswerPart {
   };
 }
 
+/** A fenced (```…```) or inline (`…`) code span: code is verbatim, never touched. */
+const FENCE = /(```[\s\S]*?```)/;
+const INLINE_CODE = /(`[^`\n]*`)/;
+
 /**
- * Strip bare `[n]` citation markers (ADR 0122) from `md`. Pasted outside Bottle they have no
- * footnote or footer link to point to, so they would read as stray reference numbers, not real
- * content. A real Markdown link (`[1](url)` or `[1][ref]`) is untouched: only a marker with no
- * following `(` or `[` is removed, with the one space before it, if any.
+ * Strip a `[n]` citation marker from `text` only when `n` is one of `citationNumbers` (ADR 0122).
+ * Pasted outside Bottle a real citation marker has no footnote or footer link to point to, so it
+ * would read as a stray reference number, not real content. Everything else that merely looks
+ * like one — an array index (`array[1]`), a year (`[2024]`), a real Markdown link (`[1](url)` or
+ * `[1][ref]`) — is left alone: the number must be a known citation, the character right before
+ * the marker must not be a word character or `]`, and the marker must not be followed by `(` or
+ * `[`. With no citation numbers, nothing is stripped.
  */
-export function stripCitationMarkers(md: string): string {
-  return md.replace(/[ \t]?\[\d+\](?![([])/g, '');
+export function stripCitationMarkers(text: string, citationNumbers: readonly number[]): string {
+  if (citationNumbers.length === 0) return text;
+  const nums = new Set(citationNumbers);
+  const wordOrBracket = /[\w\]]/;
+  const stripProse = (prose: string): string =>
+    prose.replace(
+      /([ \t]?)\[(\d+)\]/g,
+      (whole: string, lead: string, numStr: string, offset: number) => {
+        if (!nums.has(Number(numStr))) return whole;
+        // The character right before the bracket itself (not before `lead`): with a leading
+        // space that is always the space, so a space-separated marker is never blocked by this
+        // check. With no leading space, it is whatever truly touches the bracket.
+        const beforeBracket = prose[offset + lead.length - 1];
+        if (beforeBracket !== undefined && wordOrBracket.test(beforeBracket)) return whole;
+        const after = prose[offset + whole.length];
+        if (after === '(' || after === '[') return whole;
+        return '';
+      },
+    );
+  // Fenced code blocks first, then inline code spans inside what is left: both stay verbatim.
+  return text
+    .split(FENCE)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .split(INLINE_CODE)
+            .map((s, j) => (j % 2 === 1 ? s : stripProse(s)))
+            .join(''),
+    )
+    .join('');
 }
 
 /**
- * The plain text a finished turn's card or Conversations reply actually shows: the model's
- * combined note (its `[n]` markers stripped, since they are junk once pasted outside Bottle) when
- * the turn has one, else the one Genie answer that {@link loneAnswerIndex} names, verbatim.
- * `undefined` when the turn has no answer to show (every call withheld, or the model's note was
- * hidden by quarantine): the caller must never copy then.
+ * The plain text a finished turn's card or Conversations reply actually shows, by the same rule
+ * the view draws by: the one Genie answer that {@link loneAnswerIndex} names, verbatim, when one
+ * applies; only otherwise the model's combined note (its `[n]` citation markers stripped, since
+ * they are junk once pasted outside Bottle). `undefined` when the turn has no answer to show
+ * (every call withheld, or the model's note was hidden by quarantine): the caller must never copy
+ * then.
  */
 export function finishedAnswerText(
   turn: Pick<AgentTurnView, 'summary' | 'parts'>,
 ): string | undefined {
-  if (turn.summary) {
-    const md = turn.summary.md;
-    return md.trim() === '' ? undefined : stripCitationMarkers(md);
-  }
   const lone = loneAnswerIndex(turn.parts.map(toAnswerPart));
-  if (lone < 0) return undefined;
-  const md = answerMdOf(turn.parts[lone]?.sections ?? []);
-  return md !== undefined && md.trim() !== '' ? md : undefined;
+  if (lone >= 0) {
+    const md = answerMdOf(turn.parts[lone]?.sections ?? []);
+    return md !== undefined && md.trim() !== '' ? md : undefined;
+  }
+  if (!turn.summary) return undefined;
+  const md = turn.summary.md;
+  if (md.trim() === '') return undefined;
+  const citationNumbers = (turn.summary.citations ?? []).map((c) => c.n);
+  return stripCitationMarkers(md, citationNumbers);
 }
 
 /** A workspace answer that a turn holds: where its Genie One link comes from. */

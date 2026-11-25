@@ -49,53 +49,94 @@ anything small that goes with it (a Settings toggle, a small view note).
    `NoClipboard` backend that is never actually called), so a Rust unit test can exercise the
    "unsupported OS" outcome without a Linux build.
 6. **One plain Settings → Workspace toggle, "Copy Genie answers to the clipboard", on by
-   default.** It persists through the existing `workspace_settings_write` / `AgentSettings`
-   path, the same shape as "Clean up dictation" (ADR 0122) and "Dictation engine" (ADR 0123). It
-   sits outside the orchestrator-model block of that screen, because the copy also covers the
-   direct Genie fallback (ADR 0097), which needs no orchestrator model at all.
-7. **The brain decides what "the answer" is, with the owner's own rule
-   (`src/shared/agent-answer-rule.ts`), and copies once per finished turn.** A new
-   `finishedAnswerText(turn)` mirrors the exact text the card and a Conversations reply show: the
-   combined note (`[n]` markers stripped — see decision 8) when the turn has one, else the one
-   Genie answer `loneAnswerIndex` names, verbatim. It answers `undefined` for a withheld
-   (quarantined) answer, a turn that is not `done` (an error, a stop, or still streaming), so the
-   brain never copies then. `createAnswerClipboard` (`src/brain/components/answer-clipboard.ts`)
-   hooks the one place a turn reaches its final state (`showTurn`, shared by the ⌥G card and a
-   Conversations reply) and a `Set` of handled turn IDs makes the copy fire exactly once.
-8. **The `[n]` citation markers are stripped from a copied combined answer, kept verbatim for a
-   lone Genie answer.** A lone Genie answer never has citation markers. A combined note's `[1]`,
-   `[2]` markers are meaningful only with the card's own citation chips and footer links
-   (`AgentCitation`, ADR 0122); pasted into Slack or an email they are bare numbers with nothing to
-   point to — junk, not content. `stripCitationMarkers` removes a bare `[n]` (and the one space
-   before it) but leaves a real Markdown link such as `[1](url)` or `[1][ref]` untouched. The
-   Markdown itself (tables, bold, links) is kept.
+   default.** Default-on is the owner's own instruction ("It is on by default and persists
+   through the existing settings path"), not an engineering default. It persists through the
+   existing `workspace_settings_write` / `AgentSettings` path, the same shape as "Clean up
+   dictation" (ADR 0122) and "Dictation engine" (ADR 0123). It sits outside the
+   orchestrator-model block of that screen, because the copy also covers the direct Genie
+   fallback (ADR 0097), which needs no orchestrator model at all.
+7. **Two hooks feed one clipboard gate, because the direct Genie path is the default for most
+   users, not the orchestrator turn.** `createAnswerClipboard`
+   (`src/brain/components/answer-clipboard.ts`) takes `onTurnFinished` and `onDirectAnswered`:
+   - `onTurnFinished` is called from a new `agent-run.ts` hook, `deps.finished(mogId, view)`,
+     fired once, only for an `answered` turn, only at the very end of `finish()`, after the late
+     pulls, `summarise` and `syncParts` have all run and the view is settled. It is a separate
+     hook from `showTurn`, which can still fire earlier, mid-settle, with incomplete parts; an
+     earlier revision of this ADR wrongly hooked `showTurn` and could copy a partial answer.
+     `onTurnFinished` uses the owner's own rule (`finishedAnswerText`,
+     `src/shared/agent-answer-rule.ts`): the one Genie answer `loneAnswerIndex` names, verbatim,
+     when one applies (checked first); only otherwise the model's combined note, its `[n]`
+     markers stripped (decision 8). It answers `undefined` for a withheld (quarantined) answer or
+     a hidden combined note, so the brain never copies then.
+   - `onDirectAnswered` is called from a new `genie-direct.ts` hook, `onAnswered(mogId, opId, md)`,
+     fired once for a real Genie answer (never a clarify question, a failure or a stop) on the
+     direct path. One `send` already covers the router's direct route, the zero-call fallback and
+     the refused-submit fallback, so this one hook covers all three. It copies `md` verbatim: a
+     direct send is always one Genie call, so it never carries `[n]` markers to strip.
+
+   Both fire at most once per key (`turn:<turnId>` or `direct:<opId>`, a capped `Set` of handled
+   keys), gated on the Settings toggle, read once per answer.
+8. **The `[n]` citation markers are stripped from a copied combined answer only for the numbers
+   `turn.summary.citations` actually names, kept verbatim everywhere else.** A lone Genie answer
+   and a direct send never have citation markers, so neither is touched. In a combined note, a
+   bare `[1]`/`[2]` is meaningful only with the card's own citation chips and footer links
+   (`AgentCitation`, ADR 0122); pasted into Slack or an email it is a stray number with nothing to
+   point to — junk, not content. `stripCitationMarkers(text, citationNumbers)` strips a marker
+   only when its number is one of `citationNumbers`, the character right before it is not a word
+   character or `]` (so `array[1]` and a year like `[2024]` are never touched, even if `1` or
+   `2024` coincided with a real citation number) and it is not immediately followed by `(` or `[`
+   (so a real Markdown link, `[1](url)` or `[1][ref]`, is never touched). It also never looks
+   inside a fenced or inline code span. With no citations, it strips nothing.
 9. **The clipboard write waits for the same arrival gate `createAgentCard` already uses
-   (`whenClear`), not a new queue.** `insert_text`'s own paste snapshots and restores the
-   clipboard (ADR 0048); writing the answer while that is in flight would race it. Reusing the
-   existing gate is the simplest correct fix: no second queue to build or test.
-10. **A quiet note, never a banner.** `AgentTurnView` gets one new, brain-owned, transient field,
-    `copyNote?: 'copied' | 'failed'`, set once the write resolves. `TurnBody` (shared by the card
-    and a Conversations reply) renders a small `CopyAnswerNote`: a check mark and "Copied" in
-    muted text on success, a quiet "Couldn't copy" on failure, nothing while the write is in
-    flight. It shows for 2 s then removes itself in the view, with no further brain round-trip
-    (the same shape as the existing `memory-saved.tsx` note); `prefers-reduced-motion` skips the
-    entrance animation.
+   (`whenClear`), not a new queue — and, in Rust, the same lock `insert_text` holds for its own
+   paste.** `insert_text`'s own paste snapshots the clipboard, writes the dictation text, sends
+   the paste chord, then restores the snapshot (ADR 0048); the brain-level `whenClear` wait keeps
+   a finished answer's copy from starting while a dictation paste is in flight, but it cannot by
+   itself close the window between the Rust-side snapshot and the chord. `clipboard_write_text`'s
+   component also takes `insertion::PASTE_LOCK` (now `pub(crate)`) before it writes, so the two
+   operations can never interleave at the OS level either; it runs on a worker
+   (`runs_off_main_thread`), because that lock can make it wait. The write (like `insert_text`'s
+   own pasteboard calls) runs inside an `autoreleasepool`.
+10. **The pasteboard write uses `NSPasteboardContentsOptions::CurrentHostOnly`.** Bottle is a
+    one-machine app (by design, not a limitation to work around): a Genie answer, like dictated
+    text, stays off Universal Clipboard and never syncs to the user's other Apple devices. This
+    applies to every write through `MacPasteboard`, including `insert_text`'s own.
+11. **A quiet note, never a banner.** For a turn, `AgentTurnView` gets one new, brain-owned,
+    transient field, `copyNote?: 'copied' | 'failed'`, set through a new `AgentClient.markCopied`
+    that writes it onto the turn's own record and republishes it the normal way (`update()`, which
+    reaches both the card and, through `onChange`, Conversations) — not a one-off `agentCard.show`
+    call with a captured, potentially stale, turn. For a direct send, which has no
+    `AgentTurnView`, the note is a small blurb on the same `CardStack` the answer itself uses,
+    text only, cleared after the same 2 s. `TurnBody` (shared by the card and a Conversations
+    reply) renders a `CopyAnswerNote`: a `role="status"` line that stays mounted at all times,
+    with a reserved line height, so its entrance and exit never move the answer; inside it, a
+    check mark and "Copied" in muted text on success, or a quiet "Couldn't copy" on failure, fade
+    in with `AnimatePresence`, then fade out and clear after 2 s with no further brain round-trip.
+    `prefers-reduced-motion` skips the animation itself (an instant transition), not the note.
 
 ## Consequences
 
 - Contract surface touched: one new IPC command (`clipboard_write_text`, `ClipboardWriteTextArgs`,
   `crates/mog-core/src/ipc.rs`), one new field on `WorkspaceSettingsWriteArgs` and
   `AgentSettings`/`AgentData` (`copyGenieAnswer` / `copy_genie_answer`), one new optional field on
-  `AgentTurnView` (`copyNote`), one new `brain.json` capability
-  (`allow-clipboard-write-text`), and the regenerated `src-tauri/schemas/ipc-commands.json`.
+  `AgentTurnView` (`copyNote`), one new `AgentClient` method (`markCopied`), one new
+  `GenieDirectDeps` and `AgentClientDeps` hook each (`onAnswered`, `finished`), one new
+  `brain.json` capability (`allow-clipboard-write-text`), and the regenerated
+  `src-tauri/schemas/ipc-commands.json`.
+- `insertion::PASTE_LOCK` is now `pub(crate)`, shared with `window_host`. The two components that
+  take it (`insert_text`, `clipboard_write_text`) are the only ones that may; nothing else in the
+  crate should.
+- `MacPasteboard`'s switch to `CurrentHostOnly` applies to `insert_text`'s own writes too, not only
+  the new command: a deliberate, small widening of this ADR, since the one-machine design already
+  covers all of Bottle's clipboard writes, not just this one.
 - A finished answer's clipboard copy can still be silently dropped by an unrelated clipboard write
   from another app between the brain's write and the user's paste; Bottle accepts this, the same
   as any other clipboard content.
-- If the user reopens a finished turn's card shortly after a copy (within the note's local 2 s
-  window), the "Copied" note can show again, because the view's fade timer is local state, not a
-  brain-cleared field. This is cosmetic: accepted rather than adding a second brain round-trip to
-  clear `copyNote` on a timer.
+- The direct path's "Copied" / "Couldn't copy" note is a plain blurb (text only, no check icon, no
+  fade), not the card's `CopyAnswerNote`: the direct path's `CardStack` has no concept of the
+  small, animated status line the turn-based card uses. Accepted as the simplest fix that still
+  shows something quiet, not a banner.
 - `AgentThread.tsx`'s live turn reuses `TurnBody` with no changes of its own, so the note and the
   copy both reach Conversations for free; it has no dedicated test file of its own (none existed
-  before this change), so this path is covered by `TurnBody`'s own tests plus code inspection, not
-  a new `AgentThread.tsx` test suite.
+  before this change), so this path is covered by `TurnBody`'s own tests, `agent-run.ts`'s
+  `markCopied` test and code inspection, not a new `AgentThread.tsx` test suite.

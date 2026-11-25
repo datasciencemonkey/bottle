@@ -125,6 +125,7 @@ function rig(opts: { real?: boolean } = {}) {
   const clock = createSimClock(1_000);
   const calls: string[] = [];
   const shown: AgentTurnView[] = [];
+  const finished: AgentTurnView[] = [];
   const dropped: string[] = [];
   const notes: string[] = [];
   const directs: { turn: AgentTurn; notice: string; isStale?: PartFence }[] = [];
@@ -141,6 +142,8 @@ function rig(opts: { real?: boolean } = {}) {
     homeGate: undefined as Promise<void> | undefined,
     /** Holds the lookups of the real writer (the await before its first `isStale()`). */
     writeGate: undefined as Promise<void> | undefined,
+    /** Holds `callDetail` (a late call pull) until it opens (H1 regression). */
+    pullGate: undefined as Promise<void> | undefined,
   };
   const rows: string[] = [];
   const writer = createGenieHistory({
@@ -168,6 +171,7 @@ function rig(opts: { real?: boolean } = {}) {
     stop: async (id) => void calls.push(`stop:${id}`),
     callDetail: async (t, c) => {
       calls.push(`call:${t.slice(0, 1)}:${c}`);
+      await script.pullGate;
       const d = script.details.get(`${t}:${c}`);
       if (!d) throw { error: 'agent_turn_unknown' };
       return d;
@@ -200,6 +204,7 @@ function rig(opts: { real?: boolean } = {}) {
     direct: async (t, notice, _id, isStale) =>
       void directs.push({ turn: t, notice, ...(isStale ? { isStale } : {}) }),
     showTurn: (_m, v) => void shown.push(v),
+    finished: (_m, v) => void finished.push(v),
     dropTurn: (_m, id) => void dropped.push(id),
     note: (_m, t) => void notes.push(t),
     phase: (_m, p) => void phases.push(p),
@@ -217,6 +222,7 @@ function rig(opts: { real?: boolean } = {}) {
     clock,
     calls,
     shown,
+    finished,
     dropped,
     notes,
     directs,
@@ -352,6 +358,58 @@ describe('a finished call and a finished turn', () => {
     expect(live?.parts[1]?.notShownToAgent).toBeUndefined();
     expect(live?.parts[0]?.notShownToAgent).toBeUndefined();
     expect(live?.calls.every((c) => c.state === 'ready' && c.endedAt === 13_000)).toBe(true);
+  });
+
+  it('[H1] `deps.finished` fires only after a late pull resolves, with the final settled parts', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(
+      `${T1}:${C1}`,
+      detail(T1, C1, SALES, 'answered', 'Churn in sales: **4.2%**.'),
+    );
+    // The pull this call starts will not resolve until the test opens the gate below.
+    const g = gate();
+    r.script.pullGate = g.p;
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    await r.settle();
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    await r.settle();
+    // The pull has not resolved yet: `finished` must not fire on an incomplete view, and
+    // `showTurn` may still have fired mid-settle (that is allowed; `finished` is the only
+    // signal a caller must trust for a complete answer).
+    expect(r.finished).toHaveLength(0);
+    g.open();
+    await r.settle();
+    expect(r.finished).toHaveLength(1);
+    const v = r.finished[0];
+    expect(v?.state).toBe('done');
+    expect(v?.parts.map((p) => p.workspace.name)).toEqual(['Sales']);
+    expect(v?.parts[0]?.sections.find((s) => s.id === 'answer')?.md).toBe(
+      'Churn in sales: **4.2%**.',
+    );
+  });
+
+  it("[M1] markCopied sets copyNote on the turn's own record and republishes it (card and Conversations)", async () => {
+    const r = rig();
+    await answered(r);
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    const before = r.changes();
+    r.client.markCopied(T1, 'copied');
+    // The card gets the current record, not a stale one taken earlier.
+    expect(r.shown.at(-1)?.copyNote).toBe('copied');
+    expect(r.shown.at(-1)?.turnId).toBe(T1);
+    // Conversations (`onChange`) also sees the update, not only the card.
+    expect(r.changes()).toBeGreaterThan(before);
+    expect(r.client.turn(T1)?.copyNote).toBe('copied');
+  });
+
+  it('markCopied on a turn the client no longer holds is a no-op', async () => {
+    const r = rig();
+    const before = r.shown.length;
+    r.client.markCopied('f'.repeat(32), 'copied');
+    expect(r.shown.length).toBe(before);
   });
 
   it('a combined answer always counts as combined (D1 is removed, ADR 0122 amendment)', async () => {

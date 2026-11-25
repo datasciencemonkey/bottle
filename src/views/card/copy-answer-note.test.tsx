@@ -15,35 +15,43 @@ afterEach(() => {
 });
 
 describe('CopyAnswerNote', () => {
-  it('shows nothing when there is no outcome yet', async () => {
+  it('[L3] the status line stays mounted, empty, with no outcome yet', async () => {
     const { el } = await render(<CopyAnswerNote outcome={undefined} />);
-    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
+    const line = el.querySelector('[data-agent-copy-note]');
+    expect(line?.getAttribute('role')).toBe('status');
+    expect(line?.getAttribute('data-agent-copy-note')).toBe('');
+    expect(line?.textContent).toBe('');
+    expect(line?.querySelector('[data-tone]')).toBeNull();
   });
 
-  it('shows a check icon and "Copied" on success, role status', async () => {
+  it('shows a check icon and "Copied" on success, inside the status line', async () => {
     const { el } = await render(<CopyAnswerNote outcome="copied" />);
-    const note = el.querySelector('[data-agent-copy-note]');
-    expect(note?.getAttribute('role')).toBe('status');
-    expect(note?.getAttribute('data-tone')).toBe('ok');
-    expect(note?.textContent).toBe(COPIED_TEXT);
-    expect(note?.querySelector('svg')).not.toBeNull();
+    const line = el.querySelector('[data-agent-copy-note]');
+    expect(line?.getAttribute('data-agent-copy-note')).toBe('copied');
+    const tone = line?.querySelector('[data-tone]');
+    expect(tone?.getAttribute('data-tone')).toBe('ok');
+    expect(line?.textContent).toBe(COPIED_TEXT);
+    expect(line?.querySelector('svg')).not.toBeNull();
   });
 
   it('shows "Couldn\'t copy" on failure, with no icon and the bad tone, never loud', async () => {
     const { el } = await render(<CopyAnswerNote outcome="failed" />);
-    const note = el.querySelector('[data-agent-copy-note]');
-    expect(note?.getAttribute('data-tone')).toBe('bad');
-    expect(note?.textContent).toBe(FAILED_TEXT);
-    expect(note?.querySelector('svg')).toBeNull();
+    const line = el.querySelector('[data-agent-copy-note]');
+    expect(line?.querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('bad');
+    expect(line?.textContent).toBe(FAILED_TEXT);
+    expect(line?.querySelector('svg')).toBeNull();
   });
 
-  it('goes away on its own after NOTE_MS, with no further prop change', async () => {
+  it('[L3] fades out and clears on its own after NOTE_MS, with no further prop change', async () => {
     vi.useFakeTimers();
     const { el } = await render(<CopyAnswerNote outcome="copied" />);
-    expect(el.querySelector('[data-agent-copy-note]')).not.toBeNull();
+    const line = () => el.querySelector('[data-agent-copy-note]');
+    expect(line()?.getAttribute('data-agent-copy-note')).toBe('copied');
     await act(async () => void vi.advanceTimersByTime(NOTE_MS - 1));
-    expect(el.querySelector('[data-agent-copy-note]')).not.toBeNull();
+    expect(line()?.getAttribute('data-agent-copy-note')).toBe('copied');
     await act(async () => void vi.advanceTimersByTime(1));
-    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
+    // The derived state has moved on (nothing to show); the exit animation itself may still be
+    // finishing in the DOM, which `AnimatePresence` owns, not this attribute.
+    expect(line()?.getAttribute('data-agent-copy-note')).toBe('');
   });
 });

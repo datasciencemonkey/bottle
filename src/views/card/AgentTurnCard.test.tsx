@@ -636,7 +636,11 @@ describe('AgentTurnCard', () => {
     const { el } = await render(
       <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={chips} />,
     );
-    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
+    // The status line itself stays mounted (role=status, reserved height), but empty.
+    expect(el.querySelector('[data-agent-copy-note]')?.getAttribute('data-agent-copy-note')).toBe(
+      '',
+    );
+    expect(el.querySelector('[data-agent-copy-note]')?.textContent).toBe('');
   });
 });
 

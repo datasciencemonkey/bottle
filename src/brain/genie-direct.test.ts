@@ -904,4 +904,88 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(c.controls.size).toBe(0);
     });
   });
+
+  describe('[H2] the owner\'s "attach Genie\'s answer to the clipboard" request', () => {
+    const answerEvent: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [],
+      deepLink: '',
+      queryItems: [],
+    };
+
+    it('calls onAnswered once with the verbatim answer, for a real answer only', async () => {
+      const c = fakeCard();
+      const seen: { mogId: string; opId: string; md: string }[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([
+          {
+            t: 'answer',
+            md: 'Revenue was **$1.2M** [not a real marker].',
+            incomplete: false,
+            keyNumbers: [],
+            deepLink: '',
+            queryItems: [],
+          },
+        ]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: (mogId, opId, md) => void seen.push({ mogId, opId, md }),
+      });
+      await send(turn());
+      expect(seen).toEqual([
+        { mogId: MOG, opId: OP, md: 'Revenue was **$1.2M** [not a real marker].' },
+      ]);
+    });
+
+    it('never calls onAnswered for a failure, a clarify question or a stop', async () => {
+      const cases: AskEvent[] = [
+        { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' },
+        { t: 'uncertain' },
+        { t: 'abandoned' },
+        { t: 'cancel_requested' },
+        { t: 'needs_input', kind: 'clarify', prompt: 'Which workspace?', options: [] },
+      ];
+      for (const event of cases) {
+        const c = fakeCard();
+        let calls = 0;
+        const send = createGenieDirectSend({
+          genie: fakeBridge([event]).bridge,
+          cardFor: () => c.card,
+          newOpId: () => OP,
+          onAnswered: () => void calls++,
+        });
+        await send(turn());
+        expect(calls).toBe(0);
+      }
+    });
+
+    it('still calls onAnswered when the user closed the ready pill before the answer landed', async () => {
+      const c = fakeCard();
+      const seen: string[] = [];
+      let heldFn: (() => void) | undefined;
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: (_m, _o, md) => void seen.push(md),
+        arrivals: {
+          isHeld: () => true,
+          whenClear: (fn) => {
+            heldFn = fn;
+          },
+        },
+      });
+      const promise = send(turn());
+      // Let the microtasks run until the ready pill is up (`whenClear` has captured its callback).
+      for (let i = 0; i < 20 && !heldFn; i++) await Promise.resolve();
+      send.close(MOG, OP);
+      heldFn?.();
+      await promise;
+      expect(seen).toEqual(['Churn was 4.2%.']);
+      // The card stayed closed: the blurb ended empty, not with the answer.
+      expect(c.log.at(-1)).toEqual({ id: `genie:${OP}`, text: '', completed: true });
+    });
+  });
 });

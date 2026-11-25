@@ -463,6 +463,11 @@ export function startBrain(): Brain {
         void workspaces.showSettings();
       },
       hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+      // The owner's "attach Genie's answer to the clipboard" request (H2): the direct path is
+      // the default for most users (the router's direct route, the zero-call fallback and the
+      // refused-submit fallback all share this one `send`), so it gets its own copy hook, not
+      // just the orchestrator turn's.
+      onAnswered: (mogId, opId, md) => answerClipboard.onDirectAnswered(mogId, opId, md),
     });
     // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
     // events into the card of the turn and the history rows; the follow-up window is R-13.
@@ -476,12 +481,29 @@ export function startBrain(): Brain {
       onFault: () => void agentLog.event('card.render', { ok: 0 }),
     });
     // The owner's "attach Genie's answer to the clipboard" request: one `clipboard_write_text`
-    // write for the one answer each finished turn shows, on the card or in Conversations.
+    // write for the one answer a finished orchestrator turn or a direct Genie send shows.
+    // `agentClient` (below) is declared after this, but `noteTurn` only reaches it once a write
+    // resolves, well after `agentClient` exists: an ordinary forward reference in a closure.
     const answerClipboard = createAnswerClipboard({
       enabled: () => workspaces.last()?.agent.copyGenieAnswer ?? true,
       write: async (text) => (await call('clipboard_write_text', { text })).result,
       whenClear: (fn) => arrivalGate.whenClear(fn),
-      note: (mogId, turn, outcome) => agentCard.show(mogId, { ...turn, copyNote: outcome }),
+      // The turn's own record takes the note (not a direct `agentCard.show`): the view then
+      // comes from `agent-run.ts`'s current state, not a stale snapshot, and `update()` there
+      // also reaches Conversations (`onChange`), not just the card.
+      noteTurn: (turnId, outcome) => agentClient.markCopied(turnId, outcome),
+      // The direct path has no `AgentTurnView`: a small blurb under the answer, cleared after
+      // the same 2 s the card's note shows for (`copy-answer-note.tsx`).
+      noteDirect: (mogId, opId, outcome) => {
+        const noteId = `copy-note:${opId}`;
+        const stack = stackFor(mogId);
+        stack.add({
+          id: noteId,
+          text: outcome === 'copied' ? 'Copied' : "Couldn't copy",
+          completed: true,
+        });
+        setTimeout(() => stack.add({ id: noteId, text: '', completed: true }), 2_000);
+      },
       // No new telemetry span (ADR 0079's closed set is shared with the Rust gate): a failed
       // clipboard write is a card-render-adjacent fault, the same bucket `agentCard` uses above.
       onFault: () => void agentLog.event('card.render', { ok: 0 }),
@@ -529,10 +551,10 @@ export function startBrain(): Brain {
           ...(turnId !== undefined && isStale ? { isStale } : {}),
         });
       },
-      showTurn: (mogId, view) => {
-        agentCard.show(mogId, view);
-        answerClipboard.onTurn(mogId, view);
-      },
+      showTurn: (mogId, view) => agentCard.show(mogId, view),
+      // H1: `showTurn` can fire mid-settle (before the late pulls, `summarise` and `syncParts`
+      // finish); `finished` is the one point the view is final, and only for an answered turn.
+      finished: (mogId, view) => answerClipboard.onTurnFinished(mogId, view),
       dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
