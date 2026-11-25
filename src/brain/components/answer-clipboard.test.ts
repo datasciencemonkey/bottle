@@ -82,10 +82,23 @@ describe('createAnswerClipboard: onTurnFinished (the orchestrator path, H1)', ()
     for (const result of ['too_large', 'unsupported'] as const) {
       const { deps, turnNotes } = fakeDeps({ write: async () => result });
       createAnswerClipboard(deps).onTurnFinished(MOG, turn());
-      await Promise.resolve();
-      await Promise.resolve();
+      for (let i = 0; i < 4; i++) await Promise.resolve();
       expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'failed' }]);
     }
+  });
+
+  it('falls back to plain text when the HTML copy is too large', async () => {
+    const calls: Array<string | undefined> = [];
+    const { deps, turnNotes } = fakeDeps({
+      write: async (_text: string, html?: string) => {
+        calls.push(html === undefined ? 'text' : 'html');
+        return html === undefined ? 'written' : 'too_large';
+      },
+    });
+    createAnswerClipboard(deps).onTurnFinished(MOG, turn());
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(turnNotes[0]).toEqual({ turnId: 't1', outcome: 'copied' });
+    expect(calls.at(-1)).toBe('text');
   });
 
   it('reports "failed" and calls onFault when the write throws, never with the answer text', async () => {
@@ -291,7 +304,7 @@ describe('createAnswerClipboard: the ADR 0124 amendment (html plus the "Copy Mar
         ],
       }),
     );
-    await Promise.resolve();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
     expect(writes).toEqual(['Revenue grew **a lot**.']);
     expect(htmls).toEqual([undefined]);
     expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);

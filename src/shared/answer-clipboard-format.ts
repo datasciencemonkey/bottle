@@ -307,5 +307,10 @@ export function markdownToPlainText(md: string): string {
 /** Both clipboard forms of one answer, for `clipboard_write_text { text, html }` (ADR 0124
  * amendment). `trust` decides which links of `html` are clickable; `text` keeps every link. */
 export function formatAnswerForClipboard(md: string, trust: LinkTrust): AnswerClipboardPayload {
-  return { text: markdownToPlainText(md), html: markdownToHtml(md, trust) };
+  // `<meta charset="utf-8">` so a Mac app that reads public.html never guesses a legacy
+  // encoding for em-dashes, currency signs or accented names (review of ADR 0124 amendment).
+  return {
+    text: markdownToPlainText(md),
+    html: `<meta charset="utf-8">${markdownToHtml(md, trust)}`,
+  };
 }

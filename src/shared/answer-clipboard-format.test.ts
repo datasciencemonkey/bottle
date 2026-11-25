@@ -139,4 +139,10 @@ describe('formatAnswerForClipboard', () => {
     expect(out.text).toBe('Hi');
     expect(out.html).toContain('<strong>Hi</strong>');
   });
+
+  it('declares UTF-8, so em-dashes and accents paste intact', () => {
+    expect(
+      formatAnswerForClipboard('Café — 5 €', NO_LINKS).html.startsWith('<meta charset="utf-8">'),
+    ).toBe(true);
+  });
 });

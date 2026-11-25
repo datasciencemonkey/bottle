@@ -91,17 +91,23 @@ export function createAnswerClipboard(deps: AnswerClipboardDeps): AnswerClipboar
     html: string | undefined,
     note: (outcome: CopyOutcome | undefined) => void,
   ): void => {
-    deps.write(text, html).then(
-      (outcome) => {
-        note(outcome === 'written' ? 'copied' : 'failed');
-        setTimeout(() => note(undefined), NOTE_MS);
-      },
-      () => {
-        deps.onFault?.();
-        note('failed');
-        setTimeout(() => note(undefined), NOTE_MS);
-      },
-    );
+    deps
+      .write(text, html)
+      // HTML about doubles the bytes: an answer past the cap still copies as plain text.
+      .then((outcome) =>
+        outcome === 'too_large' && html !== undefined ? deps.write(text) : outcome,
+      )
+      .then(
+        (outcome) => {
+          note(outcome === 'written' ? 'copied' : 'failed');
+          setTimeout(() => note(undefined), NOTE_MS);
+        },
+        () => {
+          deps.onFault?.();
+          note('failed');
+          setTimeout(() => note(undefined), NOTE_MS);
+        },
+      );
   };
   /** Copy `text`/`html` once for `key` (the once-per-answer auto-copy), gated on the toggle. */
   const copyOnce = (
