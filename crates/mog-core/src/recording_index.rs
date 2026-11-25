@@ -14,6 +14,7 @@
 //! never reaches this table: it is not in `catalog::STATEMENTS`, so `exec` and `mem_local_exec`
 //! never see it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -68,6 +69,13 @@ pub trait RecordingIndexStore: Send + Sync {
     fn hide(&self, name: &str, now_ms: i64) -> CoreResult<()>;
     /// The visible rows (`hidden = 0`) of `profile`, newest first.
     fn list(&self, profile: &str) -> CoreResult<Vec<RecordingIndexRow>>;
+    /// The hidden (`hidden = 1`) names of `profile` (Opus review round 2, M1/M2): the fast and
+    /// reconcile paths filter the live/active/in-flight overlays and the final reply by this
+    /// set directly, rather than by what [`Self::list`] does *not* contain — the difference
+    /// matters when this store has no rows for a reason that is not "nothing is hidden"
+    /// (`NoRecordingIndex`, or a transient read error), where that would read as everything
+    /// hidden instead of nothing.
+    fn hidden_names(&self, profile: &str) -> CoreResult<HashSet<String>>;
     /// Settings -> Wipe "everything": clear every row. Answers the number removed.
     fn wipe_everything(&self) -> CoreResult<u64>;
     /// Settings -> Wipe by age: rows that started strictly before `before_ms`.
@@ -89,6 +97,9 @@ impl RecordingIndexStore for NoRecordingIndex {
     }
     fn list(&self, _profile: &str) -> CoreResult<Vec<RecordingIndexRow>> {
         Ok(Vec::new())
+    }
+    fn hidden_names(&self, _profile: &str) -> CoreResult<HashSet<String>> {
+        Ok(HashSet::new())
     }
     fn wipe_everything(&self) -> CoreResult<u64> {
         Ok(0)
@@ -186,6 +197,25 @@ impl RecordingIndexStore for SqlRecordingIndex {
                     on_device_only: on_device_only != 0,
                     updated_at_ms: r.get("updatedAtMs")?,
                 });
+            }
+            Ok(out)
+        })
+    }
+
+    fn hidden_names(&self, profile: &str) -> CoreResult<HashSet<String>> {
+        let s = Self::stmt("recording.hidden_names")?;
+        let values = catalog::check_params(s.params, &json!({ "profile": profile }))?;
+        self.store.with_conn(|c| {
+            let mut st = c.prepare_cached(s.sql)?;
+            for (name, value) in &values {
+                if let Some(i) = st.parameter_index(&format!(":{name}"))? {
+                    st.raw_bind_parameter(i, value.clone())?;
+                }
+            }
+            let mut rows = st.raw_query();
+            let mut out = HashSet::new();
+            while let Some(r) = rows.next()? {
+                out.insert(r.get("name")?);
             }
             Ok(out)
         })
@@ -343,6 +373,22 @@ mod tests {
             .upsert(&row("rec-1", "home", RecordingStatus::Failed, 3))
             .unwrap();
         assert!(index.list("home").unwrap().is_empty());
+    }
+
+    #[test]
+    fn hidden_names_reports_only_what_is_hidden() {
+        let dir = TempDir::new("case");
+        let index = SqlRecordingIndex::new(test_store(dir.path()));
+        index
+            .upsert(&row("rec-1", "home", RecordingStatus::Failed, 1))
+            .unwrap();
+        index
+            .upsert(&row("rec-2", "home", RecordingStatus::Done, 1))
+            .unwrap();
+        assert!(index.hidden_names("home").unwrap().is_empty());
+        index.hide("rec-1", 2).unwrap();
+        let hidden = index.hidden_names("home").unwrap();
+        assert_eq!(hidden, HashSet::from(["rec-1".to_owned()]));
     }
 
     #[test]

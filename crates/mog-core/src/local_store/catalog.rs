@@ -1638,6 +1638,18 @@ const RECORDING_LIST: Stmt = Stmt {
     access: Access::Core,
 };
 
+/// The hidden names of one profile (Opus review round 2, M1/M2): `recording_list`'s fast and
+/// reconcile paths both need the hidden set directly, not just the visible rows `RECORDING_LIST`
+/// answers, so a store error or a store with no rows at all (`NoRecordingIndex`) never has to be
+/// read as "every name is hidden."
+const RECORDING_HIDDEN_NAMES: Stmt = Stmt {
+    id: "recording.hidden_names",
+    sql: "SELECT name FROM recording WHERE profile = :profile AND hidden = 1",
+    params: &[RECORDING_PROFILE],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
 /// `recording_delete` (CAP-10d): local and instant, no network. It only ever sets `hidden`; the
 /// local audio and sidecar go through [`super::super::recording_index`]'s own call to
 /// [`crate::recording_cloud::contract::LocalAudio::delete`], not SQL.
@@ -1678,6 +1690,7 @@ const RECORDING_WIPE_BEFORE: Stmt = Stmt {
 pub const RECORDING: &[Stmt] = &[
     RECORDING_UPSERT,
     RECORDING_LIST,
+    RECORDING_HIDDEN_NAMES,
     RECORDING_HIDE,
     RECORDING_WIPE_EVERYTHING,
     RECORDING_WIPE_BEFORE,

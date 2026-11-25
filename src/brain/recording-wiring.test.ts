@@ -359,6 +359,13 @@ describe('recording wiring (brain, ADR 0103)', () => {
     const t = setup({ enabled: true, consentAck: true });
     let release: (v: RecSummary[]) => void = () => undefined;
     const old = { id: 'old', name: '2026-11-24_1600', startedAt: 1, durationS: 0 };
+    const newRow: RecSummary = {
+      id: 'new',
+      name: '2026-11-24_1741',
+      startedAt: 2,
+      durationS: 0,
+      status: 'uploading',
+    };
     t.fake.api.list
       .mockImplementationOnce(
         () =>
@@ -366,9 +373,10 @@ describe('recording wiring (brain, ADR 0103)', () => {
             release = r;
           }),
       )
-      .mockImplementationOnce(async () => [
-        { id: 'new', name: '2026-11-24_1741', startedAt: 2, durationS: 0, status: 'uploading' },
-      ]);
+      .mockImplementationOnce(async () => [newRow])
+      // The background reconcile that the second `recordings.ready`'s fast read chains (B1):
+      // same row, so this test stays about the stale-reply guard, not the reconcile itself.
+      .mockImplementationOnce(async () => [newRow]);
     t.click({ action: 'recordings.ready' });
     await flush();
     t.click({ action: 'recordings.ready' });
@@ -896,6 +904,40 @@ describe('recording wiring (brain, ADR 0103)', () => {
     t.click({ action: 'recordings.delete', id: 'r2' });
     await flush();
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeDefined();
+  });
+
+  it('[REC-B2] a job event for an id this brain never tracked before does not notify or reconcile (Opus review round 2, defense in depth)', async () => {
+    // Rust no longer emits `on_job` from `reconcile` itself (the IPC reply already carries
+    // every row); this is the brain's own backstop in case anything else ever does, so a
+    // first-ever sighting of an id through a live event, already `done`, is never read as "it
+    // just finished."
+    const t = setup();
+    const before = t.fake.api.list.mock.calls.length;
+    t.fake.pushJob({ id: 'brand-new', status: 'done' });
+    await flush();
+    expect(t.notify).not.toHaveBeenCalled();
+    expect(t.mood.ready).not.toHaveBeenCalled();
+    // The unknown-row branch still refreshes the list (unrelated to the terminal-status
+    // guard above): that part of the behavior is unchanged.
+    expect(t.fake.api.list.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('[REC-L1] a later job event for a removed id never puts the row back (Opus review round 2)', async () => {
+    // The fake backend does not model `hidden` itself (`delete` is a no-op stub, and `list`
+    // keeps answering its fixed rows): this is exactly what makes a good test for the brain's
+    // own guard, since a straggler event for 'r2' would otherwise update it right back in,
+    // same as it would for any other known row.
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    t.click({ action: 'recordings.delete', id: 'r2' });
+    await flush();
+    t.fake.pushJob({ id: 'r2', status: 'done' });
+    await flush();
+    const row = t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows.find((r) => r.id === 'r2');
+    expect(row?.status).toBe('failed'); // r2's original status: untouched by the ignored event
+    expect(t.notify).not.toHaveBeenCalled();
+    expect(t.mood.ready).not.toHaveBeenCalled();
   });
 
   it('[REC-H12] a job that finishes notifies once and shows the MOG answer-ready moment', async () => {

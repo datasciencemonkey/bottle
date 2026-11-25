@@ -857,6 +857,7 @@ impl CloudAdapter {
         root: &str,
         active: &HashSet<String>,
         volume_unreadable: bool,
+        hidden: &HashSet<String>,
         mut out: Vec<RecordingSummary>,
     ) -> Vec<RecordingSummary> {
         let live: HashMap<String, LiveStatus> = self
@@ -897,7 +898,10 @@ impl CloudAdapter {
             .map(|(_, m)| m.clone())
             .collect();
         for m in &ends {
-            if !out.iter().any(|r| r.name == m.name) && !local.contains_key(&m.name) {
+            if !out.iter().any(|r| r.name == m.name)
+                && !local.contains_key(&m.name)
+                && !hidden.contains(&m.name)
+            {
                 out.extend(summary_of(m));
             }
         }
@@ -909,6 +913,7 @@ impl CloudAdapter {
             if out.iter().any(|r| &r.name == name)
                 || self.in_flight(name)
                 || live.contains_key(name)
+                || hidden.contains(name)
             {
                 continue;
             }
@@ -968,6 +973,12 @@ impl CloudAdapter {
                 .then(b.name.cmp(&a.name))
         });
         out
+    }
+
+    /// The hidden names of `profile` (Opus review round 2, M1/M2), or an empty set on a read
+    /// error: fail open, so a transient store fault never makes a row disappear.
+    fn hidden_names(&self, profile: &str) -> HashSet<String> {
+        self.index.hidden_names(profile).unwrap_or_default()
     }
 }
 
@@ -1202,11 +1213,13 @@ impl RecordingCloud for CloudAdapter {
             })
             .collect();
         let out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
+        let hidden = self.hidden_names(profile.as_str());
         Ok(self.merge_overlays(
             profile.as_str(),
             Self::root(storage),
             &active,
             volume_unreadable,
+            &hidden,
             out,
         ))
     }
@@ -1219,7 +1232,15 @@ impl RecordingCloud for CloudAdapter {
         let rows = self.index.list(profile.as_str()).unwrap_or_default();
         let out: Vec<RecordingSummary> = rows.iter().filter_map(index_row_summary).collect();
         let active = self.local.active();
-        Ok(self.merge_overlays(profile.as_str(), Self::root(storage), &active, false, out))
+        let hidden = self.hidden_names(profile.as_str());
+        Ok(self.merge_overlays(
+            profile.as_str(),
+            Self::root(storage),
+            &active,
+            false,
+            &hidden,
+            out,
+        ))
     }
 
     fn reconcile(
@@ -1227,38 +1248,26 @@ impl RecordingCloud for CloudAdapter {
         profile: &ProfileName,
         storage: &RecordingStorage,
     ) -> RecordingResult<Vec<RecordingSummary>> {
-        let before: HashMap<String, crate::recording_index::RecordingIndexRow> = self
-            .index
-            .list(profile.as_str())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| (r.name.clone(), r))
-            .collect();
         let out = RecordingCloud::list(self, profile, storage)?;
         let now = (self.now_ms)();
         for s in &out {
             let row = summary_to_index_row(profile.as_str(), s, now);
+            // Upsert only: the reply itself already carries every row, so a second
+            // `on_job` emit here is redundant, and on an index with no prior rows at all
+            // (every name "changed" against an empty "before" snapshot) it was a storm —
+            // one notice and one more reconcile per existing recording (Opus review round 2,
+            // B2).
             let _ = self.index.upsert(&row);
-            let changed = before
-                .get(&s.name)
-                .is_none_or(|b| b.status != row.status || b.duration_s != row.duration_s);
-            if changed {
-                (self.on_job)(s);
-            }
         }
         // `list` itself does not know about `hidden` (it is purely an index concept): filter
-        // the rows it just upserted by what the index still shows as visible, so a row the
-        // user removed stays gone even though the volume still has it (never un-hide).
-        let visible: HashSet<String> = self
-            .index
-            .list(profile.as_str())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| r.name)
-            .collect();
+        // the rows it just upserted by the hidden set directly (Opus review round 2, M1), not
+        // by what `index.list` happens to answer right now — a store that cannot open, or has
+        // no rows of its own (`NoRecordingIndex`), must read as "nothing is hidden," never as
+        // "everything is," which an inverted, `list`-sourced filter could not tell apart.
+        let hidden = self.hidden_names(profile.as_str());
         Ok(out
             .into_iter()
-            .filter(|s| visible.contains(&s.name))
+            .filter(|s| !hidden.contains(&s.name))
             .collect())
     }
 
@@ -1599,6 +1608,123 @@ mod tests {
             kind: RecordingStorageKind::Volume,
             root: VolumePath::try_from("/Volumes/main/team/audio".to_owned()).unwrap(),
         }
+    }
+
+    /// A fixed [`crate::recording_index::RecordingIndexStore`]: `visible` rows and a `hidden`
+    /// name set, kept independent (unlike the real SQL, which derives one from the other) so a
+    /// test can put a name only in `hidden`, with no row in `visible` at all.
+    #[derive(Default)]
+    struct FakeIndex {
+        hidden: HashSet<String>,
+    }
+    impl crate::recording_index::RecordingIndexStore for FakeIndex {
+        fn upsert(&self, _row: &crate::recording_index::RecordingIndexRow) -> CoreResult<()> {
+            Ok(())
+        }
+        fn hide(&self, _name: &str, _now_ms: i64) -> CoreResult<()> {
+            Ok(())
+        }
+        fn list(
+            &self,
+            _profile: &str,
+        ) -> CoreResult<Vec<crate::recording_index::RecordingIndexRow>> {
+            Ok(Vec::new())
+        }
+        fn hidden_names(&self, _profile: &str) -> CoreResult<HashSet<String>> {
+            Ok(self.hidden.clone())
+        }
+        fn wipe_everything(&self) -> CoreResult<u64> {
+            Ok(0)
+        }
+        fn wipe_before(&self, _before_ms: i64) -> CoreResult<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn reconcile_still_answers_rows_with_no_index_wired() {
+        // Opus review round 2, M1: `NoRecordingIndex` (the default until the host wires a real
+        // one in) must never read as "every name is hidden" — the filter has to fail open.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.reconcile(&p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+    }
+
+    #[test]
+    fn reconcile_upserts_but_never_emits_on_job_itself() {
+        // Opus review round 2, B2: the reply already carries every row, so a second `on_job`
+        // emit inside `reconcile` was redundant — and on an index with no prior rows at all, a
+        // notify-and-reconcile storm, once per existing recording.
+        let name = "2026-11-19_0905";
+        let jobs = Arc::new(Mutex::new(Vec::new()));
+        let j = jobs.clone();
+        let http = Arc::new(ScriptedHttp::new());
+        http.json(
+            "files.list_directory",
+            404,
+            serde_json::json!({"error_code":"NOT_FOUND"}),
+        );
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        let a = CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(FakeLocal {
+                active: HashSet::from([name.to_owned()]),
+                ..Default::default()
+            }),
+            Arc::new(move |s: &RecordingSummary| j.lock().unwrap().push(s.clone())),
+            Arc::new(|| 1_795_100_700_000i64),
+        );
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.reconcile(&p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(
+            jobs.lock().unwrap().is_empty(),
+            "reconcile must not emit on_job itself"
+        );
+    }
+
+    #[test]
+    fn list_fast_never_shows_a_hidden_name_even_with_leftover_local_audio() {
+        // Opus review round 2, M2: best-effort local delete can leave files behind
+        // (`CloudAdapter::delete` never treats that as an error), so `local.names()` can still
+        // report a name the index already marked hidden. The overlay must skip it, not bring
+        // it back as "not uploaded".
+        let name = "2026-11-19_0905";
+        let http = Arc::new(ScriptedHttp::new());
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        let a = CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(FakeLocal {
+                names: vec![(name.to_owned(), 1)],
+                ..Default::default()
+            }),
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+        .with_index(Arc::new(FakeIndex {
+            hidden: HashSet::from([name.to_owned()]),
+        }));
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.list_fast(&p, &fake_storage()).unwrap();
+        assert!(rows.is_empty(), "{rows:?}");
     }
 
     #[test]

@@ -1088,6 +1088,9 @@ mod tests {
                 .cloned()
                 .collect())
         }
+        fn hidden_names(&self, _profile: &str) -> CoreResult<std::collections::HashSet<String>> {
+            Ok(std::collections::HashSet::new())
+        }
         fn wipe_everything(&self) -> CoreResult<u64> {
             Ok(0)
         }

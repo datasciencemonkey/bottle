@@ -449,6 +449,12 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   };
 
   let recOn = false;
+  /** Opus review round 2 (B1): one background reconcile per launch, from `recordings.ready`. */
+  let reconciled = false;
+  /** Opus review round 2 (L1): ids removed in this session. A late `recording.job` for one of
+   * them (a straggler queued before the delete, or from an in-flight worker) is ignored
+   * outright, never re-added to `rows`. Kept for the life of the brain session; never cleared. */
+  const removedIds = new Set<string>();
   /** The name of the recording the device runs or just stopped (so Stop can select and read
    * its own row at once, "D" review 2026-11-25/26), or `undefined` with none known yet. */
   let currentName: string | undefined;
@@ -766,6 +772,9 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   }
 
   function onJob(j: RecJob): void {
+    // Opus review round 2 (L1): a straggler event for an id removed this session (queued
+    // before the delete, or from an in-flight worker wrapping up) never puts the row back.
+    if (removedIds.has(j.id)) return;
     const before = seen.get(j.id);
     seen.set(j.id, j.status);
     const row = rows.find((r) => r.id === j.id);
@@ -793,14 +802,20 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       resetCatchUpBackoff();
       scheduleCatchUp();
     } else void refreshList();
-    // A recording reaching a terminal status reconciles the index in the background (owner
-    // authorization 2026-11-25, part C): the row itself already updated above, so this does
-    // not block that; it just catches up the index and any other row the volume knows about.
-    if ((j.status === 'done' || j.status === 'failed') && before !== j.status)
-      void refreshList(true);
-    if (j.status === 'done' && before !== 'done') {
-      deps.notify?.(NOTES_READY_TEXT);
-      deps.mood?.ready();
+    // Opus review round 2 (B2): `before === undefined` means this is the first time this
+    // brain has ever heard of this id (freshly seen in a list reply, not a live transition
+    // just now), so the terminal-status branch below — the reconcile and the user-facing
+    // notice — only runs for an id this brain was already tracking.
+    if (before !== undefined) {
+      // A recording reaching a terminal status reconciles the index in the background (owner
+      // authorization 2026-11-25, part C): the row itself already updated above, so this does
+      // not block that; it just catches up the index and any other row the volume knows about.
+      if ((j.status === 'done' || j.status === 'failed') && before !== j.status)
+        void refreshList(true);
+      if (j.status === 'done' && before !== 'done') {
+        deps.notify?.(NOTES_READY_TEXT);
+        deps.mood?.ready();
+      }
     }
     if (detailId === j.id) void showDetail(j.id);
   }
@@ -920,10 +935,18 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         });
         break;
       case 'recordings.ready':
-        // The hub's first open (part G): reconcile once, so a first-run user (an empty index)
-        // sees the volume's existing recordings at once, and the index is written for the
-        // next open to read instantly.
-        void refreshList(true);
+        // Opus review round 2 (B1): the fast, index-only path paints first, every time the
+        // area shows, so first paint never waits on a reconcile's volume read. Only one
+        // reconcile runs per launch (part G: a first-run user with an empty index still sees
+        // the volume's existing recordings once that one background read lands, and the
+        // index is written so every later open is instant with no reconcile at all).
+        if (listed) publishList();
+        void refreshList().then(() => {
+          if (!reconciled) {
+            reconciled = true;
+            void refreshList(true);
+          }
+        });
         break;
       case 'recordings.detail':
         void showDetail(a.id);
@@ -936,7 +959,10 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         break;
       case 'recordings.delete':
         void api.delete(a.id).then(
-          () => refreshList(),
+          () => {
+            removedIds.add(a.id);
+            void refreshList();
+          },
           (e: unknown) => showError(e),
         );
         break;

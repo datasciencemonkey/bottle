@@ -62,6 +62,16 @@ impl RecordingIndexStore for MemRecordingIndex {
         });
         Ok(out)
     }
+    fn hidden_names(&self, profile: &str) -> CoreResult<HashSet<String>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(r, h)| r.profile == profile && *h)
+            .map(|(r, _)| r.name.clone())
+            .collect())
+    }
     fn wipe_everything(&self) -> CoreResult<u64> {
         let mut g = self.0.lock().unwrap();
         let n = g.len() as u64;

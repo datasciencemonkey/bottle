@@ -275,6 +275,11 @@ function Detail({
   const open = () => sendRecording({ action: 'recordings.open', id: row.id });
   const retry = () => sendRecording({ action: 'recordings.retry', id: row.id });
   const canDelete = rowCanDeleteOf({ ...row, status });
+  // Opus review round 2 (B3): a take that never reached Databricks has no copy there to
+  // reassure the user about; say so plainly instead of the usual "a copy stays" line.
+  const removeCopy = row.needsUpload
+    ? 'This audio has not reached Databricks. Removing it deletes it from this Mac for good.'
+    : 'Removes it from this Mac and from this list. A copy already in Databricks stays.';
   // The id the question is open for: another selection starts with no question open.
   const [confirmId, setConfirmId] = useState<string | undefined>();
   const confirming = confirmId === row.id;
@@ -333,7 +338,7 @@ function Detail({
           aria-label="Remove this recording?"
           data-recording-confirm
         >
-          <p>Removes it from this Mac and from this list. A copy already in Databricks stays.</p>
+          <p>{removeCopy}</p>
           <button
             type="button"
             className="rec-confirm-delete"

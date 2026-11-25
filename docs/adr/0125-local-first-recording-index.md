@@ -123,3 +123,46 @@ which this change keeps and reuses.
   It runs rarely (at most once per hub open, plus after a terminal status), so the dominant,
   user-visible win — every other `recording_list` call makes no network call at all — is
   unaffected; a parallel reconcile fetch is a follow-up, not blocked by anything here.
+
+## Addendum: Opus review round 2 (same day)
+
+A review of the first commit (56ad475a) found three blocking issues and two cheap, user-visible
+ones. All five are fixed in the same lane, in a second commit:
+
+1. **The hub's first open no longer waits on the reconcile.** `recordings.ready` used to call
+   `refreshList(true)` directly, so first paint (and every later reopen) waited on the volume
+   read. It now publishes whatever rows the brain already has, runs the plain fast
+   `refreshList()` first, and only after that resolves runs one reconcile — gated by a new
+   `reconciled` flag so it happens at most once per launch, not once per reopen.
+2. **`reconcile` no longer emits `on_job` for every row.** Its reply already carries every row
+   (the brain replaces `rows` wholesale); emitting `on_job` too meant that on the very first
+   reconcile of an index with no prior rows, every single existing recording read as "changed",
+   firing the "Your call notes are ready" notice once per already-done recording and starting a
+   second reconcile for each one. `reconcile` now only upserts. The brain's `onJob` also gained
+   its own backstop: the terminal-status branch (the notice, the mood cue, the one-more
+   reconcile) only runs when `seen.get(id)` was already defined — a job event is only ever a
+   "this just changed" signal for an id the brain was already tracking, never a first sighting.
+3. **The Remove confirm copy now depends on whether the take ever reached Databricks.** For an
+   on-device-only or upload-failed take (`needsUpload`, the same brain-derived flag `Upload all`
+   already uses), it reads "This audio has not reached Databricks. Removing it deletes it from
+   this Mac for good."; every other row keeps the original "a copy already in Databricks stays"
+   text. Reusing `needsUpload` (already computed correctly from the real backend fields) was
+   simpler and more accurate than adding a new raw field to the view-level `RecordingRow` just to
+   re-derive the same thing.
+4. **`reconcile`'s own "stay removed" filter, and `merge_overlays`' overlay rows, now use a real
+   hidden-name set (`RecordingIndexStore::hidden_names`), not an inverted reading of
+   `RecordingIndexStore::list`.** The old filter kept a row only if it appeared in
+   `index.list(profile)`'s visible rows; with `NoRecordingIndex` (the default until the host
+   wires a real index in) or a store that fails to open, that call always answers empty, so the
+   filter would have read as "every row is hidden" and blanked the whole reply. `hidden_names`
+   answers the true hidden set directly, defaults to empty on any read error (fail open: a
+   transient fault never hides a row), and `merge_overlays` now takes it too, so a removed name
+   with a stale `ends` entry or local audio `delete` could not fully clear (best effort, decision
+   6) never comes back as an "ends" or "not uploaded" row either.
+5. **A later `recording.job` for an id removed this session is ignored outright.** The brain
+   tracks `removedIds` (set once a `recordings.delete` call succeeds, kept for the session) and
+   `onJob` returns immediately for any id in it, before it can touch `rows` at all.
+
+Contract surface: unchanged (no new IPC commands or fields). `RecordingIndexStore` gains one
+method, `hidden_names`; its own one new catalog statement, `recording.hidden_names`, follows the
+same no-`mog_id` path as the rest of `catalog::RECORDING` (decision 2).
