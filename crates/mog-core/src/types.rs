@@ -923,14 +923,11 @@ impl JsonSchema for GenieCallBudget {
     }
 }
 
-/// The agent settings (ADR 0117 D1, D2).
+/// The agent settings (ADR 0117 D2). D1 "Combine across workspaces" is removed (ADR 0122
+/// amendment, owner decision 2026-11-24): cross-workspace data is always on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSettings {
-    /// D1 "Combine across workspaces". Default false.
-    pub cross_workspace_data: bool,
-    /// SEC-28b: an admin lock forces D1 off. Always false until slice 3.
-    pub cross_workspace_locked: bool,
     /// D2 "Genie calls per question": 5, 10 or 20. Default 10.
     pub genie_call_budget: GenieCallBudget,
     /// D9, ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default
@@ -943,10 +940,20 @@ pub struct AgentSettings {
     /// model on the home AI Gateway. Default false (local Parakeet).
     #[serde(default)]
     pub cloud_dictation: bool,
+    /// "Copy Genie answers to the clipboard" (Settings → Workspace): the brain copies each
+    /// finished Genie answer with `clipboard_write_text`. Default true. A file from before this
+    /// field reads as true.
+    #[serde(default = "default_copy_genie_answer")]
+    pub copy_genie_answer: bool,
 }
 
 /// The default of [`AgentSettings::clean_dictation`].
 pub fn default_clean_dictation() -> bool {
+    true
+}
+
+/// The default of [`AgentSettings::copy_genie_answer`].
+pub fn default_copy_genie_answer() -> bool {
     true
 }
 
@@ -987,7 +994,6 @@ pub struct AgentTurnAccepted {
     pub position: u32,
     pub new_session: bool,
     pub budget: GenieCallBudget,
-    pub cross_workspace: bool,
     pub catalog: Vec<AgentWorkspace>,
 }
 
@@ -1139,9 +1145,7 @@ pub enum AgentSessionEndReason {
     Quit,
     Wipe,
     ProfileChanged,
-    D1Changed,
     CatalogChanged,
-    Tainted,
     Idle,
 }
 
@@ -1196,7 +1200,6 @@ pub enum AgentSessionEvent {
 pub enum AgentRefusal {
     WorkspaceNotAvailable,
     BudgetReached,
-    CrossWorkspaceOff,
     InvalidArgs,
 }
 
@@ -1247,6 +1250,13 @@ pub enum AgentTurnEvent {
         turn_id: String,
         code: AgentRefusal,
         used: u32,
+    },
+    /// ADR 0122 amendment (owner decision 2026-11-24): a call to `workspace_id` signed out.
+    /// Bottle starts that workspace's browser sign-in (U2M OAuth) and retries the call once.
+    SigningIn {
+        turn_id: String,
+        /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
+        workspace_id: String,
     },
     Slow {
         turn_id: String,

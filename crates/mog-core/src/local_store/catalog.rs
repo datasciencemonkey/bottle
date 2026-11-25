@@ -1570,6 +1570,137 @@ pub fn find_consent(id: &str) -> Option<&'static ConsentStmt> {
     CONSENT.iter().find(|c| c.stmt.id == id)
 }
 
+// ---- recording (migration 0005; owner authorization 2026-11-25) ----------------------------
+//
+// The local recording index: metadata about each recording (its profile, its times, its
+// status), so the hub's Recordings list reads instantly with no network call. It carries no
+// `mog_id` (see the migration's header), so these statements run with no MEM-01 rule, through
+// `check_params` rather than `validate_params`. Rust only: `exec`, `find` and `mem_local_exec`
+// never see them, the same way `CONSENT` is kept out of `STATEMENTS`.
+
+const RECORDING_NAME: Param = req("name", text(128));
+const RECORDING_PROFILE: Param = req("profile", text(128));
+const RECORDING_STARTED_AT_MS: Param = req("startedAtMs", MS);
+const RECORDING_DURATION_S: Param = req(
+    "durationS",
+    ParamType::Int {
+        min: 0,
+        max: i64::MAX,
+    },
+);
+const RECORDING_STATUS: Param = req("status", CODE);
+const RECORDING_ERROR_KIND: Param = opt("errorKind", CODE);
+const RECORDING_ERROR_STAGE: Param = opt("errorStage", CODE);
+const RECORDING_ON_DEVICE_ONLY: Param = req("onDeviceOnly", BOOL);
+const RECORDING_UPDATED_AT_MS: Param = req("updatedAtMs", MS);
+
+/// Add or refresh one row at any status transition (start, upload progress, transcribing,
+/// writing notes, done, failed). It never writes `hidden`: a new row defaults to visible
+/// (`hidden = 0`, the column default), and a row the user removed keeps `hidden = 1` because
+/// this statement's `SET` list never names the column (owner rule: a removed row never comes
+/// back by itself).
+const RECORDING_UPSERT: Stmt = Stmt {
+    id: "recording.upsert",
+    sql: "INSERT INTO recording (name, profile, started_at_ms, duration_s, status, error_kind, \
+          error_stage, on_device_only, updated_at_ms) \
+          VALUES (:name, :profile, :startedAtMs, :durationS, :status, :errorKind, :errorStage, \
+          :onDeviceOnly, :updatedAtMs) \
+          ON CONFLICT (name) DO UPDATE SET profile = excluded.profile, \
+          started_at_ms = excluded.started_at_ms, duration_s = excluded.duration_s, \
+          status = excluded.status, error_kind = excluded.error_kind, \
+          error_stage = excluded.error_stage, on_device_only = excluded.on_device_only, \
+          updated_at_ms = excluded.updated_at_ms",
+    params: &[
+        RECORDING_NAME,
+        RECORDING_PROFILE,
+        RECORDING_STARTED_AT_MS,
+        RECORDING_DURATION_S,
+        RECORDING_STATUS,
+        RECORDING_ERROR_KIND,
+        RECORDING_ERROR_STAGE,
+        RECORDING_ON_DEVICE_ONLY,
+        RECORDING_UPDATED_AT_MS,
+    ],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The visible rows (`hidden = 0`) of one profile, newest first, for the fast `recording_list`.
+const RECORDING_LIST: Stmt = Stmt {
+    id: "recording.list",
+    sql: "SELECT name, profile, started_at_ms AS startedAtMs, duration_s AS durationS, status, \
+          error_kind AS errorKind, error_stage AS errorStage, \
+          on_device_only AS onDeviceOnly, updated_at_ms AS updatedAtMs \
+          FROM recording WHERE profile = :profile AND hidden = 0 \
+          ORDER BY started_at_ms DESC, name DESC",
+    params: &[RECORDING_PROFILE],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
+/// The hidden names of one profile (Opus review round 2, M1/M2): `recording_list`'s fast and
+/// reconcile paths both need the hidden set directly, not just the visible rows `RECORDING_LIST`
+/// answers, so a store error or a store with no rows at all (`NoRecordingIndex`) never has to be
+/// read as "every name is hidden."
+const RECORDING_HIDDEN_NAMES: Stmt = Stmt {
+    id: "recording.hidden_names",
+    sql: "SELECT name FROM recording WHERE profile = :profile AND hidden = 1",
+    params: &[RECORDING_PROFILE],
+    kind: Kind::Query,
+    access: Access::Core,
+};
+
+/// `recording_delete` (CAP-10d): local and instant, no network. It only ever sets `hidden`; the
+/// local audio and sidecar go through [`super::super::recording_index`]'s own call to
+/// [`crate::recording_cloud::contract::LocalAudio::delete`], not SQL.
+const RECORDING_HIDE: Stmt = Stmt {
+    id: "recording.hide",
+    sql: "UPDATE recording SET hidden = 1, updated_at_ms = :updatedAtMs WHERE name = :name",
+    params: &[req("name", text(128)), RECORDING_UPDATED_AT_MS],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// Settings -> Wipe "everything" (U9, MEM-33a): every row, with no age cutoff.
+const RECORDING_WIPE_EVERYTHING: Stmt = Stmt {
+    id: "recording.wipe_everything",
+    sql: "DELETE FROM recording",
+    params: &[],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// Settings -> Wipe by age: the rows that started strictly before the cutoff.
+const RECORDING_WIPE_BEFORE: Stmt = Stmt {
+    id: "recording.wipe_before",
+    sql: "DELETE FROM recording WHERE started_at_ms < :before",
+    params: &[req(
+        "before",
+        ParamType::Int {
+            min: 0,
+            max: i64::MAX,
+        },
+    )],
+    kind: Kind::Write,
+    access: Access::Core,
+};
+
+/// The recording index statements. Not in [`STATEMENTS`]: `check_params` (no `mogId` rule)
+/// validates them, never `validate`/`validate_params`.
+pub const RECORDING: &[Stmt] = &[
+    RECORDING_UPSERT,
+    RECORDING_LIST,
+    RECORDING_HIDDEN_NAMES,
+    RECORDING_HIDE,
+    RECORDING_WIPE_EVERYTHING,
+    RECORDING_WIPE_BEFORE,
+];
+
+/// The recording statement with this exact ID.
+pub fn find_recording(id: &str) -> Option<&'static Stmt> {
+    RECORDING.iter().find(|s| s.id == id)
+}
+
 /// The statement with this exact ID.
 pub fn find(id: &str) -> Option<&'static Stmt> {
     STATEMENTS.iter().find(|s| s.id == id)

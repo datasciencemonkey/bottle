@@ -8,7 +8,8 @@
  * - Any other count: the text of the model is the main answer when it has text, and the
  *   workspace answers fold under it.
  */
-import { openInDatabricksUrl } from './link-trust';
+import { bareHost, openInDatabricksUrl, type LinkTrust } from './link-trust';
+import type { AgentPartView, AgentTurnView } from './ipc';
 
 /** The text of a part whose answer the core withheld (a quarantine hit). */
 export const WITHHELD_TEXT = 'This answer was held back. It looked like it held instructions.';
@@ -51,6 +52,155 @@ export function foldedUnderLone(parts: readonly AnswerPart[]): Set<number> {
 
 /** The text of the link to the Genie One conversation of a workspace. */
 export const openGenieOneText = (workspace: string): string => `Open Genie One in ${workspace}`;
+
+// ---------- the owner's "attach Genie's answer to the clipboard" request ----------
+
+/** The `answer` section's markdown of a part's sections, if it has one. */
+function answerMdOf(sections: readonly { id: string; md?: string }[]): string | undefined {
+  return sections.find((s) => s.id === 'answer')?.md;
+}
+
+/** The `footer` section's workspace host of a part's sections, if it has one. */
+function footerHostOf(
+  sections: readonly { id: string; workspaceHost?: string }[],
+): string | undefined {
+  return sections.find((s) => s.id === 'footer')?.workspaceHost;
+}
+
+/**
+ * The [`AnswerPart`] of a live [`AgentPartView`]. Mirrors `answerPartOf` in
+ * `src/views/card/AgentTurnCard.tsx` (same rule, same `WITHHELD_TEXT` check): this copy takes no
+ * React or view import, so the brain's clipboard decision never pulls in the view's dependencies.
+ */
+function toAnswerPart(p: AgentPartView): AnswerPart {
+  return {
+    answered: true,
+    withheld: answerMdOf(p.sections) === WITHHELD_TEXT,
+    fromEarlier: p.fromEarlier === true,
+    workspace: p.workspace.name,
+  };
+}
+
+/** A fenced (```…```) or inline (`…`) code span: code is verbatim, never touched. */
+const FENCE = /(```[\s\S]*?```)/;
+const INLINE_CODE = /(`[^`\n]*`)/;
+
+/** A `[n]` marker right after another, with no separator: `[1][2]`. */
+const NEXT_MARKER = /^\[(\d+)\]/;
+/** A whole `[n]` marker, anchored both ends, to check one already matched elsewhere. */
+const WHOLE_MARKER = /^\[(\d+)\]$/;
+
+/**
+ * Strip a `[n]` citation marker from `text` only when `n` is one of `citationNumbers` (ADR 0122).
+ * Pasted outside Bottle a real citation marker has no footnote or footer link to point to, so it
+ * would read as a stray reference number, not real content. Everything else that merely looks
+ * like one — an array index (`array[1]`), a year (`[2024]`), a real Markdown link (`[1](url)` or
+ * `[1][ref]`) — is left alone: the number must be a known citation; the character right before
+ * the marker must not be a word character, and if it is `]`, that bracket must itself close a
+ * known citation's own marker (so adjacent markers, `[1][2]`, both strip, but anything else
+ * right before a `]`, word-adjacent or not, still blocks it); the marker must not be followed by
+ * `(`, or by a `[` that is not itself a known citation's own marker (the same rule, forward).
+ * With no citation numbers, nothing is stripped.
+ */
+export function stripCitationMarkers(text: string, citationNumbers: readonly number[]): string {
+  if (citationNumbers.length === 0) return text;
+  const nums = new Set(citationNumbers);
+  /** True when the `[n]` marker ending exactly at `end` is itself a known citation. */
+  const priorMarkerIsCitation = (prose: string, end: number): boolean => {
+    const start = prose.lastIndexOf('[', end - 2);
+    if (start < 0) return false;
+    const m = WHOLE_MARKER.exec(prose.slice(start, end));
+    return m !== null && nums.has(Number(m[1]));
+  };
+  const stripProse = (prose: string): string =>
+    prose.replace(
+      /([ \t]?)\[(\d+)\]/g,
+      (whole: string, lead: string, numStr: string, offset: number) => {
+        if (!nums.has(Number(numStr))) return whole;
+        // The character right before the bracket itself (not before `lead`): with a leading
+        // space that is always the space, so a space-separated marker is never blocked by this
+        // check. With no leading space, it is whatever truly touches the bracket.
+        const bracketAt = offset + lead.length;
+        const beforeBracket = prose[bracketAt - 1];
+        if (beforeBracket !== undefined) {
+          if (beforeBracket === ']') {
+            if (!priorMarkerIsCitation(prose, bracketAt)) return whole;
+          } else if (/\w/.test(beforeBracket)) {
+            return whole;
+          }
+        }
+        const after = prose.slice(offset + whole.length);
+        if (after.startsWith('(')) return whole;
+        if (after.startsWith('[')) {
+          const next = NEXT_MARKER.exec(after);
+          const nextIsCitation = next !== null && nums.has(Number(next[1]));
+          if (!nextIsCitation) return whole;
+        }
+        return '';
+      },
+    );
+  // Fenced code blocks first, then inline code spans inside what is left: both stay verbatim.
+  return text
+    .split(FENCE)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .split(INLINE_CODE)
+            .map((s, j) => (j % 2 === 1 ? s : stripProse(s)))
+            .join(''),
+    )
+    .join('');
+}
+
+/**
+ * The plain text a finished turn's card or Conversations reply actually shows, by the same rule
+ * the view draws by: the one Genie answer that {@link loneAnswerIndex} names, verbatim, when one
+ * applies; only otherwise the model's combined note (its `[n]` citation markers stripped, since
+ * they are junk once pasted outside Bottle). `undefined` when the turn has no answer to show
+ * (every call withheld, or the model's note was hidden by quarantine): the caller must never copy
+ * then.
+ */
+export function finishedAnswerText(
+  turn: Pick<AgentTurnView, 'summary' | 'parts'>,
+): string | undefined {
+  const lone = loneAnswerIndex(turn.parts.map(toAnswerPart));
+  if (lone >= 0) {
+    const md = answerMdOf(turn.parts[lone]?.sections ?? []);
+    return md !== undefined && md.trim() !== '' ? md : undefined;
+  }
+  if (!turn.summary) return undefined;
+  const md = turn.summary.md;
+  if (md.trim() === '') return undefined;
+  const citationNumbers = (turn.summary.citations ?? []).map((c) => c.n);
+  return stripCitationMarkers(md, citationNumbers);
+}
+
+/**
+ * The link trust rule for a clipboard copy of a turn's answer (ADR 0124 amendment, the HTML
+ * clipboard format): the same rule the card and hub Conversations use to decide which links of
+ * the answer are clickable (`AgentTurnCard.tsx`'s `trust`/`summaryTrust`).
+ * - A lone Genie answer (see {@link loneAnswerIndex}): only that part's own workspace host.
+ * - Otherwise (the model's combined note): every workspace host of this turn's parts and
+ *   citations, so a link the model cited to any of them is trusted.
+ * With no host at all, nothing is trusted: a clipboard copy never guesses a workspace.
+ */
+export function answerLinkTrust(turn: Pick<AgentTurnView, 'parts' | 'summary'>): LinkTrust {
+  const lone = loneAnswerIndex(turn.parts.map(toAnswerPart));
+  if (lone >= 0) {
+    return {
+      profileHost: footerHostOf(turn.parts[lone]?.sections ?? []) ?? '',
+      allowedAppUrls: [],
+    };
+  }
+  const hosts = [
+    ...turn.parts.map((p) => footerHostOf(p.sections) ?? ''),
+    ...(turn.summary?.citations ?? []).map((c) => c.workspaceHost ?? ''),
+  ]
+    .map(bareHost)
+    .filter((h) => h !== '');
+  return { profileHost: '', allowedAppUrls: [...new Set(hosts)].map((h) => `https://${h}`) };
+}
 
 /** A workspace answer that a turn holds: where its Genie One link comes from. */
 export interface FooterSource {

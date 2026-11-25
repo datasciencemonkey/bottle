@@ -22,6 +22,14 @@
 //! - **CAP-10a.** When system audio has had no block with sound for 5 s, `system_audio` is
 //!   `silent_or_denied` (a denied System Audio Recording permission gives digital silence on
 //!   macOS). Sound clears it. The recording never stops for it.
+//! - **CAP-10c.** [`RecordingSession::system_state`] has no latch: `system_audio` leaves
+//!   `unavailable` the moment the device's own status ([`SystemAudioStatus::get`]) says `Live`,
+//!   even when that is a late adoption of a slow tap build long after `open` itself gave up
+//!   (`audio_device::system`). A tap that stays genuinely unavailable (no backend, a refused
+//!   permission) just never reports `Live`, so this never fires for it. [`RecordingSession::tick`]
+//!   resets the CAP-10a silence clock ([`RecordingTap::note_system_live`]) at that same moment,
+//!   so a late adoption reads `ok` (or a fresh 5 s grace), not an instant `silent_or_denied`
+//!   from a silence window that elapsed while the tap was still unavailable.
 //!
 //! Time: the length preset and the 5 s check run on the injected [`MonotonicClock`];
 //! `started_at_ms` / `ends_at_ms` are wall clock epoch ms for the UI. Nothing here logs audio,
@@ -193,6 +201,24 @@ pub enum Snapshot {
     Recording(ActiveInfo),
 }
 
+/// Per-step stop timings (owner review 2026-11-26, "7"), content-free, ms each. `capture_stop_ms`
+/// is `capture.stop` as a whole: it closes the system audio device, then the mic, in that
+/// order (R2 does not expose a per-device split yet, so this is one bucket, not two).
+/// `handoff_ms` is the hand-off call into the cloud side's own dispatch (normally a quick
+/// spawn, not the upload itself, which runs on its own thread afterward).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopTimings {
+    /// `capture.stop`: releases the R2 lease, which closes the system audio device and the mic.
+    pub capture_stop_ms: u64,
+    /// [`RecordingTap::disarm`].
+    pub disarm_ms: u64,
+    /// The writer thread's `join`: flushes and closes the open part.
+    pub writer_join_ms: u64,
+    /// The hand-off's own dispatch call (not the upload it starts).
+    pub handoff_ms: u64,
+}
+
 /// A finished recording, handed to the cloud side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinishedRecording {
@@ -212,10 +238,28 @@ pub struct FinishedRecording {
     pub cause: StopCause,
     /// The system audio state at the stop.
     pub system_audio: SystemAudioState,
+    /// CAP-10c diagnostic: ms the last system audio `open` took to resolve (live, refused, or
+    /// a late worker adoption); 0 when no system audio open ever ran. No audio, no path.
+    pub system_open_ms: u64,
+    /// CAP-10c diagnostic: that resolution took longer than the timeout in force for it.
+    pub system_open_timed_out: bool,
+    /// The real sample rate of the system audio device's last build (owner review 2026-11-26,
+    /// "11"), 0 if none ever built.
+    pub system_sample_rate_hz: u32,
+    /// The transport kind of the device that lent the system audio clock, classified
+    /// content-free (owner review 2026-11-26, "9"): never a device name.
+    pub system_device_kind: &'static str,
+    /// How many times the system audio stream was rebuilt after a device-change fault within
+    /// this recording's one open (owner review 2026-11-26, "2").
+    pub system_rebuilds: u32,
+    /// Per-step stop timings (owner review 2026-11-26, "7").
+    pub stop_timings: StopTimings,
     /// The home profile that `recording_start` named (`None` for a start without one).
     pub profile: Option<String>,
     /// The per-recording instructions of `recording_start` (`None`: use the preset).
     pub instructions: Option<String>,
+    /// What reached the writer, as counts only (the host keeps the last one for a check).
+    pub capture: super::tap::CaptureCounts,
 }
 
 /// The job context of one recording, from `recording_start` (see [`RecordingSession::set_job`]).
@@ -386,6 +430,11 @@ pub struct RecordingSession {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Ms since `started` (owner review 2026-11-26, "7"): content-free, for [`StopTimings`].
+fn ms_since(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn random_id() -> String {
@@ -638,27 +687,48 @@ impl RecordingSession {
             active
         };
         let _finishing = FinishingGuard { session: self };
+        // CAP-10c: a mic loss or a panic stop has already torn the lease (and so the device)
+        // down by the time this runs, so the device's own status no longer reflects this
+        // recording's state (it may already read `Off`, or whatever the fault left behind) —
+        // use the last state the ticker actually saw instead of re-querying it. For every
+        // other cause, read it fresh, and before `capture.stop` below closes the device (that
+        // close also sets the device's own status to `Off`, which `system_state` would then
+        // read back as this recording's own `unavailable` — this recording's state is
+        // whatever it was the moment it stopped, not "closed because it just stopped").
+        let system_audio = if matches!(cause, StopCause::MicLost | StopCause::Panic) {
+            active.info.system_audio
+        } else {
+            self.system_state()
+        };
+        // Per-step stop timings (owner review 2026-11-26, "7"): `last-capture.json` shows
+        // where the time actually went, instead of one opaque `capture.stop` call.
+        let t_capture_stop = std::time::Instant::now();
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
             let _ = self.capture.stop(active.info.lease);
         }
+        let capture_stop_ms = ms_since(t_capture_stop);
+        let t_disarm = std::time::Instant::now();
         self.tap.disarm();
+        let disarm_ms = ms_since(t_disarm);
         self.active(false);
         lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
-        let system_audio = self.system_state(&active.info);
+        let t_writer_join = std::time::Instant::now();
         let (parts, held) = match active.writer.join() {
             Ok(Ok(done)) => done,
             // A write error: hand off what was finished (the open part may be cut short).
             Ok(Err(_)) | Err(_) => (existing_parts(&active.dir), Vec::new()),
         };
+        let writer_join_ms = ms_since(t_writer_join);
         let mut parts = parts;
         let per_part = split_ranges(&parts, &held);
         for (part, ranges) in parts.iter_mut().zip(per_part) {
             part.held = ranges;
         }
         let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
+        let diagnostics = self.system.diagnostics();
         let rec = FinishedRecording {
             profile: job.profile,
             instructions: job.instructions,
@@ -670,8 +740,26 @@ impl RecordingSession {
             duration_ms,
             cause,
             system_audio,
+            system_open_ms: self.system.open_ms(),
+            system_open_timed_out: self.system.timed_out(),
+            system_sample_rate_hz: diagnostics.sample_rate_hz,
+            system_device_kind: diagnostics.device_kind.code(),
+            system_rebuilds: diagnostics.rebuilds,
+            // `handoff_ms` is filled in by the caller, once the hand-off call below actually
+            // returns: this struct does not know its own hand-off latency yet.
+            stop_timings: StopTimings {
+                capture_stop_ms,
+                disarm_ms,
+                writer_join_ms,
+                handoff_ms: 0,
+            },
+            capture: self.tap.counts(),
         };
         self.notify(&Snapshot::Idle);
+        // `stop_timings.handoff_ms` is 0 here on purpose: this call is a hand-off to another
+        // component (`PartsHandoff::finished`), which is the one place that can honestly time
+        // its own dispatch and, for the one implementation that writes `last-capture.json`
+        // (`HandoffSlot`, in `src-tauri`), fill that field in before writing.
         self.handoff.finished(rec.clone());
         Ok(rec)
     }
@@ -693,10 +781,13 @@ impl RecordingSession {
         lock(&self.state).finishing.clone()
     }
 
-    fn system_state(&self, info: &ActiveInfo) -> SystemAudioState {
-        if info.system_audio == SystemAudioState::Unavailable
-            || self.system.get() != SystemAudioAvailability::Live
-        {
+    /// The system audio state right now, from the device's own live status (CAP-10c: no latch
+    /// on the active info). A late-adopted tap (`SystemAudioDevice`'s worker setting `status`
+    /// to `Live` well after `open` itself gave up) is picked up here on the very next tick, the
+    /// same as any other status change: `Unavailable` is never sticky once the tap is really
+    /// open.
+    fn system_state(&self) -> SystemAudioState {
+        if self.system.get() != SystemAudioAvailability::Live {
             return SystemAudioState::Unavailable;
         }
         let quiet = self
@@ -721,9 +812,20 @@ impl RecordingSession {
             let _ = self.stop(StopCause::LengthReached);
             return None;
         }
-        let next = self.system_state(&active.info);
-        let changed = next != active.info.system_audio
-            && active.info.system_audio != SystemAudioState::Unavailable;
+        // CAP-10c: a late-adopted tap (the device itself going `Unavailable` -> `Live` well
+        // after the open call gave up, review of #593's ~8.6 s build) must not read as an
+        // instant `silent_or_denied` from a silence window that already elapsed while it was
+        // still unavailable. Reset the silence clock before `system_state` reads it, so this
+        // same tick sees `ok` (or a fresh 5 s grace), not a stale silence reading.
+        if active.info.system_audio == SystemAudioState::Unavailable
+            && self.system.get() == SystemAudioAvailability::Live
+        {
+            self.tap.note_system_live();
+        }
+        let next = self.system_state();
+        // CAP-10c: a late-adopted tap going `Unavailable` -> `Live` must reach the brain too,
+        // so this no longer excludes `Unavailable` from `changed` (that was the latch).
+        let changed = next != active.info.system_audio;
         if changed {
             active.info.system_audio = next;
         }

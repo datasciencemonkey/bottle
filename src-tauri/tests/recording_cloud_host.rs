@@ -49,8 +49,15 @@ fn rec(dir: &std::path::Path, id: &str, profile: Option<&str>, parts: usize) -> 
         duration_ms: 30_000,
         cause: StopCause::User,
         system_audio: SystemAudioState::Ok,
+        system_open_ms: 0,
+        system_open_timed_out: false,
+        system_sample_rate_hz: 0,
+        system_device_kind: "unknown",
+        system_rebuilds: 0,
+        stop_timings: Default::default(),
         profile: profile.map(str::to_owned),
         instructions: Some("Only action items.".into()),
+        capture: Default::default(),
     }
 }
 
@@ -583,5 +590,151 @@ fn rec_delete_proves_nothing_uploaded_only_from_the_first_part() {
         "part 01 went up and left"
     );
     assert!(!seam.never_uploaded("2026-12-01_0900"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A live hand-off over a volume that takes every write, with the job events it sends.
+fn live_handoff_ok() -> (
+    LiveHandoff,
+    Arc<Mutex<Vec<mog_core::types::RecordingSummary>>>,
+) {
+    use mog_core::clock::SimWallClock;
+    use mog_core::recording_cloud::cloud::{CloudDeps, RecordingCloudService};
+    use mog_core::recording_cloud::http::ScriptedHttp;
+    struct NoWait;
+    impl mog_core::http_transport::Pause for NoWait {
+        fn pause(&self, _d: Duration) {}
+    }
+    struct Ws;
+    impl mog_core::recording_cloud::cloud::WorkspaceInfo for Ws {
+        fn host_url(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("https://dbc-fake.cloud.databricks.com".into())
+        }
+        fn workspace_id(&self, _p: &str) -> mog_core::error::CoreResult<String> {
+            Ok("1".into())
+        }
+    }
+    let http = ScriptedHttp::new();
+    for _ in 0..10 {
+        http.empty("files.create_directory", 200);
+        http.empty("files.upload", 204);
+    }
+    http.empty("files.download", 404);
+    let service = Arc::new(RecordingCloudService::new(CloudDeps {
+        http: Arc::new(http),
+        workspace: Arc::new(Ws),
+        wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+        pause: Arc::new(NoWait),
+    }));
+    let settings = Arc::new(MemorySettingsStore::new(RecordingSettings {
+        enabled: true,
+        consent_ack: true,
+        storage: Some(
+            serde_json::from_value(serde_json::json!({"kind":"volume","root":"/Volumes/c/s/v"}))
+                .unwrap(),
+        ),
+        ..RecordingSettings::default()
+    }));
+    let jobs: Arc<Mutex<Vec<mog_core::types::RecordingSummary>>> = Arc::default();
+    let sink = jobs.clone();
+    let adapter = Arc::new(mog_core::recording_cloud::contract::CloudAdapter::new(
+        service,
+        settings.clone(),
+        Arc::new(mog_core::recording_cloud::contract::NoLocalAudio),
+        Arc::new(move |s: &mog_core::types::RecordingSummary| sink.lock().unwrap().push(s.clone())),
+        Arc::new(|| 1_795_100_700_000i64),
+    ));
+    let active = Arc::new(ActiveNames::default());
+    let fallback = PipelineHandoff::new(Arc::new(|_, _| {}), settings.clone(), active.clone());
+    (LiveHandoff::new(adapter, settings, fallback, active), jobs)
+}
+
+#[test]
+fn rec_parts_a_stop_with_no_audio_still_ends_the_job_so_the_row_never_vanishes() {
+    let d = temp("live-noaudio");
+    let (h, jobs) = live_handoff_ok();
+    h.started(&started(&d));
+    let mut done = rec(&d, "rec-1234", Some("fake-home"), 0);
+    done.name = "2026-11-20_0900".into();
+    h.finished(done);
+    assert!(!d.exists(), "the empty temp dir goes at once");
+    let mut last = None;
+    for _ in 0..300 {
+        last = jobs.lock().unwrap().last().cloned();
+        if last
+            .as_ref()
+            .is_some_and(|s| s.status == mog_core::types::RecordingStatus::Failed)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let last = last.expect("job events");
+    assert_eq!(
+        last.status,
+        mog_core::types::RecordingStatus::Failed,
+        "{last:?}"
+    );
+    assert_eq!(
+        last.error_kind,
+        Some(mog_core::types::RecordingErrorKind::AudioUnreadable)
+    );
+}
+
+#[test]
+fn rec_capture_check_file_holds_counts_only() {
+    let root = temp("capture-check");
+    let d = root.join("rec-1234");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut done = rec(&d, "rec-1234", Some("fake-home"), 0);
+    done.capture.mic_blocks = 7;
+    done.capture.first_system_ms = Some(42);
+    done.system_open_ms = 8_600;
+    done.system_open_timed_out = true;
+    // Owner review 2026-11-26, "9" and "11": the real sample rate and the device kind.
+    done.system_sample_rate_hz = 48_000;
+    done.system_device_kind = "bluetooth";
+    // "2": how many times this open's stream was rebuilt after a device-change fault.
+    done.system_rebuilds = 2;
+    // "7": per-step stop timings.
+    done.stop_timings = mog_core::recording_capture::session::StopTimings {
+        capture_stop_ms: 11,
+        disarm_ms: 1,
+        writer_join_ms: 3,
+        handoff_ms: 0,
+    };
+    bottle_lib::recording_host::write_capture_check(&root, &done).unwrap();
+    let text = std::fs::read_to_string(root.join("last-capture.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["capture"]["micBlocks"], 7);
+    // CAP-10c: enough to diagnose a late system audio open next time (#593 follow-up).
+    assert_eq!(v["capture"]["firstSystemMs"], 42);
+    assert_eq!(v["systemOpenMs"], 8_600);
+    assert_eq!(v["systemOpenTimedOut"], true);
+    assert_eq!(v["systemSampleRateHz"], 48_000);
+    assert_eq!(v["systemDeviceKind"], "bluetooth");
+    assert_eq!(v["systemRebuilds"], 2);
+    assert_eq!(v["stopTimings"]["captureStopMs"], 11);
+    assert_eq!(v["stopTimings"]["disarmMs"], 1);
+    assert_eq!(v["stopTimings"]["writerJoinMs"], 3);
+    assert_eq!(v["parts"], 0);
+    assert_eq!(v["cause"], "user");
+    for secret in [
+        "fake-home",
+        "2026-11-19_0905",
+        "Only action items",
+        "rec-1234",
+    ] {
+        assert!(!text.contains(secret), "no {secret} in {text}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(root.join("last-capture.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     let _ = std::fs::remove_dir_all(root);
 }

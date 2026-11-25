@@ -64,7 +64,6 @@ function accepted(turnId: string, over: Partial<AgentTurnAccepted> = {}): AgentT
     position: 0,
     newSession: true,
     budget: 10,
-    crossWorkspace: false,
     catalog: [SALES, FIN],
     ...over,
   };
@@ -126,6 +125,7 @@ function rig(opts: { real?: boolean } = {}) {
   const clock = createSimClock(1_000);
   const calls: string[] = [];
   const shown: AgentTurnView[] = [];
+  const finished: AgentTurnView[] = [];
   const dropped: string[] = [];
   const notes: string[] = [];
   const directs: { turn: AgentTurn; notice: string; isStale?: PartFence }[] = [];
@@ -142,6 +142,8 @@ function rig(opts: { real?: boolean } = {}) {
     homeGate: undefined as Promise<void> | undefined,
     /** Holds the lookups of the real writer (the await before its first `isStale()`). */
     writeGate: undefined as Promise<void> | undefined,
+    /** Holds `callDetail` (a late call pull) until it opens (H1 regression). */
+    pullGate: undefined as Promise<void> | undefined,
   };
   const rows: string[] = [];
   const writer = createGenieHistory({
@@ -169,6 +171,7 @@ function rig(opts: { real?: boolean } = {}) {
     stop: async (id) => void calls.push(`stop:${id}`),
     callDetail: async (t, c) => {
       calls.push(`call:${t.slice(0, 1)}:${c}`);
+      await script.pullGate;
       const d = script.details.get(`${t}:${c}`);
       if (!d) throw { error: 'agent_turn_unknown' };
       return d;
@@ -201,6 +204,7 @@ function rig(opts: { real?: boolean } = {}) {
     direct: async (t, notice, _id, isStale) =>
       void directs.push({ turn: t, notice, ...(isStale ? { isStale } : {}) }),
     showTurn: (_m, v) => void shown.push(v),
+    finished: (_m, v) => void finished.push(v),
     dropTurn: (_m, id) => void dropped.push(id),
     note: (_m, t) => void notes.push(t),
     phase: (_m, p) => void phases.push(p),
@@ -218,6 +222,7 @@ function rig(opts: { real?: boolean } = {}) {
     clock,
     calls,
     shown,
+    finished,
     dropped,
     notes,
     directs,
@@ -347,38 +352,88 @@ describe('a finished call and a finished turn', () => {
       deepLink: 'https://fake.test/l',
       workspaceHost: 'https://fake-sales.fake.test',
     });
-    // D1 is off: the Finance text did not go to the agent.
-    expect(live?.parts[1]?.notShownToAgent).toBe(true);
+    // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    // 2026-11-24): cross-workspace data is always on, so every workspace's text goes to the
+    // agent.
+    expect(live?.parts[1]?.notShownToAgent).toBeUndefined();
     expect(live?.parts[0]?.notShownToAgent).toBeUndefined();
     expect(live?.calls.every((c) => c.state === 'ready' && c.endedAt === 13_000)).toBe(true);
   });
 
-  it('[AC-2b.6] a combined answer only counts with D1 on; with D1 off the kind is "note"', async () => {
-    for (const on of [false, true]) {
-      const r = rig();
-      r.script.submit.push(accepted(T1, { crossWorkspace: on }));
-      await r.client.submit(turn(), 'ask');
-      r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
-      r.script.result = {
-        answer: 'Both fall.',
-        answerKind: 'combined',
-        sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
-      };
-      r.ev(callEv(T1, C1, SALES, 'answered'));
-      r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
-      await r.settle();
-      expect(r.client.panel().earlier[0]?.summary?.kind).toBe(on ? 'combined' : 'note');
-    }
+  it('[H1] `deps.finished` fires only after a late pull resolves, with the final settled parts', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(
+      `${T1}:${C1}`,
+      detail(T1, C1, SALES, 'answered', 'Churn in sales: **4.2%**.'),
+    );
+    // The pull this call starts will not resolve until the test opens the gate below.
+    const g = gate();
+    r.script.pullGate = g.p;
+    r.ev(callEv(T1, C1, SALES, 'answered', 1));
+    await r.settle();
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    await r.settle();
+    // The pull has not resolved yet: `finished` must not fire on an incomplete view, and
+    // `showTurn` may still have fired mid-settle (that is allowed; `finished` is the only
+    // signal a caller must trust for a complete answer).
+    expect(r.finished).toHaveLength(0);
+    g.open();
+    await r.settle();
+    expect(r.finished).toHaveLength(1);
+    const v = r.finished[0];
+    expect(v?.state).toBe('done');
+    expect(v?.parts.map((p) => p.workspace.name)).toEqual(['Sales']);
+    expect(v?.parts[0]?.sections.find((s) => s.id === 'answer')?.md).toBe(
+      'Churn in sales: **4.2%**.',
+    );
   });
 
-  it('[AC-2b.5] an earlier source takes the D1 value of its own turn; a forgotten turn fails closed', async () => {
+  it("[M1] markCopied sets copyNote on the turn's own record and republishes it (card and Conversations)", async () => {
     const r = rig();
-    // T1 ran with D1 off and ended; it stays known.
     await answered(r);
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
     await r.settle();
-    // T2 runs with D1 on and cites the Finance call of T1 (D1 off), and one of a forgotten turn.
-    r.script.submit.push(accepted(T2, { crossWorkspace: true }));
+    const before = r.changes();
+    r.client.markCopied(T1, 'copied');
+    // The card gets the current record, not a stale one taken earlier.
+    expect(r.shown.at(-1)?.copyNote).toBe('copied');
+    expect(r.shown.at(-1)?.turnId).toBe(T1);
+    // Conversations (`onChange`) also sees the update, not only the card.
+    expect(r.changes()).toBeGreaterThan(before);
+    expect(r.client.turn(T1)?.copyNote).toBe('copied');
+  });
+
+  it('markCopied on a turn the client no longer holds is a no-op', async () => {
+    const r = rig();
+    const before = r.shown.length;
+    r.client.markCopied('f'.repeat(32), 'copied');
+    expect(r.shown.length).toBe(before);
+  });
+
+  it('a combined answer always counts as combined (D1 is removed, ADR 0122 amendment)', async () => {
+    const r = rig();
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    r.script.details.set(`${T1}:${C1}`, detail(T1, C1, SALES, 'answered', 'Sales.'));
+    r.script.result = {
+      answer: 'Both fall.',
+      answerKind: 'combined',
+      sources: [{ workspaceId: 'ws-a', callId: C1, turnId: T1 }],
+    };
+    r.ev(callEv(T1, C1, SALES, 'answered'));
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 1 });
+    await r.settle();
+    expect(r.client.panel().earlier[0]?.summary?.kind).toBe('combined');
+  });
+
+  it('an earlier source and a forgotten turn are both shown to the agent (D1 is removed)', async () => {
+    const r = rig();
+    await answered(r);
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
+    await r.settle();
+    r.script.submit.push(accepted(T2));
     await r.client.submit(turn(), 'ask');
     const GONE = 'e'.repeat(32);
     r.script.details.set(
@@ -401,11 +456,9 @@ describe('a finished call and a finished turn', () => {
     const done = r.client.panel().earlier.find((t) => t.turnId === T2);
     expect(done?.summary?.kind).toBe('combined');
     const byCall = Object.fromEntries((done?.parts ?? []).map((p) => [p.callId, p]));
-    // (a) the earlier turn is present and had D1 off: the agent never saw it.
-    expect(byCall[C2]?.notShownToAgent).toBe(true);
-    // (b) the earlier turn is forgotten: fail closed.
-    expect(byCall['c-0000000e']?.notShownToAgent).toBe(true);
-    // The current turn has D1 on: the agent saw it.
+    // Cross-workspace data is always on: every source, earlier or forgotten, is shown.
+    expect(byCall[C2]?.notShownToAgent).toBeUndefined();
+    expect(byCall['c-0000000e']?.notShownToAgent).toBeUndefined();
     expect(byCall['c-00000003']?.notShownToAgent).toBeUndefined();
   });
 
@@ -462,14 +515,19 @@ describe('a finished call and a finished turn', () => {
     r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 2 });
     await r.settle();
     const s = r.client.panel().earlier[0]?.summary as { md: string; citations?: unknown[] };
-    // D1 is off: the Finance part is withheld from the agent, so its [2] goes, as does [3].
-    expect(s.md).toBe('Sales [1] and finance, not or [x].');
-    expect(s.citations).toMatchObject([{ n: 1, callId: C1, workspace: { name: SALES.name } }]);
-    expect(s.citations).toHaveLength(1);
+    // Cross-workspace data is always on: both valid markers ([1], [2]) stay; only [3] and [x] go.
+    expect(s.md).toBe('Sales [1] and finance [2], not or [x].');
+    expect(s.citations).toMatchObject([
+      { n: 1, callId: C1, workspace: { name: SALES.name } },
+      { n: 2, callId: C2, workspace: { name: FIN.name } },
+    ]);
+    expect(s.citations).toHaveLength(2);
     // The turn row saves which workspace each number names, and the part row it reaches.
     const salesRow = r.history.find((h) => h.backend === undefined && h.profile === SALES.profile);
+    const financeRow = r.history.find((h) => h.backend === undefined && h.profile === FIN.profile);
     expect(r.history.find((h) => h.backend === 'genie_agent')?.citations).toEqual([
       { n: 1, profile: SALES.profile, requestId: salesRow?.opId },
+      { n: 2, profile: FIN.profile, requestId: financeRow?.opId },
     ]);
   });
 
@@ -837,6 +895,25 @@ describe('needs you, and the session events', () => {
     expect(r.client.panel().session).toMatchObject({ turns: 3, tokens: 124_000 });
   });
 
+  it('an answered turn shows done and the new question count at once, before its row is saved', async () => {
+    const r = rig();
+    const home = gate();
+    // The row write waits (the await of `recordTurn`): the header must not wait for it.
+    r.script.homeGate = home.p;
+    r.script.submit.push(accepted(T1));
+    await r.client.submit(turn(), 'ask');
+    await r.settle();
+    r.script.session = sessionOf({ turns: 1, tokens: 900 });
+    r.ev({ kind: 'ended', turnId: T1, outcome: 'answered', calls: 0 });
+    await r.settle();
+    const p = r.client.panel();
+    expect(p.live).toBeUndefined();
+    expect(p.earlier[0]).toMatchObject({ turnId: T1, state: 'done' });
+    expect(p.session).toMatchObject({ turns: 1, tokens: 900 });
+    home.open();
+    await r.settle();
+  });
+
   it('keeps at most 20 earlier turns', async () => {
     const r = rig();
     for (let i = 0; i < 22; i++) {
@@ -1144,6 +1221,40 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     expect(r.client.inSession(uuidOfTurn(T3))).toBe(false);
   });
 
+  it('a reply in an older thread is a new ask: only the newest new ask thread is in session', async () => {
+    const r = rig();
+    await ask(r, T1, 'Thread A?');
+    await ask(r, T2, 'Thread B?');
+    // The core holds only thread B as model history now.
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(false);
+    expect(r.client.inSession(uuidOfTurn(T2))).toBe(true);
+    // The reply to A goes as a new ask in thread A (index.ts picks the mode from inSession).
+    await ask(r, T3, 'Reply to A?', 'ask', uuidOfTurn(T1));
+    expect(r.calls.filter((c) => c.startsWith('submit:'))).toEqual([
+      'submit:ask:op',
+      'submit:ask:op',
+      'submit:ask:op',
+    ]);
+    expect(turnRows(r).at(-1)?.threadId).toBe(uuidOfTurn(T1));
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(true);
+    expect(r.client.inSession(uuidOfTurn(T2))).toBe(false);
+    // A session end leaves no thread in session.
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'quit' });
+    expect(r.client.inSession(uuidOfTurn(T1))).toBe(false);
+  });
+
+  it('a ⌥G follow-up with no current thread goes as a new ask, never to an older answer', async () => {
+    const r = rig();
+    await ask(r, T1, 'First?');
+    r.client.onSessionEvent({ kind: 'ended', sessionId: 'd'.repeat(32), reason: 'idle' });
+    await ask(r, T2, 'Later?', 'follow_up');
+    expect(r.calls.filter((c) => c.startsWith('submit:'))).toEqual([
+      'submit:ask:op',
+      'submit:ask:op',
+    ]);
+    expect(turnRows(r).at(-1)?.threadId).toBe(uuidOfTurn(T2));
+  });
+
   it('[AC-C5] a follow-up with no thread id goes to the thread of the last answered turn', async () => {
     const r = rig();
     await ask(r, T1, 'First?');
@@ -1175,6 +1286,13 @@ describe('agent threads in Conversations (ADR 0121)', () => {
     ]);
     expect(r.client.threadOf(T2)).toBe(uuidOfTurn(T1));
     expect(r.client.threadMog(uuidOfTurn(T1))).toBe(MOG);
+  });
+
+  it('threadOf a turn that the client forgot is the thread it started; a bad id has none', () => {
+    const r = rig();
+    const gone = 'c'.repeat(32);
+    expect(r.client.threadOf(gone)).toBe(uuidOfTurn(gone));
+    expect(r.client.threadOf('not-a-turn')).toBeUndefined();
   });
 
   it('[AC-C15] turns() marks a live or queued turn as in progress, a finished one not', async () => {

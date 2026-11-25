@@ -275,6 +275,11 @@ function Detail({
   const open = () => sendRecording({ action: 'recordings.open', id: row.id });
   const retry = () => sendRecording({ action: 'recordings.retry', id: row.id });
   const canDelete = rowCanDeleteOf({ ...row, status });
+  // Opus review round 2 (B3): a take that never reached Databricks has no copy there to
+  // reassure the user about; say so plainly instead of the usual "a copy stays" line.
+  const removeCopy = row.needsUpload
+    ? 'This audio has not reached Databricks. Removing it deletes it from this Mac for good.'
+    : 'Removes it from this Mac and from this list. A copy already in Databricks stays.';
   // The id the question is open for: another selection starts with no question open.
   const [confirmId, setConfirmId] = useState<string | undefined>();
   const confirming = confirmId === row.id;
@@ -316,7 +321,7 @@ function Detail({
           )}
           {canDelete && !confirming && (
             <button type="button" data-recording-delete onClick={() => setConfirming(true)}>
-              Delete
+              Remove
             </button>
           )}
           {row.canOpen && status !== 'done' && (
@@ -330,10 +335,10 @@ function Detail({
         <div
           className="rec-confirm"
           role="group"
-          aria-label="Delete this recording?"
+          aria-label="Remove this recording?"
           data-recording-confirm
         >
-          <p>Delete this recording? It is only on this Mac and cannot be recovered.</p>
+          <p>{removeCopy}</p>
           <button
             type="button"
             className="rec-confirm-delete"
@@ -341,7 +346,7 @@ function Detail({
             onClick={remove}
             autoFocus
           >
-            Delete
+            Remove
           </button>
           <button type="button" data-recording-delete-no onClick={() => setConfirming(false)}>
             Cancel
@@ -455,6 +460,19 @@ export function Recordings({
   const selected = rows.find((r) => r.id === selectedId);
   // With nothing selected, the first row is the active option, so the focus ring has a place.
   const current = selected ?? rows[0];
+
+  // A new take becomes the selected row the moment it starts (ADR 0103 "D", review
+  // 2026-11-25/26): the row list is the one place the view can see a take start, in step with
+  // the brain's own `currentName` (`recording-wiring.ts`). Keyed off a transition in `rows`
+  // (not off `HUB_RECORDING_DETAIL_EVENT`, review REC-V14) so this never selects a row the
+  // view never asked about, and never fires again while the same take keeps recording, which
+  // would undo a deliberate pick of another row made while the call goes on.
+  const liveId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const live = rows.find((r) => r.status === 'recording')?.id;
+    if (live && live !== liveId.current) setSelectedId(live);
+    liveId.current = live;
+  }, [rows]);
 
   // Ask for the detail of the selected recording, and again when its status changes.
   const status = selected?.status;

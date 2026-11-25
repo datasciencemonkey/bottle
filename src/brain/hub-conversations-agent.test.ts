@@ -273,7 +273,6 @@ describe('the rebuild of agent threads', () => {
             position: 0,
             newSession: true,
             budget: 10,
-            crossWorkspace: false,
             catalog: [],
           }) as AgentTurnAccepted,
         stop: async () => undefined,

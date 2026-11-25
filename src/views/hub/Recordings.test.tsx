@@ -190,6 +190,57 @@ describe('Recordings area (hub)', () => {
     expect(el.querySelector('[data-recording-detail]')?.textContent).not.toContain('Friday');
   });
 
+  it('[REC-V14] a new live take becomes selected even over an older pick (owner review 2026-11-25/26, "D")', async () => {
+    // Before the fix, a manual pick made earlier (or simply no pick at all) left the detail
+    // pane on "Pick a recording to read its notes" (no selection) or stuck on the old row
+    // (a prior pick), while a brand-new take recorded with no pane of its own.
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    await click(el.querySelector('[data-recording-row="r1"]'));
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [
+        {
+          id: 'rNew',
+          name: 'x',
+          startedAt: NOW,
+          durationS: 5,
+          status: 'recording',
+          canOpen: false,
+        },
+        ...list.rows,
+      ],
+    });
+    expect(el.querySelector('[data-recording-row="rNew"]')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, {
+      id: 'rNew',
+      status: 'recording',
+      turns: [],
+    });
+    expect(el.querySelector('[data-recording-detail] .rec-pending')?.textContent).toContain(
+      'still recording',
+    );
+    // While the same take keeps recording, a deliberate pick of another row is not undone.
+    await click(el.querySelector('[data-recording-row="r2"]'));
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [
+        {
+          id: 'rNew',
+          name: 'x',
+          startedAt: NOW,
+          durationS: 9,
+          status: 'recording',
+          canOpen: false,
+        },
+        ...list.rows,
+      ],
+    });
+    expect(el.querySelector('[data-recording-row="r2"]')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+  });
+
   describe('every status and action (upload in parts)', () => {
     const base = { name: 'x', startedAt: NOW - 1000, durationS: 600, canOpen: false };
     const rowsOf = (...r: object[]) =>
@@ -253,12 +304,24 @@ describe('Recordings area (hub)', () => {
       expect(emits().at(-1)).toEqual({ action: 'recordings.retry', id: 's0' });
     });
 
-    it('[REC-P4] Delete shows only on a row that never uploaded, asks first, and then sends the action', async () => {
+    it('[REC-P4] Remove shows on every row except one capturing or uploading right now, asks first, and then sends the action', async () => {
+      // Owner authorization 2026-11-25: Remove is local and instant for every row the user
+      // sees. Rust refuses only a row that is recording or uploading right now.
       const { el } = await render(<Recordings active now={() => NOW} />);
       await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
         rows: rowsOf(
-          { status: 'failed', onDeviceOnly: true, error: RECORDING_ERRORS.upload_failed },
-          { status: 'failed', partsUploaded: 0, error: RECORDING_ERRORS.volume_permission },
+          {
+            status: 'failed',
+            onDeviceOnly: true,
+            needsUpload: true,
+            error: RECORDING_ERRORS.upload_failed,
+          },
+          {
+            status: 'failed',
+            partsUploaded: 0,
+            needsUpload: true,
+            error: RECORDING_ERRORS.volume_permission,
+          },
           { status: 'failed', partsUploaded: 2, error: RECORDING_ERRORS.volume_permission },
           { status: 'done', canOpen: true },
           { status: 'uploading', partsUploaded: 0, partsTotal: 2 },
@@ -271,26 +334,68 @@ describe('Recordings area (hub)', () => {
       };
       expect(await has('s0')).toBe(true);
       expect(await has('s1')).toBe(true);
-      expect(await has('s2')).toBe(false);
-      expect(await has('s3')).toBe(false);
+      expect(await has('s2')).toBe(true);
+      expect(await has('s3')).toBe(true);
       expect(await has('s4')).toBe(false);
       expect(await has('s5')).toBe(false);
-      // The question comes first; Cancel sends nothing.
-      await click(el.querySelector('[data-recording-row="s1"]'));
+      // The question comes first; Cancel sends nothing. s2 reached the volume (parts
+      // uploaded), so it gets the "a copy stays" confirm text (B3's other variant is its own
+      // test below).
+      await click(el.querySelector('[data-recording-row="s2"]'));
       const before = emits().length;
       await click(el.querySelector('[data-recording-delete]'));
       expect(el.querySelector('[data-recording-confirm]')?.textContent).toContain(
-        'Delete this recording? It is only on this Mac and cannot be recovered.',
+        'Removes it from this Mac and from this list. A copy already in Databricks stays.',
       );
       expect(emits().length).toBe(before);
       await click(el.querySelector('[data-recording-delete-no]'));
       expect(el.querySelector('[data-recording-confirm]')).toBeNull();
       expect(emits().length).toBe(before);
-      // Delete, then confirm: one action with the id.
+      // Remove, then confirm: one action with the id.
       await click(el.querySelector('[data-recording-delete]'));
       await click(el.querySelector('[data-recording-delete-yes]'));
-      expect(emits().at(-1)).toEqual({ action: 'recordings.delete', id: 's1' });
+      expect(emits().at(-1)).toEqual({ action: 'recordings.delete', id: 's2' });
       expect(el.querySelector('[data-recording-confirm]')).toBeNull();
+    });
+
+    it('[REC-P4] the Remove confirm copy depends on whether the take ever reached Databricks (Opus review round 2, B3)', async () => {
+      const { el } = await render(<Recordings active now={() => NOW} />);
+      await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+        rows: rowsOf(
+          // Never reached Databricks: on-device-only.
+          {
+            status: 'failed',
+            onDeviceOnly: true,
+            needsUpload: true,
+            error: RECORDING_ERRORS.upload_failed,
+          },
+          // Never reached Databricks: failed at the upload step itself.
+          {
+            status: 'failed',
+            partsUploaded: 0,
+            needsUpload: true,
+            error: RECORDING_ERRORS.volume_permission,
+          },
+          // Reached Databricks: a part is already there.
+          { status: 'failed', partsUploaded: 2, error: RECORDING_ERRORS.volume_permission },
+          { status: 'done', canOpen: true },
+        ),
+      });
+      const confirmTextFor = async (id: string) => {
+        await click(el.querySelector(`[data-recording-row="${id}"]`));
+        await click(el.querySelector('[data-recording-delete]'));
+        const text = el.querySelector('[data-recording-confirm]')?.textContent;
+        await click(el.querySelector('[data-recording-delete-no]'));
+        return text;
+      };
+      const neverReached =
+        'This audio has not reached Databricks. Removing it deletes it from this Mac for good.';
+      const stays =
+        'Removes it from this Mac and from this list. A copy already in Databricks stays.';
+      expect(await confirmTextFor('s0')).toContain(neverReached);
+      expect(await confirmTextFor('s1')).toContain(neverReached);
+      expect(await confirmTextFor('s2')).toContain(stays);
+      expect(await confirmTextFor('s3')).toContain(stays);
     });
 
     it('[REC-P3] Retry shows for a failed recording and sends the retry once', async () => {

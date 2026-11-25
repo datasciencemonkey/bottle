@@ -42,8 +42,11 @@ Binding decisions for the MVP:
     a short notice. Local Parakeet stays the default and the fallback.
   - **Ask (⌥G):** the model runs a tool loop in Rust (`agent_run::orchestrator`). It has two tools:
     `ask_genie(workspace, question)` and `submit_answer`. Every `ask_genie` call goes through the guard
-    (`agent_run/guard`): switched-on workspaces only, a budget, quarantine, and receipts when "Combine across
-    workspaces" is off. Combined answers cite each workspace as [1] [2], and each marker links to that workspace's answer.
+    (`agent_run/guard`): switched-on workspaces only, a budget and quarantine. "Combine across workspaces" (D1) is
+    removed (ADR 0122 amendment, owner decision 2026-11-24): cross-workspace data is always on. Combined answers cite
+    each workspace as [1] [2], and each marker links to that workspace's answer. The orchestrator model must ask the
+    home workspace first, and widen to the rest only after home answers that it has no data or cannot answer, unless
+    the question names another workspace directly (ADR 0122 amendment, "Home first").
   - **Direct Genie is the fallback.** If the model is not reachable, ⌥G asks Genie One on the home workspace
     (ADR 0097 path) and shows a short notice. The parts on main: TokenBroker (R6), McpTransport (R8, tool allowlist
     `genie_ask`, `genie_poll_response`, `genie_get_query_result`, `genie_cancel_response`), PollActor and GenieBridge (T8).
@@ -190,6 +193,11 @@ Rules of the boundary:
   note that shows only context changed.
 - **Merging:** only the orchestrator merges. Agents never merge. The merge gate requires an approval on the head,
   green Linux CI (Windows jobs run nightly only), a passing local macOS squash suite, and no file overlap with recent main changes.
+- **Remove hanging worktrees after a merge.** When a PR merges, the orchestrator removes the worktree of every
+  branch in that PR, including lane worktrees whose commits were cherry-picked into it and build worktrees made
+  from it. Keep the branch. Run `cargo clean` first, then `git worktree remove <path>` (no `--force`). If a
+  worktree has uncommitted changes, do not remove it: commit the changes to its branch or report them to the
+  owner. Before a session ends, run `git worktree list` and remove each worktree whose work is merged.
 - **Contract files** (owned by the contract lead; change them only in a PR that the lead authorizes):
   `src/shared/ipc.ts`, `src/shared/interfaces.ts`, `crates/mog-core/src/types.rs`, `crates/mog-core/src/ipc.rs`,
   `src-tauri/src/ipc.rs`, `src-tauri/schemas/`, and migrations.

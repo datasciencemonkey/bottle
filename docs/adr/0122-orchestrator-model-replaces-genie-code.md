@@ -38,7 +38,7 @@ After the 0.1.6 test, the owner found these problems:
 2. **Two modes with different permissions.**
    - **Clean mode** runs on every utterance as `model_invoke` role `router`. It has no tools, so RTR-20a and ADR 0056 do not change. A local filler pre-pass runs first. For dictation the call has a 1.5 s deadline (`DICTATION_CLEANUP_DEADLINE_MS`) and no retry. On a timeout, Bottle pastes the pre-pass text.
    - **Ask mode** runs only on ⌥G, as a Rust tool loop in `agent_run::orchestrator`.
-     - It has one tool, `ask_genie(workspace, question)`. Every call goes through the existing guard (`agent_run/guard`): switched-on workspaces only, the D2 budget, quarantine, D1 receipts and the 3-refusals stop.
+     - It has one tool, `ask_genie(workspace, question)`. Every call goes through the existing guard (`agent_run/guard`): switched-on workspaces only, the D2 budget, quarantine and the 3-refusals stop.
      - The loop has hard caps on steps and time.
      - The model never gets a general Databricks CLI tool, a shell, a URL fetch or a token.
      - The model that reads arbitrary dictation cannot act. The model that can act only sees a question the user asked on purpose.
@@ -50,11 +50,163 @@ After the 0.1.6 test, the owner found these problems:
    - the pin, install, GENIE_HOME and lockdown tooling;
    - the `genie_code_*` IPC;
    - the Settings row.
-   The guard, `agent-run.ts`, AgentTurnCard, the Conversations agent threads, the D1 switch and the wipe fence stay. They now serve the orchestrator loop.
+   The guard, `agent-run.ts`, AgentTurnCard, the Conversations agent threads, the D1 switch and the wipe fence stay. They now serve the orchestrator loop. (The D1 switch itself is later removed; see the "D1 removed" amendment below.)
+
+## Amendment: Home first (2026-11-24, owner decision)
+
+A test run showed a problem. One broad ⌥G question sent three parallel calls at once: one call
+to the home workspace, and two calls to other workspaces.
+
+The owner's rule (verbatim):
+
+> WE always start with just the home genie, when it says it doesnt have a response ONLY then
+> will we go to other workspaces. IF the workspace Profile is available, then you can use it
+> directly if the user intent categorically calls out the profile.
+
+6. **Home first.** The orchestrator model must ask the home workspace first. The model must wait
+   for its answer. The model must ask another workspace only after home answers that it has no
+   data, or that it cannot answer. The question may name a workspace by its alias or its name.
+   When it does, the model may ask that workspace at once. The model does not need to ask home
+   first in that case. Home first applies again on every new turn: a turn that already widened
+   does not carry that forward to the next question.
+
+   Two different things enforce this, and they enforce different parts of it:
+   - **The prompt judges "no data."** Only the model can read a Genie answer and decide that
+     home has no data, or cannot answer, so only the prompt states that part of the rule. Rust
+     does not read answer text and never second-guesses that judgment. The prompt also tells the
+     model to ask each workspace the user's question, and never to copy another workspace's
+     answer text into a question of its own.
+   - **Rust enforces "home asked and ended before widening."** This part needs no judgment, so
+     Rust enforces it in code, because a model can ignore a prompt. On a turn's first step that
+     calls `ask_genie`, the orchestrator host admits two kinds of call only: a call to the home
+     workspace, and a call to a workspace that the question names (its alias, its name or its
+     profile, with a dedicated matcher: case-insensitive, a trailing 's or ’s and trailing
+     sentence punctuation stripped, a space and a hyphen treated as the same separator, and a
+     plain everyday word such as "test" or "main" needing a clear cue — "in NAME", "NAME
+     workspace", "@NAME", or "NAME" in quotes). The host refuses every other call of that step
+     with the code `ask_home_first`. The refusal never reaches the guard: it spends no Genie
+     budget and never counts toward the three-refusals stop. The turn widens — every switched-on
+     workspace opens, from the next `ask_genie` step on — only once a call to home itself is
+     accepted by the guard and ends answered, failed, timeout or no-answer (a completed poll with
+     no text: home still "doesn't have a response"). A blocked call, an unparsable one, a call to
+     a workspace the question merely names (the exception), or a call that signed out (see the
+     next amendment), never widens the turn on its own.
+
+   A catalog with no home workspace keeps the old behaviour. Every call goes through the normal
+   guard checks, from the first step.
+
+## Amendment: Sign in, then retry (2026-11-24, owner decision; generalized and hardened in rounds 4 and 5)
+
+A `signed_out` call is neither an answer nor "no data": the workspace's token merely expired. The
+owner's rule (verbatim): "In the absence of a sign-in, or if the sign-in had expired, refresh the
+sign-in. The user is always going to be watching it, so it doesn't matter. You can just open up
+the browser to refresh the sign-in using the U2M OAuth."
+
+8. **A signed-out call never widens the turn on its own.** This applies to every `ask_genie` call,
+   not home alone: a workspace the question names directly on the home-first step, and any
+   workspace once the turn has widened, get the same rule. Instead the orchestrator host starts
+   that workspace's browser sign-in and retries the call once:
+   - The sign-in is the existing `profile_reauth` flow (R5's `databricks auth login`, U2M OAuth):
+     the same one "Sign in…" in Settings → Workspace already runs. There is no new OAuth
+     implementation, and Rust still never keeps a token outside `TokenBroker`'s memory.
+   - It is keyed on the call's own catalog profile, not on home's: two workspaces that both go
+     signed out in the same turn each get their own sign-in.
+   - One sign-in at a time per profile: a second trigger for a profile already signing in waits
+     for that attempt's result, rather than opening a second browser window
+     (`agent_run::reauth::DedupReauth`).
+   - At most one sign-in attempt per profile per turn: once a profile's sign-in fails, is
+     cancelled or times out, a later call to that same profile this turn returns `signed_out` at
+     once, with no further sign-in and no new browser window. A Stop is checked first, before any
+     of this: a stopped turn never starts, or waits on, a sign-in.
+   - Before a turn starts, if the cached sign-in state (Settings → Workspace's own status; no new
+     network probe) already shows home signed out, the first live attempt is skipped too: Bottle
+     signs in first, so it never spends a Genie call on a token it already knows is dead. This
+     pre-seeding is home-only (the only profile the catalog snapshot carries ahead of a call).
+   - The card shows a plain status while the sign-in runs ("Signing in to `<workspace>`… finish
+     in your browser"), through the existing one-line pop-up, not a new UI element.
+   - A sign-in that fails, is cancelled or times out leaves the call `signed_out` for good: home-
+     first (for home) stays the rule, and the turn does not widen. A sign-in that *succeeds*
+     marks the profile `Tried`, not a clean slate (round 5): a later call to it this turn still
+     gets a genuine live attempt, but a fresh `signed_out` from that attempt goes straight to the
+     no-more-tries state, not back through a second sign-in. Either way, one browser window per
+     profile per turn is the most there ever is.
+   - A withheld (quarantined) or stopped call still does not widen either, as before; neither is
+     a sign-in problem.
+   - A signed-out first attempt and its one retry are both real guard admissions: the orchestrator
+     counts both against its own copy of the turn's budget, so it never believes more is left than
+     the guard's own ledger has.
+   - If Settings already runs its own "Sign in…" for the same profile, `profile_reauth` answers
+     `profile_exists`: Bottle treats that as "wait for it" (polling the cached sign-in state
+     within the sign-in's own bound), not a failure, then does the one retry. That sign-in belongs
+     to Settings, not to this process: a cancel of the wait (round 5) only abandons the wait
+     itself; it never calls `profile_login_cancel` on a sign-in this process did not start.
+     `agent_session_host::build_reauth` tracks, per profile, which of the two is true (this
+     process's own `profile_reauth` running, or only watching Settings') so `cancel` acts on the
+     right one.
+   - Stop, the turn's hard deadline (`HARD_AFTER`) and a Wipe all cancel an in-flight sign-in:
+     each ends a turn through the same `ctx.cancel` flag, which a watcher reacts to by calling
+     `ReauthService::cancel`. When this process owns the running sign-in, that routes to the real
+     `profile_login_cancel` on the same `ProfileLoginHost` that kills the running `databricks auth
+     login` child; the watcher rechecks that the sign-in has not already ended, right before that
+     call (round 5), so a sign-in that finishes in the instant before a Stop lands never gets a
+     stray cancel that would leave Settings' own next "Sign in…" of that profile briefly refused
+     `login_cancelled` for no reason.
+
+   **Contract change** (owner sign-off covers it, as part of this amendment; round 3): a new
+   `AgentTurnEvent` variant, `signing_in { turnId, workspaceId }`, added to both
+   `crates/mog-core/src/types.rs` and `src/shared/ipc.ts`, with its own fixture
+   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed. Rounds 4 and 5 added
+   no further contract change: `ReauthService::cancel`, the Settings `profile_exists` wait and its
+   ownership tracking are all internal to Rust.
+
+   **Known limit** (narrowed in round 4; the blocking-worker-thread limit it replaced is fixed).
+   The sign-in's own bound, and the poll for a running Settings sign-in, still run on the turn's
+   worker thread; a cancel now ends that wait promptly, but it does not force-close a browser tab
+   the OAuth flow already opened, only the local CLI child waiting on it (and only when this
+   process owns that child; watching Settings' own sign-in never touches it at all).
+
+## Amendment: D1 removed (2026-11-24, owner decision)
+
+The owner's rule (verbatim): "Remove it, always combine."
+
+7. **D1 "Combine across workspaces" is removed.** Cross-workspace data is always on. Bottle
+   removes:
+   - the Settings → Workspace switch, its help text, its admin lock and its "Applies to your
+     next question" note;
+   - `crossWorkspaceData`, `crossWorkspaceLocked` and the `workspace.cross` action, from the IPC
+     types and the brain;
+   - the guard's taint and its D1-off check (a workspace that is not the agent workspace needed
+     the agent workspace's text to arrive first; it no longer does);
+   - the `cross_workspace_off` refusal code;
+   - the D1-off branch of the prompt (the receipt rule for a workspace that is not the agent
+     workspace): the model now always sees every workspace's answer.
+
+   A config file that an older build saved still has `crossWorkspaceData` in its `agent` object.
+   Bottle still reads that key, so the file still loads; it is never kept, and a later save never
+   writes it back.
+
+   D1's own admin lock (SEC-28b) is removed with it: there is no longer a setting for it to lock.
+
+   `AgentPartView.notShownToAgent` (and the card's "Not shown to the agent" tag) stays: a
+   withheld (quarantined) part still needs it, and that is a different rule from D1. Only its
+   D1-driven input — `PartOptions.notShownToAgent` in `agent-card.ts`, which the brain always
+   passed as `false` once D1 was gone — is removed, since nothing ever read anything else into
+   it.
+
+## Amendment: Links guaranteed (2026-11-25, owner decision)
+
+The owner's rule (verbatim): "update the model that is orchestrating everything to ensure that
+it does not take out any links."
+
+8. **The prompt's "never drop a URL" rule now has a code guard behind it.** `build_result`
+   appends a `**Links**` section for any URL a cited, non-withheld Genie answer carried that the
+   model's own combined answer dropped, de-duplicated and in order of first appearance, never
+   from a withheld or quarantined part, and never on a lone answer (still shown verbatim).
 
 ## Consequences
 
 - Bottle owns a tool loop, so its step cap, time cap and tool list are security controls and need tests.
 - A new tool-enabled model call exists only in Rust, and only for ⌥G. The IPC `model_invoke` command still refuses tools.
 - Dictation text goes to the home workspace's AI Gateway for cleanup. It always did by design (CAP-47a, the router step); now it actually happens. Settings gets a "Clean up dictation" switch.
+- The answer quarantine is a set of regular expressions. It does not fully cover homoglyphs or encoded text such as base64. The guard check of each model-written `ask_genie` question (no new link, no send-elsewhere order) is the backstop.
 - Every model change needs an eval record (NFR-22a). The model picker shows "Not tested" for models with no record.

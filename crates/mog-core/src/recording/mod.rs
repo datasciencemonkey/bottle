@@ -187,8 +187,27 @@ pub trait RecordingCloud: Send + Sync {
         status: crate::types::RecordingStatus,
         detail: Option<&RecordingDetail>,
     ) -> RecordingResult<RecordingSummary>;
-    /// The recordings in the volume, newest first, from each `<name>.job.json`.
+    /// The recordings in the volume, newest first, from each `<name>.job.json`. One network
+    /// call per recording still in the volume (`cloud::list`'s directory listing, then a job
+    /// read per name): slow with many recordings, so `recording_list`'s hot path uses
+    /// [`Self::list_fast`] instead and calls this only through [`Self::reconcile`].
     fn list(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>>;
+    /// `recording_list`'s fast path (migration 0005; owner authorization 2026-11-25): the local
+    /// recording index, merged with the same live, active and in-flight overlays as
+    /// [`Self::list`]. No network call.
+    fn list_fast(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>>;
+    /// Reconcile the index with one authoritative [`Self::list`] (at most once per hub open or
+    /// launch, plus after a recording reaches `done` or `failed`; owner authorization
+    /// 2026-11-25), then answer the merged rows like [`Self::list_fast`] does.
+    fn reconcile(
         &self,
         profile: &ProfileName,
         storage: &RecordingStorage,
@@ -227,12 +246,11 @@ pub trait RecordingCloud: Send + Sync {
     /// The recordings that are only on this device, newest first. They need no storage: this
     /// is what the list shows while Settings has no usable storage.
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>>;
-    /// Delete a recording that never reached the volume: its audio files, temp files and
-    /// sidecar on this device. `Ok(false)`: no such recording on this device. A recording that
-    /// captures, runs, or has parts in the volume gives `recording_busy`. It never writes to
-    /// the volume. `storage` is `None` when Settings has none: the volume cannot be read then,
-    /// so the device must prove that no part was ever uploaded, or the call is `recording_busy`.
-    /// Files that remain after the delete give an error.
+    /// Local and instant, for every row the user sees (migration 0005; owner authorization
+    /// 2026-11-25): removes the local audio and sidecar if they exist, and marks the row
+    /// `hidden` in the local index. No network call: a recording already in the volume keeps
+    /// its copy there. `Ok(true)` unless the take is recording right now or a worker is
+    /// uploading it right now (`recording_busy`).
     fn delete(
         &self,
         profile: &ProfileName,
@@ -271,11 +289,60 @@ impl RecordingSettingsStore for MemorySettingsStore {
 /// opener; PR C).
 pub type LinkOpener = Arc<dyn Fn(&ProfileName, &str) -> CoreResult<()> + Send + Sync>;
 
+/// Opens a URL with the OS and reports whether it actually opened (CAP-10c, the
+/// `recording_open_system_audio_settings` fix-it). `RecordingComponent::set_open_url` injects
+/// one; a test injects a fake that opens nothing, so the mapping to `host_failed` and the exact
+/// URL can be checked without ever really opening anything.
+pub type UrlOpenFn = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The macOS Privacy & Security pane that covers System Audio Recording: the one
+/// `recording_open_system_audio_settings` opens. Apple groups System Audio Recording with
+/// Screen Recording under one "Screen & System Audio Recording" pane, confirmed by hand
+/// (`docs/spikes/SP-01.md`); its stable URL anchor is `Privacy_ScreenCapture`. Apple documents
+/// no separate `Privacy_AudioCapture` anchor, so this is the one that actually opens the right
+/// pane.
+pub const SYSTEM_AUDIO_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+/// Open `url` with the OS, right here on the calling thread (CAP-10c). macOS only
+/// (`NSWorkspace`); every other OS opens nothing. **Call this only when already on the main
+/// thread**: AppKit expects it there. This is never `RecordingComponent`'s default opener (see
+/// [`default_open_url`]) for exactly that reason — the src-tauri host's injected opener
+/// (`recording_cloud_host::install_open_url`) is the one place that calls it, after dispatching
+/// there itself through `AppHandle::run_on_main_thread` (`recording_*` commands otherwise run
+/// off the main thread, `ipc.rs::runs_off_main_thread`).
+pub fn open_url_on_this_thread(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+        let ns_url = NSString::from_str(url);
+        match NSURL::URLWithString(&ns_url) {
+            Some(u) => NSWorkspace::sharedWorkspace().openURL(&u),
+            None => false,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        false
+    }
+}
+
+/// `RecordingComponent`'s opener until the host injects one (CAP-10c): refuses outright
+/// (`host_failed`). It never calls [`open_url_on_this_thread`] itself — that would call AppKit
+/// off the main thread, which this seam exists to avoid.
+fn default_open_url() -> UrlOpenFn {
+    Arc::new(|_url: &str| false)
+}
+
 pub struct RecordingComponent {
     settings: Arc<dyn RecordingSettingsStore>,
     capture: Mutex<Option<CaptureLink>>,
     /// Set once in the app `setup`, after R6 and the rate bucket exist (PR C).
     cloud: std::sync::OnceLock<(Arc<dyn RecordingCloud>, LinkOpener)>,
+    /// Set once in the app `setup` (CAP-10c); [`default_open_url`] until then.
+    open_url: std::sync::OnceLock<UrlOpenFn>,
 }
 
 /// What PR B connects to the component once the capture host runs (ADR 0103): the capture
@@ -310,6 +377,7 @@ impl RecordingComponent {
             settings,
             capture: Mutex::new(None),
             cloud: std::sync::OnceLock::new(),
+            open_url: std::sync::OnceLock::new(),
         }
     }
 
@@ -327,6 +395,19 @@ impl RecordingComponent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Inject the opener of `recording_open_system_audio_settings` (CAP-10c), once; a later
+    /// call is ignored. Until this runs, [`default_open_url`] refuses every call outright.
+    pub fn set_open_url(&self, opener: UrlOpenFn) {
+        let _ = self.open_url.set(opener);
+    }
+
+    fn open_url(&self) -> UrlOpenFn {
+        match self.open_url.get() {
+            Some(f) => f.clone(),
+            None => default_open_url(),
+        }
     }
 
     /// Connect the cloud side (PR C) and the link opener, once. A later call is ignored.
@@ -378,6 +459,18 @@ impl GatewayComponents for RecordingComponent {
                 let a: RecordingSettingsWriteArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 let next = self.settings.load()?.apply(a.patch);
+                // ADR 0123, the general rule ("E"/"10", owner review 2026-11-26): Bottle calls
+                // only `system.ai.*` ids. A write that would leave either endpoint outside
+                // that namespace is refused outright, with the same `invalid_args` code a
+                // malformed request already uses above (no new contract error code), rather
+                // than silently accepted and only corrected on the next load.
+                if !crate::recording_cloud::settings_store::is_system_ai_endpoint(
+                    next.transcribe_endpoint.as_str(),
+                ) || !crate::recording_cloud::settings_store::is_system_ai_endpoint(
+                    next.notes_endpoint.as_str(),
+                ) {
+                    return Err(refused("invalid_args"));
+                }
                 self.settings.save(&next)?;
                 if let Some(link) = self.link() {
                     (link.on_knob)(next.enabled);
@@ -422,7 +515,12 @@ impl GatewayComponents for RecordingComponent {
                 // No storage yet: the list is the audio that waits on this device, so the user
                 // sees what Upload will send once Settings has a volume.
                 match self.storage() {
-                    Ok(storage) => reply(&cloud.list(&a.profile, &storage)?),
+                    // The hot path reads the local index with no network call (migration 0005,
+                    // owner authorization 2026-11-25); `reconcile` reads the volume once and
+                    // refreshes the index (the brain sets it at most once per hub open or
+                    // launch, plus after a recording reaches `done` or `failed`).
+                    Ok(storage) if a.reconcile => reply(&cloud.reconcile(&a.profile, &storage)?),
+                    Ok(storage) => reply(&cloud.list_fast(&a.profile, &storage)?),
                     Err(CoreError::IpcRefused { code: "no_storage" }) => {
                         reply(&cloud.list_local()?)
                     }
@@ -477,6 +575,15 @@ impl GatewayComponents for RecordingComponent {
             "recording_state" => {
                 let link = self.link().ok_or_else(|| refused("not_implemented"))?;
                 reply(&link.capture.state())
+            }
+            // The "Allow System Audio Recording" fix-it (ipc.rs): no profile, no capture link,
+            // no args. macOS only; refuses on every other OS.
+            "recording_open_system_audio_settings" => {
+                if (self.open_url())(SYSTEM_AUDIO_SETTINGS_URL) {
+                    Ok(serde_json::json!({}))
+                } else {
+                    Err(refused("host_failed"))
+                }
             }
             // TODO(#65): PR C fills in the rest.
             _ => Err(refused("not_implemented")),

@@ -1,78 +1,186 @@
 # Bottle
 
-New here? Read the [vision and intro](docs/VISION.md).
+**Your Genie, ready.**
 
-Bottle turns your team's unwritten know-how into governed context that every Genie answer can use. It is captured where the work happens, approved by you, and shared with everyone. It is a small desktop app for Databricks users. Floating agents, called **MOGs**, let you dictate into any app, ask Genie One about your governed data, and record calls to your Unity Catalog volume. Bottle is a companion to Genie One, not a replacement.
+Bottle is an independent, experimental, open-source project. It is **not** an official Databricks
+product and **not** Databricks Labs.
 
-## What ships now (macOS)
+Bottle aims to turn your team's unwritten know-how into context that every
+[Genie](https://docs.databricks.com/aws/en/genie/) answer can use. Today you dictate, ask Genie
+and record calls from your desktop. Sharing approved knowledge back to Genie is planned. See
+[`docs/VISION.md`](docs/VISION.md) for the full picture, including what is planned and not yet
+built.
 
-- **Dictation with cleanup.** Hold **Right Option** and speak. Local Parakeet speech-to-text transcribes the speech on your Mac. If you set "Dictation engine" to Databricks in Settings → Workspace, a `system.ai` Gemini model on your home workspace's AI Gateway transcribes it instead, and Bottle falls back to Parakeet on any error. Bottle removes filler words on the device. Then one orchestrator model cleans up the text, in 1.5 seconds or less, on your home workspace's AI Gateway. Bottle pastes the model text only when its words match yours. Otherwise it pastes the local text. The setting "Clean up dictation" switches this step off. A small pop-up offers Copy and Ask Genie.
-- **Ask.** Hold Right Option and tap **G** (⌥G). The orchestrator model asks the Genie One of each workspace that you switched on, and it can combine the answers. A combined answer cites each workspace as [1] [2]. Each marker links to that workspace's answer and its Open in Databricks link. If the model is not reachable, Bottle asks Genie One on your home workspace and shows a short notice. The answer card shows Markdown, tables and safe links.
-- **The hub.** Conversations (with thread replies), Recordings and Settings. In Settings → Workspace, you pick the orchestrator model from the `system.ai` chat models. You also switch "Clean up dictation" and "Combine across workspaces" there.
-- **Call recording.** Hold Right Option and tap **R** (⌥R). Bottle records the mic and system audio to your Unity Catalog volume. A Gemini model writes the transcript and a Claude model writes the notes, through the Databricks AI Gateway. Recording is off until you turn it on in Settings. A recording that did not upload can be deleted from Settings → Recordings with Delete; that removes only the copy on this Mac.
-- **One MOG.** One floating MOG serves all your workspaces. Each connected Databricks CLI profile is a workspace of that MOG. The lamp shows moods, an orbiting spark and eyes that follow the cursor.
+## What Bottle does
 
-See [`docs/VISION.md`](docs/VISION.md) for what is planned and not yet built, such as ontology hydration (recorded transcripts becoming UC Pages in your domain, after your review) and memory-first answers.
+Bottle puts a small floating assistant on your desktop (Settings calls it your MOG). It is tied to
+your Databricks workspace through your Databricks CLI profile.
 
-## Requirements
+- **Dictate.** Hold a key and speak. Bottle transcribes your voice on your Mac and pastes cleaned-up
+  text wherever your cursor is.
+- **Ask.** Hold a key, tap a letter, and ask a question out loud. Bottle asks your workspace's Genie
+  and shows the answer next to the assistant, with citations and a deep link.
+- **Record.** Hold a key, tap a letter, and record a call. Bottle uploads the audio to My Files in
+  your workspace, or a Unity Catalog volume you pick, and writes a transcript and notes.
 
-- macOS 14.4 or later. Windows 11 is second: its hotkeys are partly done (no Windows ⌥G yet).
-- The Databricks CLI. Bottle can install the official CLI after you consent, then sign you in to a workspace.
-- Tokens come from the CLI (`databricks auth token --profile <p>`) and live only in memory. One CLI profile is one workspace. Model calls send `store: false`.
+Today, capture (dictate, ask, record) and the Ask workflow ship. Turning recorded transcripts into
+governed Unity Catalog Pages that Genie can search — the "knowledge flywheel" — is **planned**, not
+shipped. Read [`docs/VISION.md`](docs/VISION.md) for the full plan.
 
-## Run locally
+## Install
 
-You need Node with pnpm, Rust stable, and `uv` for every Python command.
+Bottle runs on **macOS 14.4 or later, on Apple Silicon**. Windows and Linux: work in progress.
 
-```sh
-pnpm install
-pnpm tauri dev                      # add --features local-stt for local Parakeet
-scripts/package-macos.sh            # build a macOS DMG
-scripts/pre-push.sh                 # the full local gate, before you push
-```
+1. Go to [the latest release](https://github.com/datasciencemonkey/bottle/releases/latest) and
+   download `Bottle-<version>-macos-arm64.dmg`. Ignore the Windows `.exe`; Windows is a work in
+   progress. (Or browse the [project site](https://datasciencemonkey.github.io/bottle/).)
+2. Open the `.dmg` and drag Bottle to Applications.
+3. Open Bottle from Applications.
 
-Local speech-to-text needs the vendored sherpa-onnx build. See [`AGENTS.md`](AGENTS.md) section 4 for the setup steps.
+The build is self-signed, not through the Apple Developer program, so macOS blocks it the first
+time:
 
-## Start here
+4. macOS shows a warning that it can't verify the app. Click **Done**.
+5. Open **System Settings → Privacy & Security**. Scroll down and click **Open Anyway** next to
+   Bottle. Confirm.
+6. Open Bottle again from Applications.
 
-| File | Purpose |
-|---|---|
-| [`AGENTS.md`](AGENTS.md) | Context index and binding decisions for agents working in this repo |
-| [`requirements.html`](requirements.html) | Final end-to-end requirements (v1.3, ASD-STE100, 9 SVG diagrams). Single source of truth. |
-| [`research/final-requirements.md`](research/final-requirements.md) | Markdown source for `requirements.html` |
-| [`research/director-decisions.md`](research/director-decisions.md) | Director decisions log |
-| [`research/connector-spec-2026-11-14.md`](research/connector-spec-2026-11-14.md) | Verified Genie, MCP, OAuth and Lakebase API facts |
-| [`research/message-board.md`](research/message-board.md) | Append-only agent message board |
-| [`research/diagrams/`](research/diagrams/) | Architecture diagrams (SVG) |
-| [`research/kimi-snapshot/`](research/kimi-snapshot/) | Snapshot of the alternative Kimi requirements run (reference only, never run) |
-| [`mog-rive/`](mog-rive/) | Rive RML source for the MOG mascot (`tools/gen_mog_rml.py` regenerates `scene.rml`) |
-| [`REQUIREMENTS.md`](REQUIREMENTS.md) | Early draft v0.2, superseded by `requirements.html` |
+Or run `xattr -dr com.apple.quarantine /Applications/Bottle.app` in Terminal, then open Bottle
+again.
 
-## Build
+You only see this warning once. Later versions use the same signing identity.
 
-Rebuild the requirements HTML:
+## First run
 
-```sh
-uv run python tools/build_requirements_html.py
-```
+1. **Grant permissions.** Bottle asks for:
+   - **Microphone** — for dictation and call recording.
+   - **Accessibility** and **Input Monitoring** — for the hold-to-talk hotkeys and pasting text
+     at your cursor.
+   - **System Audio Recording** — only if you turn on call recording (see below). It lets Bottle
+     hear the other side of a call.
 
-Regenerate the mascot scene:
+   If you deny one, open **System Settings → Privacy & Security**, turn it on, and reopen Bottle.
 
-```sh
-uv run python tools/gen_mog_rml.py
-```
+2. **Connect a workspace.** If the Databricks CLI isn't installed, Bottle offers to install the
+   official CLI, with your consent. Then "Connect a workspace" signs you in
+   (`databricks auth login`) and saves a CLI profile — for example `my-workspace` — in
+   `~/.databrickscfg`. One CLI profile is one workspace.
+3. **Pick a home workspace.** If you connect more than one workspace, Bottle asks you to choose a
+   home workspace. Bottle never picks one for you. The home workspace is always on; you switch
+   other workspaces on or off in **Settings → Workspace**.
+4. **Download local speech.** Bottle asks to download a 487 MB speech model so dictation runs on
+   your Mac. Click **Download (487 MB)**. Until it finishes, dictation does not work unless you
+   set **Dictation engine** to Databricks.
 
-Build the mascot `.riv` before `pnpm build` (needs `rive login`; never commit the `.riv`). Without it, the MOG view shows the PNG fallback (ADR 0027):
+Your Databricks token comes only from the CLI (`databricks auth token --profile my-workspace`) and
+lives only in memory. Bottle never writes it to disk.
 
-```sh
-rive mog-rive --publish
-```
+## Using Bottle
 
-Regenerate the transparent PNG fallback after an art change (no login needed):
+### Dictate: hold Right Option
 
-```sh
-uv run --no-project --with pillow python tools/render_mog_fallback.py
-```
+Hold **Right Option** and speak, then release.
+
+> "Remind the team the churn definition excludes trial accounts."
+
+Bottle transcribes your speech on your Mac with a local model (Parakeet) and removes filler words.
+A chat model on your home workspace's AI Gateway then fixes punctuation and capitals. Bottle waits
+at most 1.5 seconds. It uses the model text only if it keeps your exact words. Otherwise it pastes
+the local text. A small pop-up offers **Ask Genie**, and **Copy** if Bottle could not paste.
+
+Turn off cleanup with the **Clean up dictation** switch in Settings → Workspace. You can also switch
+**Dictation engine** to Databricks, which sends the audio to a Databricks model instead of
+transcribing locally, and falls back to the local model on any error.
+
+### Ask: ⌥G (hold Right Option, tap G)
+
+Hold **Right Option**, tap **G**, ask your question out loud, then release.
+
+> "What was our churn rate last quarter?"
+
+Bottle asks your home workspace's Genie first. It asks your other switched-on workspaces only if
+the home workspace has no answer, or if your question names a workspace by name. The answer
+appears next to the assistant as Markdown, with tables where Genie returns them. Each source is
+cited as `[1]`, `[2]`, and so on; each citation links to that workspace's Genie answer. The card
+also offers **Open in Databricks** and, when more than one workspace answered, **Open Genie One in
+`<workspace>`** for each one. Ask a follow-up the same way — it continues the same conversation and
+starts at your home workspace again.
+
+If the model itself isn't reachable, Bottle falls back to asking Genie on your home workspace
+directly and shows a short notice.
+
+Bottle copies each Genie answer to your clipboard, on the ⌥G card and on a reply in Conversations
+(turn this off in Settings → Workspace). It pastes formatted into Docs and email, and as cells
+into Excel; a small "Copy as Markdown" button on each reply in Conversations copies the raw
+Markdown instead, any time, even with the setting off. A small **Copy** button next to it, and on
+the ⌥G card itself, copies the same formatted (HTML plus text) form on demand, any time, even with
+the setting off.
+
+### Record: ⌥R (hold Right Option, tap R)
+
+Call recording is off until you turn on **Record calls** in **Settings → Call recording**. Bottle
+asks you to confirm a consent notice first.
+
+Hold **Right Option** and tap **R** to start. Do it again to stop.
+
+Bottle records your microphone and the other side of the call, uploads the audio to My Files in
+your workspace (or a Unity Catalog volume you pick under **Save to**), and writes a transcript and
+notes through the Databricks AI Gateway. Recording a call may need everyone's consent — let people
+know before you start.
+
+While a recording runs, Bottle holds the microphone, so dictation and ⌥G wait until you stop.
+
+Open **Recordings** in the sidebar to see every take. A new take shows the moment you press
+Stop, then moves through Uploading, Transcribing and Writing notes to Done. A recording that does
+not upload stays only on your Mac: upload it again, or click **Remove**. Remove takes a take off
+this Mac and off the list. A copy already in Databricks stays; Bottle warns you when the audio
+never reached Databricks.
+
+## Privacy
+
+- **Tokens stay in memory.** Bottle reads your Databricks token from the CLI at the moment it needs
+  it and never writes it to disk.
+- **No stored responses.** Every call to a Databricks model sets `store: false`. Your workspace
+  admin's AI Gateway logging settings still apply.
+- **Only `system.ai.*` models, through your own AI Gateway.** Dictation cleanup and Ask use one
+  orchestrator model (default `system.ai.claude-haiku-5-5`, pick another in Settings → Workspace).
+  Call recording uses a Gemini model for the transcript and a Claude model for notes, both through
+  your workspace's AI Gateway.
+- **The model can't start a capture.** The orchestrator model has exactly two tools: ask Genie in a
+  workspace you switched on, and submit its final answer. It cannot turn on your mic, start a
+  recording, or reach the network on its own.
+- **Your data stays in your workspace.** Recordings, transcripts and notes go to My Files or a
+  Unity Catalog volume in your own workspace. Questions and answers go to your own Genie. Bottle
+  has no server of its own; the first run downloads only the Databricks CLI and the local speech
+  model, both from their official sources.
+- **Local history is encrypted.** Each Genie exchange is saved on your Mac in an encrypted SQLite
+  database (SQLCipher), with the key in the macOS keychain. Clear it any time from Settings → Wipe.
+
+## Troubleshooting
+
+**The hotkey does nothing.**
+Check **System Settings → Privacy & Security → Accessibility** and **Input Monitoring**. Both need
+to be on for Bottle. If you just granted Input Monitoring, reopen Bottle.
+
+**Recording shows "No sound from other apps yet."**
+Bottle shows this after 20 seconds of silence from other apps. If you are on a call and it stays,
+click **Open System Settings** on the notice, or open **System Settings → Privacy & Security →
+Screen & System Audio Recording** and turn Bottle on under System Audio Recording Only.
+
+**A workspace doesn't show up.**
+Bottle reads workspaces from your Databricks CLI profiles. Check that the profile exists
+(`databricks auth profiles`), then click the refresh button (the circular arrow) in
+**Settings → Workspace**.
+
+**Sign-in expired.**
+When you ask with ⌥G, Bottle opens your browser to sign in again, then asks once more. You can
+also click **Sign in…** next to the workspace in **Settings → Workspace**, or copy the sign-in
+command, run it in Terminal, then click refresh.
+
+## More help
+
+- User guides: [`docs/user/`](docs/user/).
+- Want to build Bottle yourself or contribute? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 

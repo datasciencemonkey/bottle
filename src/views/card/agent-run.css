@@ -109,6 +109,67 @@
   font-size: var(--mog-text-xs);
 }
 
+/* The owner's "attach Genie's answer to the clipboard" request: a quiet "Copied" / "Couldn't
+   copy" note next to the answer. No banner, no toast stack. The outer line stays mounted and
+   reserves its own height (one line at this font size), so the note's entrance and exit never
+   move the answer above or below it. */
+.agent-copy-note {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  min-height: calc(var(--mog-text-xs) * var(--mog-leading));
+  font-size: var(--mog-text-xs);
+  line-height: var(--mog-leading);
+}
+
+.agent-copy-note-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mog-text-muted);
+}
+
+.agent-copy-note-line[data-tone='bad'] {
+  color: var(--mog-destructive-text);
+}
+
+.agent-copy-note-icon {
+  flex: none;
+}
+
+/* ADR 0124 amendment, the owner's "little button on the Conversations copy" request: a quiet
+   control next to the Copied note that writes the answer's raw Markdown only. Round 2 (Opus
+   review): "Copy" and "Markdown" (`AnswerClipboard.copyNow`) used to be two identical icon-only
+   buttons, easy to confuse; each now carries its own icon and a short visible label, still
+   small and quiet, not a second accent pill. */
+.agent-copy-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-copy-markdown {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  width: auto;
+  height: 18px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--mog-radius-sm, 4px);
+  background: transparent;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+  cursor: pointer;
+}
+
+.agent-copy-markdown:hover,
+.agent-copy-markdown:focus-visible {
+  background: var(--mog-surface-raised, rgba(0, 0, 0, 0.06));
+  color: var(--mog-text);
+}
+
 /* The workspace colour is lifted toward white so it keeps 3:1 on the raised surface. */
 .agent-call,
 .agent-part,

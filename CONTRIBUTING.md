@@ -51,6 +51,20 @@ Every test names its requirement IDs, so the coverage script can map tests to re
 
 A test that names an ID that does not exist in `research/final-requirements.md` fails the coverage check.
 
+## Build and run Bottle
+
+Prerequisites: Node 22+, pnpm 11, Rust stable with clippy and rustfmt, and
+[`uv`](https://docs.astral.sh/uv/).
+
+```sh
+pnpm install
+pnpm tauri dev                      # add --features local-stt for local dictation
+uv run --no-project python scripts/vendor_sherpa_onnx.py   # once, before local-stt builds
+scripts/package-macos.sh            # a macOS DMG
+```
+
+See [`AGENTS.md`](AGENTS.md) for the architecture and where things live.
+
 ## Run the checks locally
 
 Prerequisites: Rust stable with `clippy` and `rustfmt`, Node 22 or later, pnpm 11, uv.

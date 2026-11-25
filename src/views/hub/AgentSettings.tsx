@@ -10,12 +10,14 @@
  *   `orchestrator.cloud_dictation`. With Databricks it shows the disclosure line.
  * - A quiet line with the reason when the orchestrator model is not ready.
  * - "Genie calls per question [5 | 10 | 20]": D2, the most Genie calls for one question.
- * - "Combine across workspaces" (D1, slice 2b): off by default. It sends `workspace.cross`. When the
- *   admin locks it, it is off, disabled, and says "Set by your admin".
+ * - D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision 2026-11-24):
+ *   cross-workspace data is always on. There is no switch for it.
+ * - "Copy Genie answers to the clipboard": a switch, on by default. It sends
+ *   `workspace.copy_genie_answer`, and works with no orchestrator model (it also covers the
+ *   direct Genie fallback).
  * - The disclosure line: where a cross-workspace question goes.
  */
-import { LockIcon } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import type { HubOrchestratorView, OrchestratorAction } from '../../shared/hub-orchestrator';
 import {
   HUB_SCOPE,
@@ -36,21 +38,16 @@ function send(action: WorkspaceAction | OrchestratorAction): void {
 
 export const ORCHESTRATOR_LABEL = 'Orchestrator model';
 export const CLEAN_DICTATION_LABEL = 'Clean up dictation';
+export const COPY_GENIE_ANSWER_LABEL = 'Copy Genie answers to the clipboard';
+export const COPY_GENIE_ANSWER_HELP = 'Bottle copies each finished Genie answer to your clipboard.';
 export const DICTATION_ENGINE_LABEL = 'Dictation engine';
 /** ADR 0123: shown when "Databricks" is chosen. */
 export const DICTATION_ENGINE_DISCLOSURE =
   "Databricks: your voice is sent to your home workspace's AI Gateway to transcribe it.";
 export const DICTATION_ENGINE_LOCAL = 'On this Mac: your voice stays on this Mac.';
-export const COMBINE_LABEL = 'Combine across workspaces';
-export const COMBINE_LOCKED = 'Set by your admin';
-export const COMBINE_APPLIES = 'Applies to your next question.';
-export const COMBINE_OFF_HELP = 'When off, you see each answer. The agent sees only a receipt.';
 /** The help of the model row: where it runs and what it does. */
 export const orchestratorHelp = (homeName: string): string =>
   `Runs on ${homeName}'s AI Gateway. Cleans up dictation and answers ⌥G by asking your workspaces' Genies.`;
-/** The help of the switch D1 (plan 2b): what the agent can see, and what it can do with it. */
-export const combineHelp = (homeName: string): string =>
-  `Answers from your other workspaces go to the orchestrator model in ${homeName}. When on, it can read them, combine them, and use one in a question to another workspace.`;
 export const BUDGET_HELP = 'The most Genie calls your MOG makes for one question.';
 export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 
@@ -58,7 +55,7 @@ export const BUDGETS: readonly HubGenieCallBudget[] = [5, 10, 20];
 export const disclosureLines = (homeName: string): string[] => [
   `When you press ⌥G, Bottle sends your question to the orchestrator model in ${homeName}.`,
   'The model decides which of your workspaces to ask. It asks only workspaces you turned on.',
-  'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
+  'It may combine answers from more than one of your workspaces into one answer.',
 ];
 
 /** A 24px hit area for a control that is smaller than that. */
@@ -67,28 +64,19 @@ const HIT = "relative before:absolute before:inset-x-0 before:-inset-y-1 before:
 export function AgentSettings({
   list,
   orchestrator,
-  busy = false,
 }: {
   list: HubWorkspaceList | undefined;
   /** The orchestrator view. Undefined until the brain sends it. */
   orchestrator?: HubOrchestratorView | undefined;
-  /** A turn runs: a change of the combine switch applies after it. */
-  busy?: boolean;
 }) {
-  // The user changed the switch while a turn ran: only then "Applies to your next question".
-  const [changed, setChanged] = useState(false);
-  // The turn ended: the note goes (a state reset during render, not in an effect).
-  if (!busy && changed) setChanged(false);
   const budgetId = useId();
-  const combineId = useId();
   const modelId = useId();
   const cleanId = useId();
   const engineId = useId();
+  const copyId = useId();
   if (!list) return null;
   const home = list.rows.find((r) => r.isHome);
   const homeName = home?.name ?? 'your home workspace';
-  const locked = list.agent.crossWorkspaceLocked;
-  const combineOn = list.agent.crossWorkspaceData && !locked;
   const state = orchestrator?.state;
   const reason =
     state !== undefined && state !== 'ready'
@@ -252,54 +240,18 @@ export function AgentSettings({
           }
         />
         <SettingsRow
-          className="items-start"
-          descriptionOutsideLabel
-          label={<span id={`${combineId}-label`}>{COMBINE_LABEL}</span>}
-          {...(locked ? {} : { htmlFor: combineId })}
-          description={
-            <span
-              id={`${combineId}-help`}
-              data-agent-combine-help
-              className="flex flex-col gap-[var(--mog-space-1)]"
-            >
-              <span>{combineHelp(homeName)}</span>
-              <span>{COMBINE_OFF_HELP}</span>
-            </span>
-          }
+          label={<span id={`${copyId}-label`}>{COPY_GENIE_ANSWER_LABEL}</span>}
+          htmlFor={copyId}
+          description={COPY_GENIE_ANSWER_HELP}
           control={
-            <span className="flex flex-col items-end gap-[var(--mog-space-1)]">
-              <Switch
-                id={combineId}
-                data-agent-combine
-                checked={combineOn}
-                disabled={locked}
-                aria-labelledby={`${combineId}-label`}
-                aria-describedby={`${combineId}-help${locked ? ` ${combineId}-locked` : ''}`}
-                className={HIT}
-                onCheckedChange={(on) => {
-                  if (busy) setChanged(true);
-                  send({ action: 'workspace.cross', crossWorkspaceData: on });
-                }}
-              />
-              {locked && (
-                <span
-                  id={`${combineId}-locked`}
-                  data-agent-combine-locked
-                  className="flex items-center gap-[var(--mog-space-1)] text-[var(--mog-text-xs)] text-foreground"
-                >
-                  <LockIcon className="size-3" aria-hidden="true" />
-                  {COMBINE_LOCKED}
-                </span>
-              )}
-              {/* The live region is always there, so a screen reader hears the text when it fills. */}
-              <span
-                role="status"
-                data-agent-combine-applies
-                className="min-h-[calc(var(--mog-text-xs)*var(--mog-leading))] text-[var(--mog-text-xs)] text-muted-foreground"
-              >
-                {busy && changed && !locked ? COMBINE_APPLIES : ''}
-              </span>
-            </span>
+            <Switch
+              id={copyId}
+              data-copy-genie-answer
+              checked={list.agent.copyGenieAnswer}
+              aria-labelledby={`${copyId}-label`}
+              className={HIT}
+              onCheckedChange={(on) => send({ action: 'workspace.copy_genie_answer', on })}
+            />
           }
         />
       </SettingsGroup>

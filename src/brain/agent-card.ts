@@ -87,8 +87,6 @@ export interface PartOptions {
   /** `https://host` of the workspace, so the footer link is trusted for this host only. */
   host?: string | undefined;
   fromEarlier?: boolean;
-  /** D1 off and this part is not from the agent workspace. */
-  notShownToAgent?: boolean;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -138,7 +136,6 @@ export function partOf(call: AgentTurnCall, o: PartOptions): AgentPartView | und
     }).filter((s) => s.id !== 'dataFlow');
   }
   if (o.fromEarlier) part.fromEarlier = true;
-  if (o.notShownToAgent) part.notShownToAgent = true;
   return part;
 }
 
@@ -282,6 +279,12 @@ export interface AgentCard {
   note(mogId: MogId, text: string): boolean;
   /** The turn on the card of `mogId`, if any. */
   shown(mogId: MogId): string | undefined;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request: true when the user already
+   * closed the card of `turnId` (directly, or by closing the whole agent card while it was still
+   * open) before it finished. A dismissed turn's answer is never copied: the user dismissed it.
+   */
+  isDismissed(turnId: string): boolean;
 }
 
 /** The dismissed turns that the card remembers. */
@@ -408,6 +411,7 @@ export function createAgentCard(deps: AgentCardDeps): AgentCard {
       }
     },
     shown: (mogId) => owner.get(mogId),
+    isDismissed: (turnId) => dismissed.has(turnId),
   };
 }
 
@@ -420,6 +424,29 @@ export interface AgentChipDeps {
   openSettings(): void;
   /** The user closed the card of an agent turn (`card_done`). */
   cardDone(mogId: MogId): void;
+  /** The owner's "Copy" button request (ADR 0124 amendment): an explicit click on the agent
+   * turn card's own Copy control, formatted (html plus text). */
+  copy?(turnId: string): void;
+}
+
+/** What "Open in Conversations" needs. */
+export interface OpenTurnDeps {
+  /** Show and focus the hub window. */
+  showHub(): Promise<unknown>;
+  /** The thread of a turn (`AgentClient.threadOf`). */
+  threadOf(turnId: string): string | undefined;
+  /** Open hub Conversations on a thread (`hub:conversations.open`, held until the hub acks). */
+  openThread(threadId: string): Promise<void>;
+}
+
+/**
+ * "Open in Conversations" on the card: show the hub first, then open its Conversations area on
+ * the thread of the turn. The open goes after the show, so the hub is up when it arrives.
+ */
+export async function openTurnInConversations(turnId: string, deps: OpenTurnDeps): Promise<void> {
+  await deps.showHub().catch(() => undefined);
+  const threadId = deps.threadOf(turnId);
+  if (threadId !== undefined) await deps.openThread(threadId);
 }
 
 /**
@@ -431,6 +458,9 @@ export function wireAgentChips(bus: BrainBus, deps: AgentChipDeps): () => void {
     if (input.from !== `card-${input.mogId}`) return;
     const p = isObj(input.payload) ? input.payload : {};
     if (input.kind === 'click' && p['target'] === CARD_DONE) return deps.cardDone(input.mogId);
+    if (input.kind === 'click' && p['action'] === 'agent.copy' && typeof p['turnId'] === 'string') {
+      return deps.copy?.(p['turnId']);
+    }
     if (input.kind !== 'chip_click' || typeof p['chipId'] !== 'string') return;
     const chip = parseAgentChip(p['chipId']);
     if (!chip) return;

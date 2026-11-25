@@ -176,7 +176,7 @@ pub const ERROR_CODES: &[&str] = &[
     // "Local speech setup is not available in this build yet."
     "stt_setup_unavailable",
     // The ask loop (ADR 0122). `timeout` and `offline` also apply.
-    // The model-facing codes `budget_reached`, `cross_workspace_off`, `no_active_turn` and
+    // The model-facing codes `budget_reached`, `ask_home_first`, `no_active_turn` and
     // `run_stopped` are Rust strings in tool results, never IPC codes.
     "ask_not_approved",
     "agent_queue_full",

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/artifact-verify", "crates/cli-runner", "crates/mog-core", "crates/mog-core-ffi", "src-tauri"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.10"
 edition = "2021"
 license = "MIT"
 publish = false

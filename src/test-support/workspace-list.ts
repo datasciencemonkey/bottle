@@ -28,12 +28,11 @@ export function workspaceList(
       workspaceRow({ ...r, ...(r.profile === home ? { isHome: true, available: true } : {}) }),
     ),
     agent: {
-      crossWorkspaceData: false,
-      crossWorkspaceLocked: false,
       genieCallBudget: 10,
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
       cloudDictation: false,
+      copyGenieAnswer: true,
     },
     ...over,
   };

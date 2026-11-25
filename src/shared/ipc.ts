@@ -58,6 +58,7 @@ export const COMMANDS = {
   consent_records_list: B,
   stt_transcribe: B,
   insert_text: B,
+  clipboard_write_text: B,
   agent_start: B,
   agent_stop: B,
   agent_send: B,
@@ -367,6 +368,11 @@ export interface CommandArgs {
     tags: Tags;
   };
   insert_text: { mogId: MogId; text: string; leaseId: LeaseId };
+  /** The owner's "attach Genie's answer to the clipboard" request. `html` (ADR 0124 amendment:
+   * paste formatted into Docs, email and Excel) is optional; on macOS it is written alongside
+   * `text` as `public.html`, next to the plain text. `text` and `html` combined are bound by
+   * the Rust `CLIPBOARD_WRITE_MAX_BYTES` (100 KB); a longer pair answers `too_large`. */
+  clipboard_write_text: { text: string; html?: string };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
   agent_stop: MogArgs;
   agent_send: { mogId: MogId; turn: JsonObject };
@@ -446,7 +452,12 @@ export interface CommandArgs {
   recording_start: { profile: ProfileName; instructions?: string };
   recording_stop: NoArgs;
   recording_state: NoArgs;
-  recording_list: { profile: ProfileName };
+  /**
+   * `reconcile`: owner authorization 2026-11-25. Absent or `false`: the local recording index,
+   * merged with the live overlays, with no network call. `true`: also read the volume once and
+   * refresh the index (the hub's first open, or after a recording reaches `done` or `failed`).
+   */
+  recording_list: { profile: ProfileName; reconcile?: boolean };
   recording_detail: { profile: ProfileName; id: RecordingId };
   recording_retry: { profile: ProfileName; id: RecordingId };
   recording_delete: { profile: ProfileName; id: RecordingId };
@@ -471,7 +482,6 @@ export interface CommandArgs {
   workspace_set_available: { profile: ProfileName; available: boolean; mogId?: MogId };
   workspace_make_home: { profile: ProfileName; mogId?: MogId };
   workspace_settings_write: {
-    crossWorkspaceData?: boolean;
     genieCallBudget?: GenieCallBudget;
     /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Anything else is refused. */
     agentEndpoint?: string;
@@ -479,6 +489,8 @@ export interface CommandArgs {
     cleanDictation?: boolean;
     /** ADR 0123: "Dictation engine: Databricks". A bool only. */
     cloudDictation?: boolean;
+    /** "Copy Genie answers to the clipboard" (Settings → Workspace). A bool only. */
+    copyGenieAnswer?: boolean;
   };
   /** ADR 0122: always the home profile. Bottle never picks one. */
   orchestrator_models: NoArgs;
@@ -521,10 +533,9 @@ export interface WorkspaceRow {
   isHome: boolean;
   signIn: WorkspaceSignIn;
 }
-/** D1, the SEC-28b admin lock, D2, the D9 orchestrator model and "Clean up dictation". */
+/** D2, the D9 orchestrator model and "Clean up dictation". D1 "Combine across workspaces" is
+ * removed (ADR 0122 amendment, owner decision 2026-11-24): cross-workspace data is always on. */
 export interface AgentSettings {
-  crossWorkspaceData: boolean;
-  crossWorkspaceLocked: boolean;
   genieCallBudget: GenieCallBudget;
   /** ADR 0122: the orchestrator model, a `system.ai.<name>` id. Default `system.ai.claude-haiku-5-5`. */
   endpoint: string;
@@ -532,6 +543,8 @@ export interface AgentSettings {
   cleanDictation: boolean;
   /** ADR 0123: "Dictation engine: Databricks". Default false (on this Mac). */
   cloudDictation: boolean;
+  /** "Copy Genie answers to the clipboard" (Settings → Workspace). Default true. */
+  copyGenieAnswer: boolean;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -583,7 +596,6 @@ export interface AgentTurnAccepted {
   position: number;
   newSession: boolean;
   budget: GenieCallBudget;
-  crossWorkspace: boolean;
   catalog: AgentWorkspace[];
 }
 
@@ -613,14 +625,7 @@ export interface AgentTurnResult {
 }
 
 export type AgentSessionEndReason =
-  | 'new_session'
-  | 'quit'
-  | 'wipe'
-  | 'profile_changed'
-  | 'd1_changed'
-  | 'catalog_changed'
-  | 'tainted'
-  | 'idle';
+  'new_session' | 'quit' | 'wipe' | 'profile_changed' | 'catalog_changed' | 'idle';
 export interface AgentSessionState {
   state: 'none' | 'idle' | 'busy';
   sessionId?: string;
@@ -655,8 +660,18 @@ export type AgentTurnEvent =
   | {
       kind: 'refused';
       turnId: string;
-      code: 'workspace_not_available' | 'budget_reached' | 'cross_workspace_off' | 'invalid_args';
+      code: 'workspace_not_available' | 'budget_reached' | 'invalid_args';
       used: number;
+    }
+  | {
+      /**
+       * ADR 0122 amendment (owner decision 2026-11-24): a call to `workspaceId` signed out.
+       * Bottle starts that workspace's browser sign-in (U2M OAuth) and retries the call once.
+       */
+      kind: 'signing_in';
+      turnId: string;
+      /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
+      workspaceId: string;
     }
   | { kind: 'slow'; turnId: string }
   | {
@@ -711,6 +726,7 @@ export interface AgentPartView {
   workspace: AgentWsChip;
   sections: CardSection[];
   fromEarlier?: boolean;
+  /** The agent never saw this part: it was withheld (a quarantine hit). */
   notShownToAgent?: boolean;
   folded?: boolean;
 }
@@ -743,6 +759,10 @@ export interface AgentTurnView {
     citations?: AgentCitation[];
   };
   notice?: string;
+  /** The quiet "Copied to clipboard" / "Couldn't copy" note, brain-set once the
+   * `clipboard_write_text` call of a finished answer resolves. The brain also clears it (to
+   * `undefined`) a short time later, so it never resurfaces on a remount or a reopened thread. */
+  copyNote?: 'copied' | 'failed' | undefined;
   tokens?: number;
   /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
   seenAt?: number;
@@ -854,7 +874,7 @@ export const IPC_ERROR_CODES = [
   'stt_setup_unavailable',
   /**
    * `agent_turn_*` and `agent_session_*` (ADR 0122). Model-facing only, never an
-   * IPC code: budget_reached, cross_workspace_off, no_active_turn, run_stopped.
+   * IPC code: budget_reached, ask_home_first, no_active_turn, run_stopped.
    */
   'ask_not_approved',
   'agent_queue_full',
@@ -990,6 +1010,12 @@ export interface CardUpdate {
   pagesChecklist?: PagesChecklistView;
   /** Slice 2a: the live agent turn in compact form, with "Open in Agent". */
   agentTurn?: AgentTurnView;
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request, for the direct Genie answer
+   * this card shows (an agent turn's own answer carries its note on `agentTurn.copyNote`
+   * instead). The brain clears it a short time after setting it.
+   */
+  copyNote?: 'copied' | 'failed' | undefined;
 }
 
 /** Why a capture lease stopped (ADR 0055). Mirrors `mog_core::types::CaptureStopReason`. */
@@ -1234,6 +1260,8 @@ export interface CommandReturns {
   insert_text: {
     result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' | 'target_changed';
   };
+  /** The owner's "attach Genie's answer to the clipboard" request. */
+  clipboard_write_text: { result: 'written' | 'too_large' | 'unsupported' };
   agent_start: { agentSessionId: string };
   agent_stop: Empty;
   agent_send: Empty;

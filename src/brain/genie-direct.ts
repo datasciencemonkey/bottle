@@ -76,6 +76,13 @@ export interface GenieDirectDeps {
   /** "Change workspace…": show the hub on this MOG's Edit form (the home workspace field). */
   changeWorkspace?: ((mogId: MogId) => unknown) | undefined;
   /**
+   * The owner's "attach Genie's answer to the clipboard" request: a real Genie answer (never a
+   * clarify question, a failure or a stop) came back, once, verbatim. Called whether or not the
+   * user closed the ready pill: the answer was still delivered. `host` is the workspace host of
+   * the answer (ADR 0124 amendment): the one host the clipboard's HTML form trusts links for.
+   */
+  onAnswered?: ((mogId: MogId, opId: string, md: string, host?: string) => void) | undefined;
+  /**
    * UX slice 1: the arrival gate. While the user holds the talk key, the terminal event changes
    * only the pill to "Answer ready" (an answer) and the card update waits for `whenClear`.
    */
@@ -223,6 +230,18 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
       };
       const apply = async (): Promise<void> => {
         live.delete(opId);
+        // A request that started later owns the card: a late outcome of this one is never
+        // copied either (checked here, before `closed` and `latestSend` move on below).
+        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
+        // The owner's clipboard-copy request: never copy a partial answer (G-23a), one a newer
+        // send has already superseded, or one the user dismissed (closed the ready pill) before
+        // it landed — a silent clipboard overwrite of something the user already dismissed would
+        // surprise them (owner decision, reversible: drop the `!closed.has(opId)` check below).
+        if (outcome.t === 'answer' && !outcome.incomplete && !newer && !closed.has(opId)) {
+          // ADR 0124 amendment: `host` (already resolved above, for the card's own link trust)
+          // is the one workspace host the clipboard's HTML form trusts links for.
+          safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md, host));
+        }
         // The user closed the ready pill: the card stays closed. The blurb ends empty.
         if (closed.delete(opId)) {
           // The early sections of this request go too, if they are still the card's.
@@ -260,7 +279,6 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
         // its final place (no race between the view fit and the R11 move).
         // A request that started later owns the card (its pill may be closed): a late outcome of
         // this one never shows an empty or foreign card window. The blurb and the phase still end.
-        const newer = (latestSend.get(turn.mogId) ?? 0) > mySeq;
         if (deps.showCard && !newer) {
           try {
             await deps.showCard(turn.mogId);

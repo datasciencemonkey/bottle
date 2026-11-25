@@ -904,4 +904,153 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       expect(c.controls.size).toBe(0);
     });
   });
+
+  describe('[H2] the owner\'s "attach Genie\'s answer to the clipboard" request', () => {
+    const answerEvent: AskEvent = {
+      t: 'answer',
+      md: 'Churn was 4.2%.',
+      incomplete: false,
+      keyNumbers: [],
+      deepLink: '',
+      queryItems: [],
+    };
+
+    it('calls onAnswered once with the verbatim answer, for a real answer only', async () => {
+      const c = fakeCard();
+      const seen: { mogId: string; opId: string; md: string }[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([
+          {
+            t: 'answer',
+            md: 'Revenue was **$1.2M** [not a real marker].',
+            incomplete: false,
+            keyNumbers: [],
+            deepLink: '',
+            queryItems: [],
+          },
+        ]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: (mogId, opId, md) => void seen.push({ mogId, opId, md }),
+      });
+      await send(turn());
+      expect(seen).toEqual([
+        { mogId: MOG, opId: OP, md: 'Revenue was **$1.2M** [not a real marker].' },
+      ]);
+    });
+
+    it('[ADR 0124 amendment] passes the resolved workspace host to onAnswered', async () => {
+      const c = fakeCard();
+      const seen: (string | undefined)[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        hostOf: async () => 'sales.cloud.databricks.com',
+        onAnswered: (_m, _o, _md, host) => void seen.push(host),
+      });
+      await send(turn());
+      expect(seen).toEqual(['sales.cloud.databricks.com']);
+    });
+
+    it('never calls onAnswered for a failure, a clarify question or a stop', async () => {
+      const cases: AskEvent[] = [
+        { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' },
+        { t: 'uncertain' },
+        { t: 'abandoned' },
+        { t: 'cancel_requested' },
+        { t: 'needs_input', kind: 'clarify', prompt: 'Which workspace?', options: [] },
+      ];
+      for (const event of cases) {
+        const c = fakeCard();
+        let calls = 0;
+        const send = createGenieDirectSend({
+          genie: fakeBridge([event]).bridge,
+          cardFor: () => c.card,
+          newOpId: () => OP,
+          onAnswered: () => void calls++,
+        });
+        await send(turn());
+        expect(calls).toBe(0);
+      }
+    });
+
+    it('[owner decision] never copies when the user closed the ready pill before the answer landed', async () => {
+      const c = fakeCard();
+      const seen: string[] = [];
+      let heldFn: (() => void) | undefined;
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: (_m, _o, md) => void seen.push(md),
+        arrivals: {
+          isHeld: () => true,
+          whenClear: (fn) => {
+            heldFn = fn;
+          },
+        },
+      });
+      const promise = send(turn());
+      // Let the microtasks run until the ready pill is up (`whenClear` has captured its callback).
+      for (let i = 0; i < 20 && !heldFn; i++) await Promise.resolve();
+      send.close(MOG, OP);
+      heldFn?.();
+      await promise;
+      // Dismissed before it landed: a silent clipboard overwrite would surprise the user.
+      expect(seen).toEqual([]);
+      // The card stayed closed: the blurb ended empty, not with the answer.
+      expect(c.log.at(-1)).toEqual({ id: `genie:${OP}`, text: '', completed: true });
+    });
+
+    it('[H-A] never copies a partial answer (G-23a, incomplete: true)', async () => {
+      const c = fakeCard();
+      let calls = 0;
+      const send = createGenieDirectSend({
+        genie: fakeBridge([{ ...answerEvent, incomplete: true }]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        onAnswered: () => void calls++,
+      });
+      await send(turn());
+      expect(calls).toBe(0);
+    });
+
+    it('[L-B] never copies an older answer once a newer send has already started', async () => {
+      const c = fakeCard();
+      const seen: string[] = [];
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((r) => (releaseFirst = r));
+      let opCount = 0;
+      const send = createGenieDirectSend({
+        genie: {
+          submit: () => {
+            opCount++;
+            const opId = `op-${opCount}`;
+            const events =
+              opCount === 1
+                ? (async function* () {
+                    await firstGate;
+                    yield answerEvent;
+                  })()
+                : (async function* () {
+                    yield { ...answerEvent, md: 'Newer answer.' };
+                  })();
+            return { opId, events };
+          },
+        },
+        cardFor: () => c.card,
+        newOpId: () => `op-${opCount + 1}`,
+        onAnswered: (_m, opId, md) => void seen.push(`${opId}:${md}`),
+      });
+      const p1 = send(turn());
+      // Let the first send register itself (`latestSend`) before the second starts.
+      await Promise.resolve();
+      const p2 = send(turn());
+      await p2;
+      releaseFirst?.();
+      await p1;
+      expect(seen).toEqual(['op-2:Newer answer.']);
+    });
+  });
 });

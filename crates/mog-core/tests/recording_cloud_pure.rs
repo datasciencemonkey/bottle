@@ -176,42 +176,64 @@ fn rec_settings_json_file_round_trip_and_bad_file_falls_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// ADR 0123: a saved settings file that still holds the two old default ids reads as the
-/// `system.ai.*` defaults. Any other value (even a `databricks-*` one) is kept as the user set it.
+/// ADR 0123, the general rule (owner review 2026-11-25, "E"): any stored endpoint id that is
+/// not `system.ai.*` reads as the matching `system.ai.*` default, not only the two old literal
+/// defaults. A `system.ai.*` id the user actually chose (even a different one) stays. The
+/// migration is persisted: the file on disk no longer carries the legacy id after one load.
 #[test]
-fn adr_0123_saved_old_default_endpoints_read_as_the_system_ai_defaults() {
+fn adr_0123_any_non_system_ai_endpoint_falls_back_to_the_default_and_the_file_is_migrated() {
     use mog_core::recording::RecordingSettingsStore;
     let dir = std::env::temp_dir().join(format!("bottle-rec-legacy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = JsonSettingsStore::new(dir.join(SETTINGS_FILE));
     let mut v = serde_json::to_value(mog_core::types::RecordingSettings::default()).unwrap();
+    // The two literal legacy defaults of an older build.
     v["transcribeEndpoint"] = json!("databricks-gemini-3-8-flash");
     v["notesEndpoint"] = json!("databricks-claude-sonnet-5-5");
     std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec(&v).unwrap()).unwrap();
     let s = file.load().unwrap();
     assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
     assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    // Persisted: the file itself no longer holds the legacy id, with no further write.
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(SETTINGS_FILE)).unwrap()).unwrap();
+    assert_eq!(on_disk["transcribeEndpoint"], "system.ai.gemini-3-8-flash");
+    assert_eq!(on_disk["notesEndpoint"], "system.ai.claude-sonnet-5-5");
+
+    // An arbitrary non-`system.ai.*` id (never one of the two literal legacy defaults) also
+    // falls back: the general rule, not a hardcoded pair.
     v["transcribeEndpoint"] = json!("my-own-model");
     v["notesEndpoint"] = json!("system.ai.gpt-oss-20b");
     std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec(&v).unwrap()).unwrap();
-    let s = file.load().unwrap();
-    assert_eq!(s.transcribe_endpoint.as_str(), "my-own-model");
+    let file2 = JsonSettingsStore::new(dir.join(SETTINGS_FILE));
+    let s = file2.load().unwrap();
+    assert_eq!(
+        s.transcribe_endpoint.as_str(),
+        "system.ai.gemini-3-8-flash",
+        "any non-system.ai id falls back, not only the two literal legacy ones"
+    );
+    // A `system.ai.*` id the user actually chose (not the default) is kept as it is.
     assert_eq!(s.notes_endpoint.as_str(), "system.ai.gpt-oss-20b");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// ADR 0123: a retry of an old recording job (its manifest holds the old default ids) calls
-/// the `system.ai.*` models, never a `databricks-*` endpoint.
+/// ADR 0123, the general rule ("E"): a retry of an old recording job (its manifest holds the
+/// old default ids, or any other non-`system.ai.*` id) calls the `system.ai.*` models, never a
+/// `databricks-*` endpoint or any other non-`system.ai.*` one.
 #[test]
 fn adr_0123_the_requests_never_send_an_old_default_endpoint() {
     let t = transcribe_request("databricks-gemini-3-8-flash", OGG, None).unwrap();
     assert_eq!(t["model"], "system.ai.gemini-3-8-flash");
     let n = notes_request("databricks-claude-sonnet-5-5", "i", "t").unwrap();
     assert_eq!(n["model"], "system.ai.claude-sonnet-5-5");
-    // A custom id stays as given.
+    // Any other non-`system.ai.*` id falls back to the default too, not only the two literal
+    // legacy ones.
     let c = notes_request("my-model", "i", "t").unwrap();
-    assert_eq!(c["model"], "my-model");
+    assert_eq!(c["model"], "system.ai.claude-sonnet-5-5");
+    // A `system.ai.*` id the user actually chose (not the default) stays as given.
+    let d = notes_request("system.ai.gpt-oss-20b", "i", "t").unwrap();
+    assert_eq!(d["model"], "system.ai.gpt-oss-20b");
 }
 
 #[test]
@@ -265,8 +287,13 @@ fn rec_model_only_known_audio_magic_and_size_budget() {
         transcribe_request("e", b"hello, not audio", None),
         Err(ErrorKind::AudioUnreadable)
     );
+    // Not `system.ai.*`: the general rule falls back to the default rather than erroring.
+    let fallback = transcribe_request("bad name", OGG, None).unwrap();
+    assert_eq!(fallback["model"], "system.ai.gemini-3-8-flash");
+    // A malformed `system.ai.*` id (the namespace, but not a valid endpoint name) still errors:
+    // the fallback only applies outside the namespace.
     assert_eq!(
-        transcribe_request("bad name", OGG, None),
+        transcribe_request("system.ai.bad name", OGG, None),
         Err(ErrorKind::TranscribeEndpointMissing)
     );
     let mut big = b"OggS".to_vec();
@@ -300,8 +327,13 @@ fn rec_model_notes_request_and_reply_text() {
         b["messages"][0]["content"],
         "Write notes.\n\nTranscript:\n**Speaker 1** [00:00:00]\nHi."
     );
+    // Not `system.ai.*`: the general rule falls back to the default rather than erroring.
+    let fallback = notes_request("x' y", "a", "b").unwrap();
+    assert_eq!(fallback["model"], "system.ai.claude-sonnet-5-5");
+    // A malformed `system.ai.*` id still errors: the fallback only applies outside the
+    // namespace.
     assert_eq!(
-        notes_request("x' y", "a", "b"),
+        notes_request("system.ai.x' y", "a", "b"),
         Err(ErrorKind::NotesEndpointMissing)
     );
     // Claude: a plain string (live shape).

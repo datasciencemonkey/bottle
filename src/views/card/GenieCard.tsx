@@ -30,7 +30,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { ExternalLink } from 'lucide-react';
+import { Copy, ExternalLink } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MogId } from '../../shared/interfaces';
 import {
@@ -48,6 +48,7 @@ import {
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView, type CardUpdate } from '../view-ipc';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
+import { CopyAnswerNote } from './copy-answer-note';
 import { SafeMarkdown } from './safe-markdown';
 import { MemorySavedLive, NO_SAVED, type MemorySavedApi } from './memory-saved';
 
@@ -74,6 +75,11 @@ export const REMEMBERED_LABEL = 'In today’s note';
 export const REMEMBER_WAIT_MS = 10_000;
 /** A press that moves more than this before release is a drag, not a click (review round 2). */
 export const DRAG_SLOP_PX = 4;
+/** The owner's "Copy" button request (ADR 0124 amendment): formatted (html plus text), even
+ * when the auto-copy toggle is off. Its outcome shows through the same brain-sent
+ * `card.copyNote` the auto-copy already drives (`CopyAnswerNote`, just below it): no separate
+ * view-local check mark needed here. */
+export const COPY_LABEL = 'Copy';
 /** `var(--mog-leading)` is 1.45 (`tokens.css`); 14px is `var(--mog-text-md)`'s usual size. */
 export const ANSWER_CLAMP_LINES = 4;
 const APPROX_LINE_PX = 14 * 1.45;
@@ -781,6 +787,7 @@ export function GenieCard({
               })}
             </ul>
           )}
+          {kind === 'answer' && <CopyAnswerNote outcome={card.copyNote} />}
           {kind === 'failure' && (
             <div className="genie-failure-body" role="alert">
               <p className="genie-title">{FAILURE_TITLE}</p>
@@ -838,6 +845,27 @@ export function GenieCard({
                 </button>
                 {kind === 'answer' && databricksUrl !== undefined && (
                   <DatabricksLink url={databricksUrl} onOpen={openLink} />
+                )}
+                {kind === 'answer' && opId !== undefined && (
+                  <button
+                    type="button"
+                    className="genie-copy"
+                    data-action="copy"
+                    aria-label={COPY_LABEL}
+                    title={COPY_LABEL}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.detail > 1) return;
+                      void emitView(mogId, 'click', {
+                        action: 'answer.copy',
+                        requestId: opId,
+                      }).catch(() => undefined);
+                    }}
+                  >
+                    <Copy aria-hidden="true" size={11} strokeWidth={2} />
+                    {COPY_LABEL}
+                  </button>
                 )}
                 {kind === 'answer' &&
                   (remember === 'kept' ? (

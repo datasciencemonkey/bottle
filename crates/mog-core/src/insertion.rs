@@ -304,7 +304,9 @@ impl<H: InsertHost> InsertHost for &H {
 }
 
 /// Serializes pastes: overlapping ones would save each other's text as the user's clipboard.
-static PASTE_LOCK: Mutex<()> = Mutex::new(());
+/// `clipboard_write_text` (ADR 0124) takes the same lock, so a copy of a finished answer can
+/// never land between `insert_text`'s clipboard snapshot and its paste chord.
+pub(crate) static PASTE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Whether the app with the focus now is `expected`. An `expected` of pid 0, or a failed read
 /// now, is no match: the paste fails closed (ADR 0118, decision 17).

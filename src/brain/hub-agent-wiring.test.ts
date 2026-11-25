@@ -24,6 +24,8 @@ function rig() {
     },
     send: async (v) => void sent.push(v),
     openSettings: () => void log.push('settings'),
+    copyMarkdown: (turnId) => void log.push(`copy_markdown:${turnId}`),
+    copy: (turnId) => void log.push(`copy:${turnId}`),
   };
   const wiring = wireHubAgent(bus, deps);
   const click = (payload: unknown, from = 'hub', mogId = HUB_SCOPE, kind = 'click') =>
@@ -51,6 +53,38 @@ describe('hub Agent panel wiring', () => {
     expect(r.log).toEqual([`stop:${T1}`, `stop:${T1}`, 'settings']);
     // The panel is sent again after each change.
     expect(r.sent).toHaveLength(2);
+  });
+
+  it('[ADR 0124 amendment] runs the "Copy Markdown" action, with no panel resend', async () => {
+    const r = rig();
+    r.click({ action: 'agent.copy_markdown', turnId: T1 });
+    r.click({ action: 'agent.copy_markdown', turnId: T1 }); // may run again for the same turn
+    await flush();
+    expect(r.log).toEqual([`copy_markdown:${T1}`, `copy_markdown:${T1}`]);
+    expect(r.sent).toEqual([]);
+  });
+
+  it('drops a bad "Copy Markdown" turnId', async () => {
+    const r = rig();
+    r.click({ action: 'agent.copy_markdown', turnId: 'short' });
+    await flush();
+    expect(r.log).toEqual([]);
+  });
+
+  it('[ADR 0124 amendment] runs the "Copy" action, with no panel resend', async () => {
+    const r = rig();
+    r.click({ action: 'agent.copy', turnId: T1 });
+    r.click({ action: 'agent.copy', turnId: T1 }); // may run again for the same turn
+    await flush();
+    expect(r.log).toEqual([`copy:${T1}`, `copy:${T1}`]);
+    expect(r.sent).toEqual([]);
+  });
+
+  it('drops a bad "Copy" turnId', async () => {
+    const r = rig();
+    r.click({ action: 'agent.copy', turnId: 'short' });
+    await flush();
+    expect(r.log).toEqual([]);
   });
 
   it('drops a bad action, another window, another scope and a non-click', async () => {

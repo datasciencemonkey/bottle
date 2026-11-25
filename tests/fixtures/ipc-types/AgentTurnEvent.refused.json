@@ -1,6 +1,6 @@
 {
   "kind": "refused",
   "turnId": "0123456789abcdef0123456789abcdef",
-  "code": "cross_workspace_off",
+  "code": "budget_reached",
   "used": 1
 }

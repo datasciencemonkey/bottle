@@ -256,4 +256,26 @@ describe('card stack controller', () => {
     expect(() => card.input('chip_click', { chipId: 'injection_warning' })).not.toThrow();
     expect(last()?.chips).toEqual([{ id: 'injection_warning', label: 'Warning' }]);
   });
+
+  it('[H-B] setCopyNote sets and clears copyNote independently of the answer sections, no blurb', () => {
+    const { card, last, sent } = setup();
+    card.add({ id: 'genie:op-1', text: 'Asking Genie' });
+    card.setExpanded({ answerMd: 'Revenue was $5M.', keyNumbers: [], dataFlowText: '' });
+    const blurbCountBefore = last()?.blurbs.length;
+    card.setCopyNote('copied');
+    expect(last()?.copyNote).toBe('copied');
+    // The note takes no blurb slot, and the existing answer sections are untouched.
+    expect(last()?.blurbs.length).toBe(blurbCountBefore);
+    expect(last()?.sections).toEqual(sent[sent.length - 2]?.sections);
+    card.setCopyNote(undefined);
+    expect(last()?.copyNote).toBeUndefined();
+  });
+
+  it('setCopyNote with the same value publishes nothing new', () => {
+    const { card, sent } = setup();
+    card.setCopyNote('copied');
+    const countAfterFirst = sent.length;
+    card.setCopyNote('copied');
+    expect(sent.length).toBe(countAfterFirst);
+  });
 });

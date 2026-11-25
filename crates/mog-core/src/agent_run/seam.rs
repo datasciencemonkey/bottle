@@ -25,18 +25,31 @@ pub struct CatalogEntry {
 }
 
 /// One live turn: its id and its D2 budget (a snapshot at turn start).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TurnSpec {
     pub turn_id: String,
+    /// The question the user asked (memory only). The guard checks each model-written
+    /// `ask_genie` question against it: no new URL, no send-elsewhere order.
+    pub user_question: String,
     pub budget: u8,
 }
 
-/// One session: the D1, catalog and agent profile snapshot at session start.
+impl std::fmt::Debug for TurnSpec {
+    /// Content-free: the question shows as its size only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnSpec")
+            .field("turn_id", &self.turn_id)
+            .field("user_question", &self.user_question.len())
+            .field("budget", &self.budget)
+            .finish()
+    }
+}
+
+/// One session: the catalog and agent profile snapshot at session start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSpec {
     pub session_id: String,
     pub catalog: Vec<CatalogEntry>,
-    pub cross_workspace: bool,
 }
 
 /// One Genie call of a session. Content-free.
@@ -65,8 +78,6 @@ pub trait SessionGuard: Send + Sync {
     fn begin_turn(&self, session_id: &str, turn: TurnSpec) -> CoreResult<()>;
     fn stop_turn(&self, turn_id: &str, why: StopWhy);
     fn end_turn(&self, turn_id: &str);
-    /// True once a D1-off session got text from the agent workspace (a taint lasts the session).
-    fn tainted(&self, session_id: &str) -> bool;
     /// The whole session, all turns.
     fn calls(&self, session_id: &str) -> Vec<CallRecord>;
     fn call_detail(&self, turn_id: &str, call_id: &str) -> Option<AgentTurnCall>;

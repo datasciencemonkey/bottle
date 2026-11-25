@@ -103,6 +103,36 @@ describe('AgentTurnCard', () => {
     });
   });
 
+  it('[ADR 0124 amendment] a done turn with an answer shows Copy; it emits agent.copy', async () => {
+    const t = view({
+      state: 'done',
+      parts: [
+        { callId: 'c-00000001', workspace: sales, sections: [{ id: 'answer', md: 'Churn fell.' }] },
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const btn = el.querySelector('button[data-action="copy"]') as HTMLButtonElement;
+    expect(btn.getAttribute('aria-label')).toBe('Copy');
+    // [round 2] a visible text label, not an icon-only button easy to confuse with Markdown.
+    expect(btn.textContent).toBe('Copy');
+    await click(btn);
+    expect(inputEmits()).toContainEqual({
+      mogId: MOG,
+      kind: 'click',
+      payload: { action: 'agent.copy', turnId: T },
+    });
+  });
+
+  it('a turn with no answer to copy, or not done, shows no Copy button', async () => {
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
+    expect(el.querySelector('button[data-action="copy"]')).toBeNull();
+    const doneNoAnswer = view({ state: 'done', parts: [] });
+    const { el: el2 } = await render(
+      <AgentTurnCard mogId={MOG} turn={doneNoAnswer} chips={chips} />,
+    );
+    expect(el2.querySelector('button[data-action="copy"]')).toBeNull();
+  });
+
   it('[AC-2a.10] shows "Still working…" in the slow state, in a live region', async () => {
     const { el } = await render(
       <AgentTurnCard mogId={MOG} turn={view({ state: 'slow' })} chips={chips} />,
@@ -619,6 +649,35 @@ describe('AgentTurnCard', () => {
   it('the scroll body can take the keyboard focus', async () => {
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
     expect(el.querySelector('.agent-card-body')?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('[owner request] shows the quiet copy note once the brain sets turn.copyNote', async () => {
+    const { el } = await render(
+      <AgentTurnCard
+        mogId={MOG}
+        turn={view({ state: 'done', copyNote: 'copied' })}
+        chips={chips}
+      />,
+    );
+    expect(el.querySelector('[data-agent-copy-note]')?.textContent).toBe('Copied');
+  });
+
+  it('shows no copy note before the brain sets turn.copyNote', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={chips} />,
+    );
+    // The status line itself stays mounted (role=status, reserved height), but empty.
+    expect(el.querySelector('[data-agent-copy-note]')?.getAttribute('data-agent-copy-note')).toBe(
+      '',
+    );
+    expect(el.querySelector('[data-agent-copy-note]')?.textContent).toBe('');
+  });
+
+  it('[M-B] reserves no note line while the turn is still running (no copy can happen yet)', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'running' })} chips={chips} />,
+    );
+    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
   });
 });
 

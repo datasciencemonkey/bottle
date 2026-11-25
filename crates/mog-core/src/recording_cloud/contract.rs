@@ -77,6 +77,16 @@ impl LocalAudio for NoLocalAudio {
 /// A job.json that is not `done` or `failed` and has not changed for this long belongs to a
 /// run that died (a crash or a quit): Retry may start again.
 pub const STALE_AFTER_MS: i64 = 30 * 60 * 1000;
+/// The key of a failed end: (profile, volume root, name).
+type EndKey = (String, String, String);
+
+/// The most failed ends the adapter keeps.
+const MAX_ENDS: usize = 64;
+
+fn end_key(p: &str, root: &str, name: &str) -> EndKey {
+    (p.to_owned(), root.to_owned(), name.to_owned())
+}
+
 /// Gets each manifest change (the host sends `recording.job`).
 pub type JobSink = Arc<dyn Fn(&RecordingSummary) + Send + Sync>;
 
@@ -143,6 +153,44 @@ pub fn summary_of(m: &JobManifest) -> Option<RecordingSummary> {
     })
 }
 
+/// The list row of one local index row (migration 0005), for [`CloudAdapter::list_fast`]. Parts
+/// counts are unknown from the index alone (metadata only): `None`, same as a row the live or
+/// in-flight overlay has not reached yet.
+fn index_row_summary(r: &crate::recording_index::RecordingIndexRow) -> Option<RecordingSummary> {
+    Some(RecordingSummary {
+        id: RecordingId::try_from(r.name.clone()).ok()?,
+        name: r.name.clone(),
+        started_at_ms: r.started_at_ms,
+        duration_s: r.duration_s,
+        status: r.status,
+        error_kind: r.error_kind,
+        error_stage: r.error_stage,
+        parts_uploaded: None,
+        parts_total: None,
+        on_device_only: r.on_device_only,
+    })
+}
+
+/// A list row as an index row, for [`CloudAdapter::emit`], [`CloudAdapter::emit_live`] and
+/// [`CloudAdapter::reconcile`] to upsert (migration 0005).
+fn summary_to_index_row(
+    profile: &str,
+    s: &RecordingSummary,
+    updated_at_ms: i64,
+) -> crate::recording_index::RecordingIndexRow {
+    crate::recording_index::RecordingIndexRow {
+        name: s.name.clone(),
+        profile: profile.to_owned(),
+        started_at_ms: s.started_at_ms,
+        duration_s: s.duration_s,
+        status: s.status,
+        error_kind: s.error_kind,
+        error_stage: s.error_stage,
+        on_device_only: s.on_device_only,
+        updated_at_ms,
+    }
+}
+
 fn wire_segment(s: &Segment) -> RecordingSegment {
     RecordingSegment {
         start: s.start,
@@ -165,7 +213,16 @@ pub struct CloudAdapter {
     inflight: Mutex<HashSet<String>>,
     /// The recordings that upload during the call or resume after a crash, by name.
     live: Mutex<HashMap<String, LiveStatus>>,
+    /// The last failed end of a run in this process, by (profile, volume root, name). The
+    /// job.json write of a failure is best effort: when it does not land, the volume still says
+    /// `writing_notes` (or another step), and the list and Retry read this end instead of a step
+    /// that no run owns any more. Keyed by root, so a storage change never mixes them up.
+    ends: Mutex<HashMap<EndKey, JobManifest>>,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// The local recording index (migration 0005; owner authorization 2026-11-25): metadata
+    /// only, written at every status transition (`emit`, `emit_live`), read by
+    /// [`Self::list_fast`] so `recording_list` makes no network call on the hot path.
+    index: Arc<dyn crate::recording_index::RecordingIndexStore>,
 }
 
 /// Where a live recording is, for the list row. Content-free.
@@ -307,8 +364,49 @@ impl CloudAdapter {
             on_job,
             inflight: Mutex::new(HashSet::new()),
             live: Mutex::new(HashMap::new()),
+            ends: Mutex::new(HashMap::new()),
             now_ms,
+            index: Arc::new(crate::recording_index::NoRecordingIndex),
         }
+    }
+
+    /// Wire in the local recording index (migration 0005), once (the host builds the adapter
+    /// before it has the local store open; `src-tauri/src/recording_cloud_host.rs`). Until this
+    /// runs, every index read answers empty and `list_fast` falls back to the overlays alone.
+    pub fn with_index(
+        mut self,
+        index: Arc<dyn crate::recording_index::RecordingIndexStore>,
+    ) -> Self {
+        self.index = index;
+        self
+    }
+
+    /// `m` from the volume, or the failed end this process saw for it when `m` is still at a
+    /// step (not done, not failed) that no run, worker or capture here owns now.
+    fn settled(
+        &self,
+        p: &str,
+        root: &str,
+        m: JobManifest,
+        active: &HashSet<String>,
+    ) -> JobManifest {
+        if self.in_flight(&m.name) || active.contains(&m.name) {
+            return m;
+        }
+        self.end_of(p, root, m)
+    }
+
+    /// As [`Self::settled`] for a caller that holds the run slot of `m` itself (Retry, Delete).
+    fn end_of(&self, p: &str, root: &str, m: JobManifest) -> JobManifest {
+        if matches!(m.status, Status::Done | Status::Failed) || self.is_live(&m.name) {
+            return m;
+        }
+        self.ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&end_key(p, root, &m.name))
+            .cloned()
+            .unwrap_or(m)
     }
 
     /// Take `name` for one run, or `None` when a run on it is in flight.
@@ -330,6 +428,14 @@ impl CloudAdapter {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(name)
+    }
+
+    /// Every recording name with a run in flight now (the hand-off, or Retry).
+    fn in_flight_names(&self) -> HashSet<String> {
+        self.inflight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The list row of a recording whose audio is only on the device (the upload never wrote a
@@ -365,6 +471,25 @@ impl CloudAdapter {
         })
     }
 
+    /// The row of a recording with a local sidecar while the volume itself could not be read
+    /// at all (owner review 2026-11-26, "3"): never `Failed` (this app does not know that it
+    /// failed) and never `on_device_only` (it may already be in the volume); `Uploading` is
+    /// the honest "still in progress, as far as this app can tell right now".
+    fn uncertain_row(name: &str, started_at_ms: u64) -> Option<RecordingSummary> {
+        Some(RecordingSummary {
+            id: RecordingId::try_from(name.to_owned()).ok()?,
+            name: name.to_owned(),
+            started_at_ms,
+            duration_s: 0,
+            status: RecordingStatus::Uploading,
+            error_kind: None,
+            error_stage: None,
+            parts_uploaded: None,
+            parts_total: None,
+            on_device_only: false,
+        })
+    }
+
     /// May Retry start a run on `m`? Only a failed run, or one whose job.json went stale.
     fn retry_allowed(&self, m: &JobManifest) -> bool {
         match m.status {
@@ -382,9 +507,36 @@ impl CloudAdapter {
         &self.service
     }
 
-    fn emit(&self, m: &JobManifest) {
+    /// Tell the sink about `m`, a manifest of a run on `p` and volume `root`.
+    fn emit(&self, p: &str, root: &str, m: &JobManifest) {
+        {
+            let key = end_key(p, root, &m.name);
+            let mut ends = self.ends.lock().unwrap_or_else(PoisonError::into_inner);
+            if m.status == Status::Failed {
+                if !ends.contains_key(&key) && ends.len() >= MAX_ENDS {
+                    // Keep the map small: the oldest end goes.
+                    let oldest = ends
+                        .iter()
+                        .min_by_key(|(_, e)| parse_iso_utc_ms(&e.updated_at).unwrap_or(0))
+                        .map(|(k, _)| k.clone());
+                    if let Some(k) = oldest {
+                        ends.remove(&k);
+                    }
+                }
+                ends.insert(key, m.clone());
+            } else {
+                // A new run works on it, or it is done: no failed end counts any more.
+                ends.remove(&key);
+            }
+        }
         if let Some(s) = summary_of(m) {
             let s = self.overlay(s);
+            // Write-through (migration 0005, owner authorization 2026-11-25): every manifest
+            // change upserts the index, at the same point the brain is told. `upsert` never
+            // un-hides a row the user removed; a best-effort write never blocks or fails this
+            // call.
+            let row = summary_to_index_row(p, &s, (self.now_ms)());
+            let _ = self.index.upsert(&row);
             (self.on_job)(&s);
         }
     }
@@ -455,7 +607,7 @@ impl CloudAdapter {
 
     /// Tell the sink about a live change that no manifest write carries (an error that begins
     /// or ends, a part that closes).
-    fn emit_live(&self, name: &str) {
+    fn emit_live(&self, profile: &str, name: &str) {
         let l = self
             .live
             .lock()
@@ -463,6 +615,10 @@ impl CloudAdapter {
             .get(name)
             .cloned();
         if let Some(s) = l.and_then(|l| self.live_row(name, &l)) {
+            // Write-through (migration 0005): the start, and every upload-progress tick, of a
+            // recording that has no job.json yet.
+            let row = summary_to_index_row(profile, &s, (self.now_ms)());
+            let _ = self.index.upsert(&row);
             (self.on_job)(&s);
         }
     }
@@ -552,7 +708,7 @@ impl CloudAdapter {
                     l.uploaded = m.parts.iter().filter(|e| e.uploaded).count() as u32;
                 }
             });
-            self.emit_live(&name);
+            self.emit_live(p, &name);
             if err.is_none() {
                 backoff.reset();
             }
@@ -568,6 +724,17 @@ impl CloudAdapter {
                 Recv::Msg(LiveMsg::Part(part)) => {
                     self.live_announce(&name, &part);
                     queue.push(part);
+                }
+                Recv::Msg(LiveMsg::Finished(parts))
+                    if ctx.recording && parts.is_empty() && queue.is_empty() =>
+                {
+                    // The call stopped and no audio ever came in: nothing to upload or
+                    // transcribe, so no wait for the network. The job ends failed at once.
+                    self.live_edit(&name, |l| l.recording = false);
+                    let m = self.service.live_no_audio(p, &ctx.job, manifest, &mut |m| {
+                        self.emit(p, &ctx.job.root, m)
+                    });
+                    return summary_of(&m).map(|s| self.overlay(s));
                 }
                 Recv::Msg(LiveMsg::Finished(parts)) => {
                     for part in &parts {
@@ -600,7 +767,7 @@ impl CloudAdapter {
         // the device), so the upload stage of the finish tries them once more.
         let m = self
             .service
-            .live_finish(p, &job, manifest, &mut |m| self.emit(m));
+            .live_finish(p, &job, manifest, &mut |m| self.emit(p, &ctx.job.root, m));
         summary_of(&m).map(|s| self.overlay(s))
     }
 
@@ -621,7 +788,7 @@ impl CloudAdapter {
         manifest: &mut Option<JobManifest>,
         queue: &mut Vec<LocalPart>,
     ) -> Result<(), ErrorKind> {
-        let mut on = |m: &JobManifest| self.emit(m);
+        let mut on = |m: &JobManifest| self.emit(p, &ctx.job.root, m);
         if manifest.is_none() {
             *manifest = Some(self.service.live_begin(p, &ctx.job, &mut on)?);
         }
@@ -670,14 +837,148 @@ impl CloudAdapter {
         let Some(_guard) = self.begin(&req.name) else {
             return Err(RecordingErrorKind::RecordingBusy);
         };
-        let m = self
-            .service
-            .run(req.profile.as_str(), &job, &mut |m| self.emit(m));
+        let m = self.service.run(req.profile.as_str(), &job, &mut |m| {
+            self.emit(req.profile.as_str(), req.storage.root.as_str(), m)
+        });
         summary_of(&m).ok_or(RecordingErrorKind::Internal)
     }
 
     fn root(storage: &RecordingStorage) -> &str {
         storage.root.as_str()
+    }
+
+    /// The live, active and in-flight overlays of fix-list, over `out` (rows already settled:
+    /// from the volume for [`RecordingCloud::list`], from the local index for
+    /// [`Self::list_fast`]). No network call: every input here is already in memory or on the
+    /// local disk.
+    fn merge_overlays(
+        &self,
+        profile: &str,
+        root: &str,
+        active: &HashSet<String>,
+        volume_unreadable: bool,
+        hidden: &HashSet<String>,
+        mut out: Vec<RecordingSummary>,
+    ) -> Vec<RecordingSummary> {
+        let live: HashMap<String, LiveStatus> = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let local: HashMap<String, u64> = self.local.names().into_iter().collect();
+        for row in &mut out {
+            if live.contains_key(&row.name) {
+                // A worker owns it: show its live counts and its network mark.
+                *row = self.overlay(row.clone());
+            } else if row.status == RecordingStatus::Recording
+                && !self.in_flight(&row.name)
+                && !active.contains(&row.name)
+            {
+                // job.json says "recording", but no capture and no worker has it: a crash.
+                // With the audio still here the row is a failed upload that Retry fixes.
+                row.status = RecordingStatus::Failed;
+                row.error_kind = Some(RecordingErrorKind::UploadFailed);
+                row.error_stage = Some(RecordingStatus::Uploading);
+            }
+        }
+        // A recording that runs or uploads now, with no job.json in the volume yet.
+        for (name, l) in &live {
+            if !out.iter().any(|r| &r.name == name) {
+                out.extend(self.live_row(name, l));
+            }
+        }
+        // A run here that failed with no job.json in the volume (a call with no audio whose
+        // start never reached the volume): its failed end is the row.
+        let ends: Vec<JobManifest> = self
+            .ends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|((p, r, _), _)| p == profile && r == root)
+            .map(|(_, m)| m.clone())
+            .collect();
+        for m in &ends {
+            if !out.iter().any(|r| r.name == m.name)
+                && !local.contains_key(&m.name)
+                && !hidden.contains(&m.name)
+            {
+                out.extend(summary_of(m));
+            }
+        }
+        // ADR 0103 decision 7: audio left on the device with no job.json in the volume. Never
+        // the recording capture owns right now, or one that finished but has not yet reached
+        // the pipeline (review of #592, BLOCKING B3). A recording that capture owns, with no
+        // worker (the live upload could not start), shows as recording.
+        for (name, started) in &local {
+            if out.iter().any(|r| &r.name == name)
+                || self.in_flight(name)
+                || live.contains_key(name)
+                || hidden.contains(name)
+            {
+                continue;
+            }
+            if active.contains(name) {
+                out.extend(Self::recording_row(name, *started));
+            } else if volume_unreadable {
+                // The volume itself could not be read at all this time (review "3", round 2
+                // of 2026-11-26): this app genuinely does not know whether this local audio
+                // ever reached it, is mid-upload, or is already done, so it must never claim
+                // "failed". A sidecar (`LiveHandoff` wrote it at the start) is some evidence a
+                // run began: show it as still in progress. With no sidecar either, leave it
+                // out rather than guess wrong; the next successful list corrects this either
+                // way.
+                if self.local.sidecar(name).is_some() {
+                    out.extend(Self::uncertain_row(name, *started));
+                }
+            } else if let Some(s) = Self::local_only_summary(name, *started) {
+                out.push(s);
+            }
+        }
+        // A take that still records: its parts sit in the capture temp dir under its final
+        // name (review of #592, BLOCKING B3), so the launch scan's `local.names()` may not
+        // have it yet (owner test 2026-11-25: ⌥R or Record showed no row at all). `active`
+        // alone is enough to show it as recording.
+        let started_of = |name: &str| -> u64 {
+            self.local
+                .sidecar(name)
+                .map(|s| s.started_at_ms.max(0) as u64)
+                .unwrap_or_else(|| (self.now_ms)().max(0) as u64)
+        };
+        for name in active {
+            if out.iter().any(|r| &r.name == name) {
+                continue;
+            }
+            out.extend(Self::recording_row(name, started_of(name)));
+        }
+        // A take that stopped and was handed to a worker (`in_flight`), with no live entry yet
+        // and no job.json in the volume: still uploading, as far as this app can tell right
+        // now (same owner-test regression as above).
+        for name in self.in_flight_names() {
+            if out.iter().any(|r| r.name == name) {
+                continue;
+            }
+            out.extend(Self::uncertain_row(&name, started_of(&name)));
+        }
+        // A failed upload with no part in the volume and no audio left here was deleted on this
+        // device (`recording_delete` never touches the volume): nothing to retry, so no row.
+        out.retain(|r| {
+            let dead = r.status == RecordingStatus::Failed
+                && r.error_stage == Some(RecordingStatus::Uploading)
+                && r.parts_uploaded.unwrap_or(0) == 0;
+            !dead || local.contains_key(&r.name) || live.contains_key(&r.name)
+        });
+        out.sort_by(|a, b| {
+            b.started_at_ms
+                .cmp(&a.started_at_ms)
+                .then(b.name.cmp(&a.name))
+        });
+        out
+    }
+
+    /// The hidden names of `profile` (Opus review round 2, M1/M2), or an empty set on a read
+    /// error: fail open, so a transient store fault never makes a row disappear.
+    fn hidden_names(&self, profile: &str) -> HashSet<String> {
+        self.index.hidden_names(profile).unwrap_or_default()
     }
 }
 
@@ -870,10 +1171,20 @@ impl RecordingCloud for CloudAdapter {
         profile: &ProfileName,
         storage: &RecordingStorage,
     ) -> RecordingResult<Vec<RecordingSummary>> {
-        let rows = self
-            .service
-            .list(profile.as_str(), Self::root(storage))
-            .map_err(err)?;
+        // A transport-class fault on the volume listing itself (offline, a token hiccup not
+        // yet refreshed, a 5xx) must never blank the whole list (review of #592, "A",
+        // 2026-11-25/26, then "3" of 2026-11-26's round): every recording exists locally
+        // first, whether or not it has ever reached the volume, so the local and live rows
+        // below still have to show. A 404 (nothing in the volume yet) already reads as zero
+        // rows here (`cloud::list`); a transport-class fault now reads the same way. A real,
+        // actionable fault (signed out, no volume permission, a bad root) still propagates:
+        // the user needs to see and fix that, it is never silently hidden.
+        let (rows, volume_unreadable) =
+            match self.service.list(profile.as_str(), Self::root(storage)) {
+                Ok(rows) => (rows, false),
+                Err(e) if is_transient(e.kind) => (Vec::new(), true),
+                Err(e) => return Err(err(e)),
+            };
         let active = self.local.active();
         let now = (self.now_ms)();
         // A job.json that is neither done nor failed and stopped changing belongs to a run that
@@ -881,6 +1192,7 @@ impl RecordingCloud for CloudAdapter {
         // at its step, so Retry shows.
         let rows: Vec<JobManifest> = rows
             .into_iter()
+            .map(|m| self.settled(profile.as_str(), Self::root(storage), m, &active))
             .map(|mut m| {
                 let stuck = !self.in_flight(&m.name)
                     && !active.contains(&m.name)
@@ -900,65 +1212,63 @@ impl RecordingCloud for CloudAdapter {
                 m
             })
             .collect();
-        let mut out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
-        let live: HashMap<String, LiveStatus> = self
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let local: HashMap<String, u64> = self.local.names().into_iter().collect();
-        for row in &mut out {
-            if live.contains_key(&row.name) {
-                // A worker owns it: show its live counts and its network mark.
-                *row = self.overlay(row.clone());
-            } else if row.status == RecordingStatus::Recording
-                && !self.in_flight(&row.name)
-                && !active.contains(&row.name)
-            {
-                // job.json says "recording", but no capture and no worker has it: a crash.
-                // With the audio still here the row is a failed upload that Retry fixes.
-                row.status = RecordingStatus::Failed;
-                row.error_kind = Some(RecordingErrorKind::UploadFailed);
-                row.error_stage = Some(RecordingStatus::Uploading);
-            }
+        let out: Vec<RecordingSummary> = rows.iter().filter_map(summary_of).collect();
+        let hidden = self.hidden_names(profile.as_str());
+        Ok(self.merge_overlays(
+            profile.as_str(),
+            Self::root(storage),
+            &active,
+            volume_unreadable,
+            &hidden,
+            out,
+        ))
+    }
+
+    fn list_fast(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>> {
+        let rows = self.index.list(profile.as_str()).unwrap_or_default();
+        let out: Vec<RecordingSummary> = rows.iter().filter_map(index_row_summary).collect();
+        let active = self.local.active();
+        let hidden = self.hidden_names(profile.as_str());
+        Ok(self.merge_overlays(
+            profile.as_str(),
+            Self::root(storage),
+            &active,
+            false,
+            &hidden,
+            out,
+        ))
+    }
+
+    fn reconcile(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>> {
+        let out = RecordingCloud::list(self, profile, storage)?;
+        let now = (self.now_ms)();
+        for s in &out {
+            let row = summary_to_index_row(profile.as_str(), s, now);
+            // Upsert only: the reply itself already carries every row, so a second
+            // `on_job` emit here is redundant, and on an index with no prior rows at all
+            // (every name "changed" against an empty "before" snapshot) it was a storm —
+            // one notice and one more reconcile per existing recording (Opus review round 2,
+            // B2).
+            let _ = self.index.upsert(&row);
         }
-        // A recording that runs or uploads now, with no job.json in the volume yet.
-        for (name, l) in &live {
-            if !out.iter().any(|r| &r.name == name) {
-                out.extend(self.live_row(name, l));
-            }
-        }
-        // ADR 0103 decision 7: audio left on the device with no job.json in the volume. Never
-        // the recording capture owns right now, or one that finished but has not yet reached
-        // the pipeline (review of #592, BLOCKING B3). A recording that capture owns, with no
-        // worker (the live upload could not start), shows as recording.
-        for (name, started) in &local {
-            if out.iter().any(|r| &r.name == name)
-                || self.in_flight(name)
-                || live.contains_key(name)
-            {
-                continue;
-            }
-            if active.contains(name) {
-                out.extend(Self::recording_row(name, *started));
-            } else if let Some(s) = Self::local_only_summary(name, *started) {
-                out.push(s);
-            }
-        }
-        // A failed upload with no part in the volume and no audio left here was deleted on this
-        // device (`recording_delete` never touches the volume): nothing to retry, so no row.
-        out.retain(|r| {
-            let dead = r.status == RecordingStatus::Failed
-                && r.error_stage == Some(RecordingStatus::Uploading)
-                && r.parts_uploaded.unwrap_or(0) == 0;
-            !dead || local.contains_key(&r.name) || live.contains_key(&r.name)
-        });
-        out.sort_by(|a, b| {
-            b.started_at_ms
-                .cmp(&a.started_at_ms)
-                .then(b.name.cmp(&a.name))
-        });
-        Ok(out)
+        // `list` itself does not know about `hidden` (it is purely an index concept): filter
+        // the rows it just upserted by the hidden set directly (Opus review round 2, M1), not
+        // by what `index.list` happens to answer right now — a store that cannot open, or has
+        // no rows of its own (`NoRecordingIndex`), must read as "nothing is hidden," never as
+        // "everything is," which an inverted, `list`-sourced filter could not tell apart.
+        let hidden = self.hidden_names(profile.as_str());
+        Ok(out
+            .into_iter()
+            .filter(|s| !hidden.contains(&s.name))
+            .collect())
     }
 
     fn detail(
@@ -971,7 +1281,13 @@ impl RecordingCloud for CloudAdapter {
             .service
             .detail(profile.as_str(), Self::root(storage), id.as_str())
             .map_err(err)?;
-        let summary = summary_of(&d.job).ok_or(RecordingErrorKind::Internal)?;
+        let job = self.settled(
+            profile.as_str(),
+            Self::root(storage),
+            d.job,
+            &self.local.active(),
+        );
+        let summary = summary_of(&job).ok_or(RecordingErrorKind::Internal)?;
         let instructions = d
             .transcript
             .as_ref()
@@ -1024,9 +1340,15 @@ impl RecordingCloud for CloudAdapter {
         // this call takes the slot, and this call would restart it.
         let Some(_guard) = self.begin(name) else {
             let current = self.service.job(p, root, name).map_err(wire_kind)?;
-            return now(&current);
+            let active = self.local.active();
+            return now(&current.map(|m| self.settled(p, root, m, &active)));
         };
-        let current = self.service.job(p, root, name).map_err(wire_kind)?;
+        // This call holds the run slot now: a failed end of this process counts.
+        let current = self
+            .service
+            .job(p, root, name)
+            .map_err(wire_kind)?
+            .map(|m| self.end_of(p, root, m));
         if current.as_ref().is_some_and(|m| !self.retry_allowed(m)) {
             return now(&current);
         }
@@ -1054,7 +1376,7 @@ impl RecordingCloud for CloudAdapter {
             mog: RECORDING_MOG_TAG.to_owned(),
             parts: self.local.parts(name),
         };
-        let m = self.service.retry(p, &job, &mut |m| self.emit(m));
+        let m = self.service.retry(p, &job, &mut |m| self.emit(p, root, m));
         if m.status == Status::Done {
             self.local.tidy(name);
         }
@@ -1092,46 +1414,32 @@ impl RecordingCloud for CloudAdapter {
             .map_err(err)
     }
 
+    /// Local and instant, for every row the user sees (owner authorization 2026-11-25). It
+    /// removes the local audio and sidecar if they exist, and always marks the row `hidden` in
+    /// the index (migration 0005) so it leaves the list at once, whether or not this device
+    /// ever had its audio (the "Failed: couldn't read the audio" row has none). It makes no
+    /// network call: a recording that already reached the volume keeps its copy there (the
+    /// confirm copy says as much). It refuses only when the take is recording right now, or a
+    /// worker is uploading it right now, with the existing busy error.
     fn delete(
         &self,
-        profile: &ProfileName,
-        storage: Option<&RecordingStorage>,
+        _profile: &ProfileName,
+        _storage: Option<&RecordingStorage>,
         id: &RecordingId,
     ) -> RecordingResult<bool> {
         let name = id.as_str();
-        // The id must name audio that Bottle's own temp store holds. No path crosses IPC.
-        if !self.local.names().iter().any(|(n, _)| n == name) {
-            return Ok(false);
-        }
         if self.local.active().contains(name) || self.is_live(name) {
             return Err(RecordingErrorKind::RecordingBusy);
         }
-        // The in-flight slot also keeps a Retry out while the files go.
+        // The in-flight slot also keeps a Retry, and a second delete, out while this runs.
         let Some(_guard) = self.begin(name) else {
             return Err(RecordingErrorKind::RecordingBusy);
         };
-        if storage.is_none() && !self.local.never_uploaded(name) {
-            // Settings has no storage now, but a part may have gone up before it was cleared.
-            return Err(RecordingErrorKind::RecordingBusy);
-        }
-        if let Some(storage) = storage {
-            // Read only. A recording with a part in the volume, or past the upload, is not
-            // "not uploaded": the volume copy is the one that counts.
-            let job = self
-                .service
-                .job(profile.as_str(), Self::root(storage), name)
-                .map_err(wire_kind)?;
-            if let Some(m) = job {
-                if !self.retry_allowed(&m) || m.parts.iter().any(|p| p.uploaded) {
-                    return Err(RecordingErrorKind::RecordingBusy);
-                }
-            }
-        }
-        if self.local.delete(name) {
-            Ok(true)
-        } else {
-            Err(RecordingErrorKind::Internal)
-        }
+        // Best effort: nothing left locally is not a failure (the row may live only in the
+        // volume or the index already).
+        let _ = self.local.delete(name);
+        let _ = self.index.hide(name, (self.now_ms)());
+        Ok(true)
     }
 
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>> {
@@ -1243,6 +1551,243 @@ mod tests {
             Arc::new(|_: &RecordingSummary| {}),
             Arc::new(|| 1_795_100_700_000i64),
         )
+    }
+
+    /// Local audio under full test control, for the `list` regression of the owner test
+    /// 2026-11-25 (⌥R or Record showed no row): a fixed `active` set, independent of `names`
+    /// (a take still recording may not be in `names` yet, review of #592 BLOCKING B3), and an
+    /// optional sidecar.
+    #[derive(Default)]
+    struct FakeLocal {
+        names: Vec<(String, u64)>,
+        active: HashSet<String>,
+        sidecar: Option<Sidecar>,
+    }
+
+    impl LocalAudio for FakeLocal {
+        fn parts(&self, _name: &str) -> Vec<LocalPart> {
+            Vec::new()
+        }
+        fn names(&self) -> Vec<(String, u64)> {
+            self.names.clone()
+        }
+        fn active(&self) -> HashSet<String> {
+            self.active.clone()
+        }
+        fn sidecar(&self, name: &str) -> Option<Sidecar> {
+            self.sidecar.clone().filter(|s| s.name == name)
+        }
+    }
+
+    /// An adapter over `local` and a volume that answers `files.list_directory` with 404 (no
+    /// job.json for anything), at a fixed wall clock.
+    fn adapter_for_list(local: FakeLocal) -> CloudAdapter {
+        let http = Arc::new(ScriptedHttp::new());
+        http.json(
+            "files.list_directory",
+            404,
+            serde_json::json!({"error_code":"NOT_FOUND"}),
+        );
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(local),
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+    }
+
+    fn fake_storage() -> RecordingStorage {
+        RecordingStorage {
+            kind: RecordingStorageKind::Volume,
+            root: VolumePath::try_from("/Volumes/main/team/audio".to_owned()).unwrap(),
+        }
+    }
+
+    /// A fixed [`crate::recording_index::RecordingIndexStore`]: `visible` rows and a `hidden`
+    /// name set, kept independent (unlike the real SQL, which derives one from the other) so a
+    /// test can put a name only in `hidden`, with no row in `visible` at all.
+    #[derive(Default)]
+    struct FakeIndex {
+        hidden: HashSet<String>,
+    }
+    impl crate::recording_index::RecordingIndexStore for FakeIndex {
+        fn upsert(&self, _row: &crate::recording_index::RecordingIndexRow) -> CoreResult<()> {
+            Ok(())
+        }
+        fn hide(&self, _name: &str, _now_ms: i64) -> CoreResult<()> {
+            Ok(())
+        }
+        fn list(
+            &self,
+            _profile: &str,
+        ) -> CoreResult<Vec<crate::recording_index::RecordingIndexRow>> {
+            Ok(Vec::new())
+        }
+        fn hidden_names(&self, _profile: &str) -> CoreResult<HashSet<String>> {
+            Ok(self.hidden.clone())
+        }
+        fn wipe_everything(&self) -> CoreResult<u64> {
+            Ok(0)
+        }
+        fn wipe_before(&self, _before_ms: i64) -> CoreResult<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn reconcile_still_answers_rows_with_no_index_wired() {
+        // Opus review round 2, M1: `NoRecordingIndex` (the default until the host wires a real
+        // one in) must never read as "every name is hidden" — the filter has to fail open.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.reconcile(&p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+    }
+
+    #[test]
+    fn reconcile_upserts_but_never_emits_on_job_itself() {
+        // Opus review round 2, B2: the reply already carries every row, so a second `on_job`
+        // emit inside `reconcile` was redundant — and on an index with no prior rows at all, a
+        // notify-and-reconcile storm, once per existing recording.
+        let name = "2026-11-19_0905";
+        let jobs = Arc::new(Mutex::new(Vec::new()));
+        let j = jobs.clone();
+        let http = Arc::new(ScriptedHttp::new());
+        http.json(
+            "files.list_directory",
+            404,
+            serde_json::json!({"error_code":"NOT_FOUND"}),
+        );
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        let a = CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(FakeLocal {
+                active: HashSet::from([name.to_owned()]),
+                ..Default::default()
+            }),
+            Arc::new(move |s: &RecordingSummary| j.lock().unwrap().push(s.clone())),
+            Arc::new(|| 1_795_100_700_000i64),
+        );
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.reconcile(&p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(
+            jobs.lock().unwrap().is_empty(),
+            "reconcile must not emit on_job itself"
+        );
+    }
+
+    #[test]
+    fn list_fast_never_shows_a_hidden_name_even_with_leftover_local_audio() {
+        // Opus review round 2, M2: best-effort local delete can leave files behind
+        // (`CloudAdapter::delete` never treats that as an error), so `local.names()` can still
+        // report a name the index already marked hidden. The overlay must skip it, not bring
+        // it back as "not uploaded".
+        let name = "2026-11-19_0905";
+        let http = Arc::new(ScriptedHttp::new());
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        let a = CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(FakeLocal {
+                names: vec![(name.to_owned(), 1)],
+                ..Default::default()
+            }),
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+        .with_index(Arc::new(FakeIndex {
+            hidden: HashSet::from([name.to_owned()]),
+        }));
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = a.list_fast(&p, &fake_storage()).unwrap();
+        assert!(rows.is_empty(), "{rows:?}");
+    }
+
+    #[test]
+    fn list_shows_an_active_take_not_in_local_as_recording() {
+        // Owner test 2026-11-25: a take still recording has its parts in the capture temp dir
+        // under its final name, so the launch scan's `local.names()` may not have picked it up
+        // yet. `active` alone must still produce a row, with no sidecar to date it from `now`.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+        assert_eq!(rows[0].status, RecordingStatus::Recording);
+        assert_eq!(
+            rows[0].started_at_ms, 1_795_100_700_000,
+            "with no sidecar, the row is dated from now"
+        );
+    }
+
+    #[test]
+    fn list_shows_an_in_flight_take_with_no_live_entry_as_uploading() {
+        // The other half of the same regression: a take that stopped and was handed to a
+        // worker, with no live entry yet and no job.json in the volume, must show as
+        // uploading rather than vanish.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            sidecar: Some(Sidecar::new(
+                name,
+                name,
+                1_795_097_100_000,
+                "fake-home",
+                None,
+            )),
+            ..Default::default()
+        });
+        let _guard = a.begin(name).expect("the first run starts");
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+        assert_eq!(rows[0].status, RecordingStatus::Uploading);
+        assert!(rows[0].error_kind.is_none(), "{rows:?}");
+        assert_eq!(
+            rows[0].started_at_ms, 1_795_097_100_000,
+            "a sidecar dates the row, over `now`"
+        );
+    }
+
+    #[test]
+    fn list_never_duplicates_a_name_that_is_both_active_and_in_flight() {
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let _guard = a.begin(name).expect("the first run starts");
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
     }
 
     #[test]

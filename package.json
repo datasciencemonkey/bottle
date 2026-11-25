@@ -1,7 +1,7 @@
 {
   "name": "bottle",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.10",
   "description": "Bottle desktop app: TS brain and thin views (experimental).",
   "license": "MIT",
   "type": "module",

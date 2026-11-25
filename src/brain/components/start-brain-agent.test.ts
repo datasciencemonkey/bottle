@@ -78,7 +78,6 @@ function host(over: Record<string, () => unknown> = {}) {
         position: 0,
         newSession: true,
         budget: 10,
-        crossWorkspace: false,
         catalog: [
           { workspaceId: 'ws-a', profile: HOME, name: HOME, isHome: true, isAgentWorkspace: true },
         ],
@@ -227,7 +226,6 @@ describe('startBrain: the agent, the card and the direct fallback (slice 2a)', (
             position: 0,
             newSession: true,
             budget: 10,
-            crossWorkspace: false,
             catalog: [
               {
                 workspaceId: 'ws-a',

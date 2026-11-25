@@ -20,6 +20,7 @@ import {
   DISMISS_FADE_MS,
   FADE_MS,
   FAILURE_TITLE,
+  GenieCard,
   OPEN_IN_BOTTLE_LABEL,
   SHOW_LESS_LABEL,
   SHOW_MORE_LABEL,
@@ -197,6 +198,51 @@ describe('Genie card (#573)', () => {
     );
     // The card never takes the keyboard from the user's app.
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it('[ADR 0124 amendment] the Copy button emits answer.copy with the exchange id', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const c = el.querySelector('[data-genie="answer"]') as HTMLElement;
+    const btn = c.querySelector('button[data-action="copy"]') as HTMLElement;
+    expect(btn.getAttribute('aria-label')).toBe('Copy');
+    await act(async () => btn.click());
+    expect(inputEmits()).toContainEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { action: 'answer.copy', requestId: OP },
+    });
+    // It does not open the hub Conversations or close the card (no `target` click).
+    expect(clicks().filter((c) => c.payload.target !== undefined)).toEqual([]);
+  });
+
+  it('[round 2 LOW] hides the Copy button when the card has no exchange id', async () => {
+    // Rendered directly (not through CardView's blurb-stack merge, which always keys a
+    // `kind: 'answer'` card on a `genie:`-prefixed blurb id in practice): this checks the
+    // component's own defensive guard when `opIdOfGenieBlurb` finds none.
+    const { el, root } = await render(
+      <GenieCard mogId={ID} card={{ ...answered, blurbs: [ask] } as CardUpdate} />,
+    );
+    roots.push(root);
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c).not.toBeNull();
+    expect(c?.querySelector('button[data-action="copy"]')).toBeNull();
+  });
+
+  it('[H-B] shows the quiet copy note from card.copyNote, not a blurb', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', { ...answered, copyNote: 'copied' });
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c?.querySelector('[data-agent-copy-note]')?.textContent).toBe('Copied');
+    // Never a separate blurb: the newest blurb is still the Genie answer text itself.
+    expect(el.querySelectorAll(`[id="${G}"]`)).toHaveLength(0);
+  });
+
+  it('shows no copy note before the brain sets card.copyNote', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const c = el.querySelector('[data-genie="answer"]');
+    expect(c?.querySelector('[data-agent-copy-note]')?.textContent).toBe('');
   });
 
   it('[#103] a single click on the card body opens Conversations, the same as a double-click', async () => {

@@ -105,7 +105,23 @@ impl SignInSource for FakeR6 {
 }
 
 fn store(s: &Scratch, t7: Vec<Profile>) -> WorkspaceStore {
-    WorkspaceStore::new(&s.0, s.configs(), Arc::new(FakeT7(t7)))
+    store_with(s, Arc::new(FakeT7(t7)))
+}
+
+fn store_with(s: &Scratch, profiles: Arc<dyn ProfileSource>) -> WorkspaceStore {
+    WorkspaceStore::new(&s.0, s.configs(), profiles)
+}
+
+/// A T7 that always fails to read (a CLI or filesystem error, never an empty list).
+struct FailingT7;
+
+impl ProfileSource for FailingT7 {
+    fn profiles(&self, _refresh: bool) -> CoreResult<Vec<Profile>> {
+        Err(CoreError::Unavailable {
+            component: "T7",
+            reason: "boom",
+        })
+    }
 }
 
 fn row<'a>(l: &'a WorkspaceList, p: &str) -> &'a WorkspaceRow {
@@ -163,7 +179,9 @@ fn migration_never_changes_an_old_config_and_writes_a_private_file() {
     assert_eq!(fs::read(s.0.join("mogs/a.json")).unwrap(), before);
     let data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
     assert_eq!(data["schemaVersion"], 1);
-    assert_eq!(data["agent"]["crossWorkspaceData"], false);
+    // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    // 2026-11-24): a new file never writes `crossWorkspaceData`.
+    assert!(data["agent"].get("crossWorkspaceData").is_none());
     assert_eq!(data["agent"]["genieCallBudget"], 10);
     assert_eq!(data["agent"]["endpoint"], "system.ai.claude-haiku-5-5");
     assert_eq!(data["agent"]["cleanDictation"], true);
@@ -240,13 +258,7 @@ fn ac_1_5_a_new_supported_profile_shows_with_the_switch_off() {
 fn sign_in_comes_from_the_cached_r6_state_and_t7() {
     let s = Scratch::new();
     let cfg = s.configs();
-    for (id, p) in [
-        ("a", "ok"),
-        ("b", "old"),
-        ("c", "unk"),
-        ("d", "pat"),
-        ("e", "gone"),
-    ] {
+    for (id, p) in [("a", "ok"), ("b", "old"), ("c", "unk"), ("d", "pat")] {
         put_config(&cfg, id, id, p);
     }
     let w = store(
@@ -271,11 +283,107 @@ fn sign_in_comes_from_the_cached_r6_state_and_t7() {
     assert_eq!(row(&l, "old").sign_in, WorkspaceSignIn::Expired);
     assert_eq!(row(&l, "unk").sign_in, WorkspaceSignIn::Unknown);
     assert_eq!(row(&l, "pat").sign_in, WorkspaceSignIn::Unsupported);
+}
+
+// ---------- a vanished CLI profile is cosmetic only (owner review 2026-11-24) ----------
+
+/// A profile the user removed from the CLI config (`databricks auth logout --delete`) has no row
+/// this time, but the file on disk (its entry, `mog_ids` and `available` switch, and so its MOG
+/// config and local conversations) is never touched. The row returns with its old links the
+/// moment the profile answers in T7 again.
+#[test]
+fn a_vanished_profile_has_no_row_but_its_links_stay_on_disk_and_return() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    put_config(&cfg, "b", "B", "gone");
+    // The first list migrates both configs into the file, "gone" included.
+    store(&s, vec![profile("p1", true), profile("gone", true)])
+        .list(false)
+        .unwrap();
+    let before = fs::read(s.file()).unwrap();
+
+    // The CLI profile is deleted: T7 no longer lists "gone" at all.
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert!(l.workspaces.iter().all(|r| r.profile != "gone"));
+    assert!(row(&l, "p1").available);
+    // Nothing was written: the row, its mog_ids and its MOG config are all untouched.
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+    assert!(cfg.read("b").is_ok());
+
+    // The profile answers again: its row is back with the same mog_ids and switch.
+    let l = store(&s, vec![profile("p1", true), profile("gone", true)])
+        .list(false)
+        .unwrap();
     let gone = row(&l, "gone");
+    assert!(gone.available);
+    assert_eq!(gone.mog_ids, ["b"]);
+}
+
+/// A vanished home profile renders as `home: None` (so the hub falls back to "Choose a home
+/// workspace") instead of a dead home row, but the stored `home` is never cleared: the workspace
+/// is home again, with no action from the user, the moment its profile answers in T7 again.
+#[test]
+fn a_vanished_home_profile_renders_as_no_home_but_the_stored_home_returns() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    // Exactly one profile: migration makes it home.
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert_eq!(l.home.as_deref(), Some("p1"));
+    let before = fs::read(s.file()).unwrap();
+
+    // The user's CLI profile for the home workspace is gone from the next read.
+    let l = store(&s, vec![]).list(false).unwrap();
+    assert_eq!(l.home, None);
+    assert!(l.workspaces.is_empty());
     assert_eq!(
-        (gone.sign_in, gone.host.as_str()),
-        (WorkspaceSignIn::Missing, "")
+        fs::read(s.file()).unwrap(),
+        before,
+        "the stored home is never cleared on disk"
     );
+    assert!(cfg.read("a").is_ok());
+
+    // The profile answers again: home is back, unprompted.
+    let l = store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    assert_eq!(l.home.as_deref(), Some("p1"));
+}
+
+/// An empty T7 read (no `HOME`, no config file, or mid-rewrite of `~/.databrickscfg`) is never
+/// proof that every profile is gone: the stored rows and the file are left exactly as they were.
+#[test]
+fn an_empty_t7_read_keeps_the_stored_rows_and_the_file_unchanged() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    put_config(&cfg, "b", "B", "p2");
+    store(&s, vec![profile("p1", true), profile("p2", true)])
+        .list(false)
+        .unwrap();
+    let before = fs::read(s.file()).unwrap();
+
+    let l = store(&s, vec![]).list(false).unwrap();
+    assert!(l.workspaces.is_empty());
+    assert_eq!(l.home, None);
+    assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+/// A failed T7 read answers `host_failed` and never touches the file.
+#[test]
+fn a_t7_error_is_host_failed_and_leaves_the_file_unchanged() {
+    let s = Scratch::new();
+    let cfg = s.configs();
+    put_config(&cfg, "a", "A", "p1");
+    store(&s, vec![profile("p1", true)]).list(false).unwrap();
+    let before = fs::read(s.file()).unwrap();
+
+    assert_eq!(
+        store_with(&s, Arc::new(FailingT7)).list(false).unwrap_err(),
+        CoreError::IpcRefused {
+            code: "host_failed"
+        }
+    );
+    assert_eq!(fs::read(s.file()).unwrap(), before);
 }
 
 #[test]
@@ -404,6 +512,46 @@ fn write_file(w: &WorkspaceStore, s: &Scratch, data: &Value) {
     *w.cache.lock().unwrap() = None;
 }
 
+/// D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision 2026-11-24).
+/// A config saved by an older build still has `crossWorkspaceData` in its `agent` object.
+/// `AgentData` has `deny_unknown_fields`, so that old key must still load, not refuse the file.
+#[test]
+fn an_old_config_with_cross_workspace_data_still_loads() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    write_file(
+        &w,
+        &s,
+        &json!({
+            "schemaVersion": 1,
+            "lampMogId": null,
+            "home": "home",
+            "workspaces": [],
+            "agent": {
+                "crossWorkspaceData": true,
+                "genieCallBudget": 10,
+                "endpoint": "system.ai.claude-haiku-5-5",
+                "cleanDictation": true,
+                "cloudDictation": false,
+            },
+        }),
+    );
+    let l = w.list(false).unwrap();
+    assert_eq!(l.home.as_deref(), Some("home"));
+    assert_eq!(l.agent.genie_call_budget.get(), 10);
+    // The old key is read and dropped: a later write never brings it back.
+    w.settings_write(&WorkspaceSettingsWriteArgs {
+        genie_call_budget: Some(budget(5)),
+        agent_endpoint: None,
+        clean_dictation: None,
+        cloud_dictation: None,
+        copy_genie_answer: None,
+    })
+    .unwrap();
+    let data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    assert!(data["agent"].get("crossWorkspaceData").is_none());
+}
+
 /// L5: the home and the model read the cache. Only a write of the store empties it.
 #[test]
 fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
@@ -417,11 +565,11 @@ fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
     assert_eq!(w.orchestrator_model().as_deref(), Some(model.as_str()));
     // A write goes on the cached copy and saves it, so the new value shows at once.
     w.settings_write(&WorkspaceSettingsWriteArgs {
-        cross_workspace_data: None,
         genie_call_budget: None,
         agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
         clean_dictation: None,
         cloud_dictation: None,
+        copy_genie_answer: None,
     })
     .unwrap();
     assert_eq!(
@@ -544,19 +692,18 @@ fn the_first_connect_with_no_home_makes_the_new_profile_home_and_the_lamp() {
 }
 
 #[test]
-fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
+fn settings_write_stores_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
     let s = Scratch::new();
     let w = ready(&s);
     let l = w.list(false).unwrap();
     assert_eq!(
         l.agent,
         AgentSettings {
-            cross_workspace_data: false,
-            cross_workspace_locked: false,
             genie_call_budget: GenieCallBudget::DEFAULT,
             endpoint: ep("system.ai.claude-haiku-5-5"),
             clean_dictation: true,
             cloud_dictation: false,
+            copy_genie_answer: true,
         }
     );
     // A bad budget or model cannot be built, and the command refuses it on the wire.
@@ -577,33 +724,31 @@ fn settings_write_stores_d1_d2_and_the_endpoint_and_a_bad_value_changes_nothing(
     }
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
-            cross_workspace_data: Some(true),
             genie_call_budget: Some(budget(20)),
             agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
             clean_dictation: Some(false),
             cloud_dictation: None,
+            copy_genie_answer: None,
         })
         .unwrap();
     assert_eq!(
         (
-            l.agent.cross_workspace_data,
             l.agent.genie_call_budget.get(),
             l.agent.endpoint.as_str(),
             l.agent.clean_dictation
         ),
-        (true, 20, "system.ai.gpt-oss-20b", false)
+        (20, "system.ai.gpt-oss-20b", false)
     );
     // A later partial write keeps the rest.
     let l = w
         .settings_write(&WorkspaceSettingsWriteArgs {
-            cross_workspace_data: None,
             genie_call_budget: Some(budget(5)),
             agent_endpoint: None,
             clean_dictation: None,
             cloud_dictation: None,
+            copy_genie_answer: None,
         })
         .unwrap();
-    assert!(l.agent.cross_workspace_data);
     assert_eq!(l.agent.endpoint.as_str(), "system.ai.gpt-oss-20b");
     assert!(!l.agent.clean_dictation);
 }
@@ -690,6 +835,39 @@ fn adr_0123_a_failed_settings_write_leaves_the_fast_flag_unchanged() {
     assert!(!w.cloud_dictation_fast());
     assert!(!w.cloud_dictation());
     assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+/// "Copy Genie answers to the clipboard" (Settings → Workspace): a bool, on by default, and a
+/// file from before this field reads as on.
+#[test]
+fn copy_genie_answer_is_a_bool_on_by_default() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert!(w.list(false).unwrap().agent.copy_genie_answer);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"copyGenieAnswer": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call(
+            "workspace_settings_write",
+            json!({"copyGenieAnswer": false}),
+        )
+        .unwrap();
+    assert_eq!(l["agent"]["copyGenieAnswer"], false);
+    assert!(!w.list(false).unwrap().agent.copy_genie_answer);
+    // A later write of another field keeps it off.
+    w.call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert!(!w.list(false).unwrap().agent.copy_genie_answer);
+    // An old file with no field reads as on.
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("copyGenieAnswer");
+    write_file(&w, &s, &data);
+    assert!(w.list(false).unwrap().agent.copy_genie_answer);
 }
 
 /// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other
@@ -800,7 +978,7 @@ fn catalog_snapshot_gives_home_first_with_aliases_and_the_agent_profile_and_host
     );
     assert_eq!(snap.home_profile.as_deref(), Some("fin"));
     assert_eq!(snap.model, crate::model_gateway::DEFAULT_ORCHESTRATOR_MODEL);
-    assert_eq!((snap.cross_workspace, snap.budget), (false, 10));
+    assert_eq!(snap.budget, 10);
     // The model runs on the home profile, so the agent workspace is the home.
     assert_eq!(
         snap.catalog.iter().filter(|c| c.is_agent_workspace).count(),

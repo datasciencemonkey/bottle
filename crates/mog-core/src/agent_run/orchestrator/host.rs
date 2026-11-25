@@ -21,6 +21,7 @@ use super::deadlines::{self, TurnDue};
 use super::prompt::{self, PromptInput, ANSWER_SCHEMA};
 use super::queue::{RateCap, WaitQueue, MAX_WAITING};
 use crate::agent_run::guard::{self, AgentGuard, ToolOut};
+use crate::agent_run::reauth::ReauthService;
 use crate::agent_run::seam::{
     AgentEvent, CallRecord, CatalogEntry, NetWatch, RunEvents, SessionGuard, SessionSpec, StopWhy,
     TurnSpec,
@@ -66,14 +67,18 @@ const ACTOR_WAIT: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub catalog: Vec<CatalogEntry>,
-    /// D1 "Combine across workspaces".
-    pub cross_workspace: bool,
     /// D2 "Genie calls per question": 5, 10 or 20.
     pub budget: u8,
     /// The home profile: its AI Gateway runs the model. `None`: no home yet.
     pub home_profile: Option<String>,
     /// The orchestrator model, read at the start of each turn.
     pub model: String,
+    /// The home profile's cached sign-in state already shows it signed out (Settings →
+    /// Workspace's own status; no new network probe). ADR 0122 amendment, owner decision
+    /// 2026-11-24: a turn that starts already knowing this signs home in first, before trying
+    /// any `ask_genie` call to it, so it never wastes a Genie call on a token that is already
+    /// known to be dead.
+    pub home_signed_out: bool,
 }
 
 /// The workspace store and the settings as the host sees them.
@@ -141,6 +146,9 @@ pub struct OrchDeps {
     pub workspaces: Arc<dyn WorkspaceView>,
     pub approvals: Arc<dyn Approvals>,
     pub env: Arc<dyn OrchEnv>,
+    /// The home-first "sign in, then retry" rule (ADR 0122 amendment): starts a workspace's
+    /// browser sign-in when its `ask_genie` call comes back signed out.
+    pub reauth: Arc<dyn ReauthService>,
 }
 
 /// How the host runs.
@@ -209,7 +217,6 @@ enum Msg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Fingerprint {
     profile: Option<String>,
-    d1: bool,
     catalog: Vec<(String, String, bool)>,
 }
 
@@ -217,7 +224,6 @@ impl Fingerprint {
     fn of(s: &Snapshot) -> Self {
         Self {
             profile: s.home_profile.clone(),
-            d1: s.cross_workspace,
             catalog: s
                 .catalog
                 .iter()
@@ -229,8 +235,6 @@ impl Fingerprint {
     fn drift(&self, now: &Fingerprint) -> Option<AgentSessionEndReason> {
         if self.profile != now.profile {
             Some(AgentSessionEndReason::ProfileChanged)
-        } else if self.d1 != now.d1 {
-            Some(AgentSessionEndReason::D1Changed)
         } else if self.catalog != now.catalog {
             Some(AgentSessionEndReason::CatalogChanged)
         } else {
@@ -239,12 +243,11 @@ impl Fingerprint {
     }
 }
 
-/// One session: the D1, catalog and profile snapshot, and the thread history (memory only).
+/// One session: the catalog and profile snapshot, and the thread history (memory only).
 struct Session {
     id: String,
     fp: Fingerprint,
     catalog: Vec<CatalogEntry>,
-    cross_workspace: bool,
     started_wall_ms: i64,
     turns: u32,
     tokens: u64,
@@ -254,7 +257,7 @@ struct Session {
 struct QTurn {
     id: String,
     question: String,
-    /// A new question: it must not run on a tainted session.
+    /// A new question: it starts a new thread (its history is cleared).
     fresh: bool,
 }
 
@@ -460,15 +463,11 @@ impl Engine {
                 position,
             });
         } else {
-            // Nothing runs: this turn is the live one. A tainted or drifted session first ends.
+            // Nothing runs: this turn is the live one. A drifted session first ends.
             if let Some(s) = &self.session {
-                let tainted = turn.fresh && self.d.guard.tainted(&s.id);
                 let drift = s.fp.drift(&Fingerprint::of(&snap));
                 if let Some(r) = drift {
                     self.end_session_core(r);
-                    new_session = true;
-                } else if tainted {
-                    self.end_session_core(AgentSessionEndReason::Tainted);
                     new_session = true;
                 }
             }
@@ -484,7 +483,6 @@ impl Engine {
             position,
             new_session,
             budget,
-            cross_workspace: s.cross_workspace,
             catalog: s
                 .catalog
                 .iter()
@@ -529,7 +527,6 @@ impl Engine {
         let spec = SessionSpec {
             session_id: session_id.clone(),
             catalog: snap.catalog.clone(),
-            cross_workspace: snap.cross_workspace,
         };
         self.d
             .guard
@@ -539,7 +536,6 @@ impl Engine {
             id: session_id.clone(),
             fp: Fingerprint::of(snap),
             catalog: snap.catalog.clone(),
-            cross_workspace: snap.cross_workspace,
             started_wall_ms: self.d.wall.now_ms(),
             turns: 0,
             tokens: 0,
@@ -571,16 +567,25 @@ impl Engine {
         let Some(s) = self.session.as_ref() else {
             return;
         };
-        let (sid, catalog, cross) = (s.id.clone(), s.catalog.clone(), s.cross_workspace);
+        let (sid, catalog) = (s.id.clone(), s.catalog.clone());
         let budget = snap.budget;
-        let (turn_id, question, cancel) = {
+        let (turn_id, question, cancel, fresh) = {
             let l = self.live.as_ref().expect("checked above");
             (
                 l.turn.id.clone(),
                 l.turn.question.clone(),
                 Arc::clone(&l.cancel),
+                l.turn.fresh,
             )
         };
+        // A new ask starts a new thread: the earlier threads do not go to the model. Their
+        // answers (up to `HISTORY_BYTES`) would make every step of this turn slower, and the
+        // model would answer them again. A follow-up keeps the history of its thread.
+        if fresh {
+            if let Some(s) = self.session.as_mut() {
+                s.history.clear();
+            }
+        }
         if self
             .d
             .guard
@@ -588,6 +593,7 @@ impl Engine {
                 &sid,
                 TurnSpec {
                     turn_id: turn_id.clone(),
+                    user_question: question.clone(),
                     budget,
                 },
             )
@@ -595,16 +601,38 @@ impl Engine {
         {
             return self.finish(AgentTurnOutcome::Failed);
         }
-        let agent_alias = catalog
-            .iter()
-            .find(|c| c.is_agent_workspace)
-            .map(|c| c.alias.clone());
         let system = prompt::system(&PromptInput {
             catalog: &catalog,
             budget,
-            cross_workspace: cross,
-            agent_alias: agent_alias.as_deref(),
         });
+        // Home first (ADR 0122 amendment): the alias of the home workspace, and the catalog
+        // aliases that the question names directly. With no home in the catalog, both stay
+        // empty and `run_step` skips the rule (today's behaviour, unchanged).
+        let home_alias = catalog.iter().find(|c| c.is_home).map(|c| c.alias.clone());
+        // The "sign in, then retry" rule (ADR 0122 amendment, round 4) keys its per-profile state
+        // on the catalog profile of a call's workspace alias, not on home's own profile: resolve
+        // every alias once, here, so the worker thread never needs the catalog again.
+        let profiles: HashMap<String, String> = catalog
+            .iter()
+            .map(|c| (c.alias.clone(), c.profile.clone()))
+            .collect();
+        let mut auth = HashMap::new();
+        if snap.home_signed_out {
+            auth.insert(profile.clone(), Auth::Dead);
+        }
+        let named_aliases: std::collections::HashSet<String> = if home_alias.is_some() {
+            catalog
+                .iter()
+                .filter(|c| {
+                    names_workspace(&question, &c.alias)
+                        || names_workspace(&question, &c.name)
+                        || names_workspace(&question, &c.profile)
+                })
+                .map(|c| c.alias.clone())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut input: Vec<Value> = Vec::new();
         if let Some(s) = self.session.as_ref() {
             for turn in &s.history {
@@ -618,11 +646,18 @@ impl Engine {
             l.began = true;
             l.started_at = now;
         }
+        // The question counts when it starts, so the thread header never says "0 questions"
+        // while its first answer shows.
+        if let Some(s) = self.session.as_mut() {
+            s.turns += 1;
+        }
         let ctx = LoopCtx {
             chat: Arc::clone(&self.d.chat),
             guard: Arc::clone(&self.d.guard),
             net: Arc::clone(&self.d.net),
             clock: Arc::clone(&self.d.clock),
+            events: Arc::clone(&self.d.events),
+            reauth: Arc::clone(&self.d.reauth),
             session_id: sid,
             turn_id: turn_id.clone(),
             budget,
@@ -634,6 +669,11 @@ impl Engine {
             system,
             input,
             base,
+            home_alias,
+            named_aliases,
+            widened: false,
+            profiles,
+            auth: Mutex::new(auth),
         };
         let tx = self.tx.clone();
         let tid = turn_id.clone();
@@ -722,12 +762,10 @@ impl Engine {
         let calls_all = self.d.guard.calls(&sid);
         let calls = calls_all.iter().filter(|c| c.turn_id == turn_id).count();
         if outcome == AgentTurnOutcome::Answered {
-            let d1 = self.session.as_ref().is_some_and(|s| s.cross_workspace);
             let r = build_result(
                 live.final_text.as_deref(),
                 live.usage,
                 &calls_all,
-                d1,
                 self.d.guard.as_ref(),
             );
             let hidden = r.answer_kind == AgentAnswerKind::Hidden;
@@ -755,9 +793,7 @@ impl Engine {
         }
         let tokens = live.usage.input + live.usage.output;
         if let Some(s) = self.session.as_mut() {
-            if live.began {
-                s.turns += 1;
-            }
+            // A turn that began was counted at its start (`pump`).
             s.tokens += tokens;
         }
         self.last_activity = self.now();
@@ -779,7 +815,7 @@ impl Engine {
         }
     }
 
-    /// Run the next waiting turn, after a settings change or a taint if one is due.
+    /// Run the next waiting turn, after a settings change if one is due.
     fn advance(&mut self) {
         loop {
             if self.live.is_some() {
@@ -797,11 +833,6 @@ impl Engine {
             let Some(next) = self.waiting.pop() else {
                 return;
             };
-            if let Some(s) = &self.session {
-                if next.fresh && self.d.guard.tainted(&s.id) {
-                    self.end_session_core(AgentSessionEndReason::Tainted);
-                }
-            }
             let Ok(snap) = self.d.workspaces.snapshot() else {
                 self.emit_ended_unrun(&next.id, AgentTurnOutcome::Failed);
                 continue;
@@ -943,6 +974,9 @@ struct LoopCtx {
     guard: Arc<dyn OrchGuard>,
     net: Arc<dyn NetWatch>,
     clock: Arc<dyn MonotonicClock>,
+    events: Arc<dyn RunEvents>,
+    /// The home-first "sign in, then retry" rule (ADR 0122 amendment).
+    reauth: Arc<dyn ReauthService>,
     session_id: String,
     turn_id: String,
     /// The D2 budget of this turn.
@@ -959,6 +993,37 @@ struct LoopCtx {
     input: Vec<Value>,
     /// The index of the question in `input`.
     base: usize,
+    /// The alias of the home workspace, if the catalog has one (ADR 0122, "Home first"). `None`
+    /// keeps the pre-amendment behaviour: every catalog workspace is open from the first step.
+    home_alias: Option<String>,
+    /// The catalog aliases that the user's question names: its alias, its name or its profile,
+    /// word for word and case-insensitive. These may be asked directly on the home-first step,
+    /// like the home workspace.
+    named_aliases: std::collections::HashSet<String>,
+    /// True once a step of this turn has run at least one `ask_genie` call. The home-first rule
+    /// applies only while this is false.
+    widened: bool,
+    /// The catalog profile of every alias, resolved once at turn start (ADR 0122 amendment,
+    /// round 4): the "sign in, then retry" rule keys its state on a call's own profile, not on
+    /// home's.
+    profiles: HashMap<String, String>,
+    /// The "sign in, then retry" rule's state of each profile that needed it this turn, by
+    /// profile (not alias): `Dead` (known signed out, no sign-in tried yet this turn), `Tried`
+    /// (a sign-in for this profile already ran this turn, and succeeded), or `Exhausted` (a
+    /// sign-in was tried this turn and failed, timed out or was cancelled; or a `Tried` profile
+    /// went signed out again). Either `Tried` or `Exhausted` means: no retry and no new browser
+    /// window for that profile for the rest of the turn. A profile with no entry has never been
+    /// seen signed out this turn. Home's entry is seeded `Dead` from the cached sign-in state at
+    /// turn start, if that already shows it signed out.
+    auth: Mutex<HashMap<String, Auth>>,
+}
+
+/// The "sign in, then retry" rule's state of one profile within a turn (see [`LoopCtx::auth`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Auth {
+    Dead,
+    Tried,
+    Exhausted,
 }
 
 /// The tool that ends a turn: its arguments are the final answer. It has no side effect.
@@ -1096,9 +1161,9 @@ fn output_item(call_id: &str, text: &str) -> Value {
 /// and counts the refusal (the third one stops the turn). A stopped turn runs nothing.
 /// The second value is true when the guard accepted the call (it used budget), whatever came
 /// back; a refusal is a bare code, not JSON.
-fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
+fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (String, bool) {
     if ctx.cancel.load(Ordering::SeqCst) {
-        return (output_item(&call.call_id, guard::RUN_STOPPED), false);
+        return (guard::RUN_STOPPED.to_owned(), false);
     }
     let args = serde_json::from_str::<Value>(&call.arguments)
         .ok()
@@ -1109,7 +1174,250 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
     };
     let out = ctx.guard.ask_genie(&ctx.session_id, &ctx.turn_id, &run);
     let accepted = !(out.is_error && !out.text.starts_with('{'));
-    (output_item(&call.call_id, &out.text), accepted)
+    (out.text, accepted)
+}
+
+/// Model-facing code: the home-first rule (ADR 0122 amendment) refuses this call of the turn's
+/// first `ask_genie` step. The call never reaches the guard, so it spends no Genie budget and
+/// never counts toward the three-refusals stop. Ask the home workspace, or a workspace the
+/// question names, instead; the rest open from the turn's second `ask_genie` step.
+const HOME_FIRST_REFUSAL: &str = "ask_home_first";
+
+/// The `workspace` argument of a call, if its arguments parse as a JSON object with that field.
+fn call_workspace(call: &FnCall) -> Option<String> {
+    serde_json::from_str::<Value>(&call.arguments)
+        .ok()
+        .and_then(|v| {
+            v.get("workspace")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+/// Whether `call` may run on the turn's home-first step: it asks the home workspace, or the
+/// question names its workspace (`home_first_allows` reads the `workspace` argument itself, not
+/// the guard's parsed and checked one, since this runs before the guard sees the call). A call
+/// whose arguments do not hold a readable `workspace` string is left to the guard's own checks.
+fn home_first_allows(ctx: &LoopCtx, call: &FnCall) -> bool {
+    let Some(ws) = call_workspace(call) else {
+        return true;
+    };
+    ctx.home_alias.as_deref() == Some(ws.as_str()) || ctx.named_aliases.contains(&ws)
+}
+
+/// Whether `call` asks the home workspace by alias.
+fn is_home_call(ctx: &LoopCtx, call: &FnCall) -> bool {
+    ctx.home_alias.is_some() && call_workspace(call).as_deref() == ctx.home_alias.as_deref()
+}
+
+/// The `status` of a call's raw guard output, if it is a JSON object with one.
+fn status_of(text: &str) -> Option<String> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| v["status"].as_str().map(str::to_owned))
+}
+
+/// Whether a call's raw guard output names a terminal state that counts toward widening the
+/// home-first rule: answered, failed, timeout or no-answer. Each of these is the owner's rule in
+/// its own way: an answer is an answer; a failure, a timeout or a completed poll with no text
+/// (no-answer) is home "doesn't have a response". A signed-out call never reaches here: it is
+/// resolved by `run_home_call` first (sign in, then retry), and the retry's own outcome is what
+/// widens, or does not. A withheld (quarantined) or stopped call does not widen either: the call
+/// did not genuinely end on its own terms, so home has not yet said it has no data or cannot
+/// answer.
+fn ends_for_widening(text: &str) -> bool {
+    status_of(text)
+        .is_some_and(|s| matches!(s.as_str(), "answered" | "failed" | "timeout" | "no_answer"))
+}
+
+/// Model-facing code: a workspace's `ask_genie` call did not end because Bottle could not sign
+/// it back in. The call is `signed_out`, like the guard's own code: the model must treat it the
+/// same way (home-first does not widen on it either).
+fn signed_out_output(call: &FnCall) -> String {
+    let ws = call_workspace(call).unwrap_or_default();
+    json!({ "callId": call.call_id, "workspace": ws, "status": "signed_out" }).to_string()
+}
+
+/// What running one call used: its output text, whether the guard accepted that final attempt
+/// (it used a budget slot: the widening check and the refusal counting both key off this, not
+/// the sign-in's own fate), and the total count of real guard admissions it spent (round 4: 1
+/// normally, 2 when a signed-out first attempt was followed by the one retry, 0 when the guard
+/// was never asked at all because the turn was stopped or the profile's one sign-in attempt for
+/// this turn was already spent).
+struct CallResult {
+    text: String,
+    accepted: bool,
+    used: usize,
+}
+
+impl CallResult {
+    fn stopped() -> Self {
+        Self {
+            text: guard::RUN_STOPPED.to_owned(),
+            accepted: false,
+            used: 0,
+        }
+    }
+
+    fn signed_out(call: &FnCall) -> Self {
+        Self {
+            text: signed_out_output(call),
+            accepted: false,
+            used: 0,
+        }
+    }
+}
+
+/// The catalog profile that a call's `workspace` argument names, from `ctx.profiles` (resolved
+/// once at turn start). Falls back to home's own profile for a call whose workspace argument is
+/// missing or unrecognized, matching `home_first_allows`'s own leniency: such a call is left to
+/// the guard's own checks either way, and the sign-in rule needs some profile to key on.
+fn profile_for(ctx: &LoopCtx, call: &FnCall) -> String {
+    call_workspace(call)
+        .and_then(|ws| ctx.profiles.get(&ws).cloned())
+        .unwrap_or_else(|| ctx.profile.clone())
+}
+
+/// How often the sign-in watcher below checks for a Stop, the turn's hard deadline or a Wipe
+/// (every one of the three ends a turn the same way: `ctx.cancel` turns true), so an in-flight
+/// sign-in cannot block a worker thread well past any of them (ADR 0122 amendment, round 4).
+const REAUTH_CANCEL_POLL: Duration = Duration::from_millis(100);
+
+/// Runs `ctx.reauth.reauth(profile)`, with a watcher that calls `ctx.reauth.cancel(profile)` the
+/// moment `ctx.cancel` turns true while it is still blocked. `reauth` itself has no cancel token
+/// of its own to poll (it is whatever bound the real sign-in flow has), so the watcher is the
+/// seam: Stop, the hard deadline and a Wipe all set `ctx.cancel`, and nothing else does.
+///
+/// `done` is checked a second time right before the cancel call (round 5): `reauth` can return
+/// (successfully, even) in the instant between the watcher's first check of `done` and its check
+/// of `cancel`, and a cancel of a sign-in that already ended can still cost something real (a
+/// stray `profile_login_cancel` leaves a few seconds of "pending cancel" that would wrongly
+/// refuse the user's very next Settings "Sign in…" of that profile). The gap this leaves is only
+/// the two loads themselves, not a whole `REAUTH_CANCEL_POLL` tick.
+fn reauth_watching_cancel(ctx: &LoopCtx, profile: &str) -> CoreResult<()> {
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let done = Arc::clone(&done);
+        let cancel = Arc::clone(&ctx.cancel);
+        let reauth = Arc::clone(&ctx.reauth);
+        let profile = profile.to_owned();
+        thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                if cancel.load(Ordering::SeqCst) {
+                    if !done.load(Ordering::SeqCst) {
+                        reauth.cancel(&profile);
+                    }
+                    return;
+                }
+                thread::sleep(REAUTH_CANCEL_POLL);
+            }
+        })
+    };
+    let result = ctx.reauth.reauth(profile);
+    done.store(true, Ordering::SeqCst);
+    let _ = watcher.join();
+    result
+}
+
+/// Starts `profile`'s browser sign-in (deduped: `ReauthService` waits for one already running)
+/// and retries `call` once if it succeeds. `used` is how many real guard admissions `call` has
+/// already spent before this (0 when the profile was already known dead and the live attempt was
+/// skipped; 1 when a live attempt just came back `signed_out`).
+///
+/// A sign-in that fails, is cancelled or times out leaves the call `signed_out`, and marks the
+/// profile `Exhausted`: home-first (for home) stays the rule, and no later call to the same
+/// profile this turn tries to sign in again (owner decision 2026-11-24, round 4: at most one
+/// sign-in attempt per profile per turn). A sign-in that succeeds marks the profile `Tried`, not
+/// a clean slate (round 5): a later call to it this turn may still go signed out again (a real
+/// live attempt, not a guess), but if it does, `run_call` sends it straight to `Exhausted`
+/// instead of back here, so one browser window per profile per turn is still the most there is.
+fn sign_in_and_retry(ctx: &LoopCtx, call: &FnCall, profile: &str, used: usize) -> CallResult {
+    if ctx.cancel.load(Ordering::SeqCst) {
+        return CallResult {
+            used,
+            ..CallResult::stopped()
+        };
+    }
+    ctx.events.emit(AgentEvent::Turn(AgentTurnEvent::SigningIn {
+        turn_id: ctx.turn_id.clone(),
+        workspace_id: call_workspace(call).unwrap_or_default(),
+    }));
+    match reauth_watching_cancel(ctx, profile) {
+        Ok(()) => {
+            lock(&ctx.auth).insert(profile.to_owned(), Auth::Tried);
+            let (text, ok) = run_tool_call(ctx, call);
+            CallResult {
+                text,
+                accepted: ok,
+                used: used + usize::from(ok),
+            }
+        }
+        Err(_) => {
+            lock(&ctx.auth).insert(profile.to_owned(), Auth::Exhausted);
+            CallResult {
+                used,
+                ..CallResult::signed_out(call)
+            }
+        }
+    }
+}
+
+/// Runs one `ask_genie` call, with the owner's "sign in, then retry" rule (ADR 0122 amendment,
+/// owner decision 2026-11-24, generalized to every call in round 4: a named foreign workspace on
+/// the home-first step, and any widened workspace, not home alone). A `signed_out` result never
+/// counts on its own: see [`sign_in_and_retry`]. The widening rule itself stays tied to the home
+/// workspace alone; `run_step` decides that, from this call's own output.
+fn run_call(ctx: &LoopCtx, call: &FnCall) -> CallResult {
+    if ctx.cancel.load(Ordering::SeqCst) {
+        return CallResult::stopped();
+    }
+    if call.name != guard::TOOL_NAME {
+        // Not `ask_genie`: no profile of its own, so the sign-in rule does not apply. Unchanged
+        // from before round 4, it always reaches the guard, which refuses it.
+        let (text, ok) = run_tool_call(ctx, call);
+        return CallResult {
+            text,
+            accepted: ok,
+            used: usize::from(ok),
+        };
+    }
+    let profile = profile_for(ctx, call);
+    // Read the state and drop the lock before an arm below locks `ctx.auth` again (`sign_in_and_
+    // retry` does, on every outcome): a `match` on the lock call itself would otherwise hold the
+    // guard for every arm, not just the read, and self-deadlock on the second lock.
+    let state = lock(&ctx.auth).get(&profile).copied();
+    match state {
+        Some(Auth::Exhausted) => CallResult::signed_out(call),
+        Some(Auth::Dead) => sign_in_and_retry(ctx, call, &profile, 0),
+        // `Tried` still gets a genuine live attempt, the same as a profile never seen signed out
+        // this turn (below): the one sign-in already run for it may still be good. The two part
+        // only on what a fresh `signed_out` from that attempt does next.
+        Some(Auth::Tried) | None => {
+            let (text, ok) = run_tool_call(ctx, call);
+            let used = usize::from(ok);
+            if ok && status_of(&text).as_deref() == Some("signed_out") {
+                if state == Some(Auth::Tried) {
+                    // This profile's one sign-in attempt for the turn already ran (and
+                    // succeeded, even): a second `signed_out` does not get a second browser
+                    // window (round 5), so this goes to `Exhausted` directly, not back through
+                    // `sign_in_and_retry`.
+                    lock(&ctx.auth).insert(profile, Auth::Exhausted);
+                    CallResult {
+                        used,
+                        ..CallResult::signed_out(call)
+                    }
+                } else {
+                    sign_in_and_retry(ctx, call, &profile, used)
+                }
+            } else {
+                CallResult {
+                    text,
+                    accepted: ok,
+                    used,
+                }
+            }
+        }
+    }
 }
 
 /// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
@@ -1122,40 +1430,71 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     let cap = usize::from(ctx.budget)
         .saturating_sub(ctx.asked)
         .min(MAX_CALLS_PER_STEP);
+    // Home first (ADR 0122 amendment): while the turn has not yet widened, and the catalog has a
+    // home workspace, only a call to home or to a workspace the question names may run. The rest
+    // get `HOME_FIRST_REFUSAL` without ever reaching the guard. The turn widens (every catalog
+    // workspace opens, from the next `ask_genie` step on) only once a call to home itself is
+    // accepted by the guard and ends answered, failed, timeout or no-answer (see
+    // `ends_for_widening`): a blocked call, an unparsable one, or a call to a workspace the
+    // question merely names, must not widen it. A signed-out call to home never widens on its own
+    // either: `run_call` signs it in and retries once first (owner decision 2026-11-24), and it
+    // is that retry's own outcome which decides.
+    let home_first = !ctx.widened && ctx.home_alias.is_some();
     let mut go = Vec::new();
+    let mut blocked = Vec::new();
     for (i, c) in calls.iter().enumerate() {
-        if c.name == guard::TOOL_NAME && go.len() < cap {
+        if c.name != guard::TOOL_NAME {
+            continue;
+        }
+        if home_first && !home_first_allows(ctx, c) {
+            blocked.push(i);
+        } else if go.len() < cap {
             go.push(i);
         }
     }
     let done: &LoopCtx = ctx;
-    let (out, accepted) = thread::scope(|sc| {
+    let (out, asked, home_ended) = thread::scope(|sc| {
         let hs: Vec<(usize, _)> = go
             .iter()
-            .map(|&i| (i, sc.spawn(move || run_tool_call(done, &calls[i]))))
+            .map(|&i| (i, sc.spawn(move || run_call(done, &calls[i]))))
             .collect();
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
-        let mut accepted = 0;
+        let mut asked = 0;
+        let mut home_ended = false;
         for (i, c) in calls.iter().enumerate() {
-            if !go.contains(&i) {
+            if blocked.contains(&i) {
+                out[i] = Some(output_item(&c.call_id, HOME_FIRST_REFUSAL));
+            } else if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
-                let (o, ok) = run_tool_call(done, c);
-                accepted += usize::from(ok && c.name == guard::TOOL_NAME);
-                out[i] = Some(o);
+                let r = run_call(done, c);
+                asked += r.used;
+                if r.accepted && is_home_call(done, c) && ends_for_widening(&r.text) {
+                    home_ended = true;
+                }
+                out[i] = Some(output_item(&c.call_id, &r.text));
             }
         }
         for (i, h) in hs {
-            let (o, ok) = h
-                .join()
-                .unwrap_or_else(|_| (output_item(&calls[i].call_id, guard::RUN_STOPPED), false));
-            accepted += usize::from(ok);
-            out[i] = Some(o);
+            let r = h.join().unwrap_or_else(|_| CallResult::stopped());
+            asked += r.used;
+            if r.accepted && is_home_call(done, &calls[i]) && ends_for_widening(&r.text) {
+                home_ended = true;
+            }
+            out[i] = Some(output_item(&calls[i].call_id, &r.text));
         }
-        (out.into_iter().flatten().collect::<Vec<_>>(), accepted)
+        (
+            out.into_iter().flatten().collect::<Vec<_>>(),
+            asked,
+            home_ended,
+        )
     });
-    // Only the calls that the guard accepted use up the budget of the cap.
-    ctx.asked += accepted;
+    // Every real guard admission counts, including a signed-out first attempt that a retry
+    // followed: one model-facing `ask_genie` call can spend up to two (round 4).
+    ctx.asked += asked;
+    if home_ended {
+        ctx.widened = true;
+    }
     out
 }
 
@@ -1283,7 +1622,6 @@ fn build_result(
     final_text: Option<&str>,
     usage: Usage,
     calls: &[CallRecord],
-    d1: bool,
     guard: &dyn OrchGuard,
 ) -> AgentTurnResult {
     let usage = Some(AgentUsage {
@@ -1308,6 +1646,11 @@ fn build_result(
         return hidden;
     };
     let mut out = Vec::new();
+    // The Genie answer text of each validated source, in citation order: the same text the
+    // model saw (see `genie_answer_text`), never a withheld or quarantined one (the loop below
+    // returns `hidden` for those before this ever fills in, so a source that reaches here is
+    // always a clean, cited answer).
+    let mut cited_texts: Vec<String> = Vec::new();
     for s in sources {
         let (Some(ws), Some(cid)) = (s["workspace"].as_str(), s["callId"].as_str()) else {
             return hidden;
@@ -1317,11 +1660,12 @@ fn build_result(
             .find(|c| c.call_id == cid && c.alias == ws && c.state == AgentCallState::Answered);
         let Some(c) = ok else { return hidden };
         // A withheld call keeps the state Answered, so ask the guard. No detail: not a source.
-        if guard
-            .call_detail(&c.turn_id, &c.call_id)
-            .is_none_or(|d| d.withheld.is_some())
-        {
+        let detail = guard.call_detail(&c.turn_id, &c.call_id);
+        if detail.as_ref().is_none_or(|d| d.withheld.is_some()) {
             return hidden;
+        }
+        if let Some(t) = detail.as_ref().and_then(|d| genie_answer_text(d)) {
+            cited_texts.push(t.to_owned());
         }
         out.push(AgentSource {
             workspace_id: ws.to_owned(),
@@ -1329,12 +1673,32 @@ fn build_result(
             turn_id: c.turn_id.clone(),
         });
     }
+    // An empty answer means "show the Genie answer as it is" (the prompt's one-workspace rule):
+    // it needs a validated source to show.
+    if answer.trim().is_empty() && out.is_empty() {
+        return hidden;
+    }
+    // Cross-workspace data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1
+    // removed), so an answer that cites more than one workspace is always Combined.
+    let combined = cites_many_workspaces(&out);
     let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
     let aliases: Vec<&str> = out.iter().map(|s| s.workspace_id.as_str()).collect();
     let answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
+    // Cut first, append the links section after (round 2): appending before the cut risked the
+    // cut throwing the whole section away on a long answer. A lone answer (one workspace) is
+    // never touched here: the card and the copy show that workspace's own Genie text verbatim
+    // (`src/shared/agent-answer-rule.ts`), not this model summary, so its links are already
+    // safe there.
+    let mut answer = cut_answer(&answer);
+    if combined {
+        // The real fix behind the prompt's "never drop a URL" rule (ADR 0122 amendment,
+        // 2026-11-25): a combined answer that dropped a link the model used still gets it,
+        // appended.
+        answer = append_missing_links(&answer, &cited_texts);
+    }
     AgentTurnResult {
-        answer: Some(cut_answer(&answer)),
-        answer_kind: if d1 && cites_many_workspaces(&out) {
+        answer: Some(answer),
+        answer_kind: if combined {
             AgentAnswerKind::Combined
         } else {
             AgentAnswerKind::Note
@@ -1342,6 +1706,145 @@ fn build_result(
         sources: out,
         usage,
     }
+}
+
+/// The Genie answer text of a cited call, the same text its `<genie_answer>` block held (see
+/// `guard::receipt::text_block`): `final_answer` from the structured content, or else the
+/// reply's plain text. `None` for a call with no reply, or no usable text.
+fn genie_answer_text(c: &AgentTurnCall) -> Option<&str> {
+    let reply = c.reply.as_ref()?;
+    let t = reply
+        .structured_content
+        .get("final_answer")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(reply.text.as_str());
+    (!t.trim().is_empty()).then_some(t)
+}
+
+/// One link a cited Genie answer carried: the label to show for it (a Markdown link's own
+/// label, or the URL itself for a bare URL) and the URL.
+struct FoundLink {
+    label: String,
+    url: String,
+}
+
+/// The Markdown links (`[label](https://…)`) and bare `https://…` URLs of `text`, in the order
+/// they appear, each capped to `cap_chars`: that bound exists for a cited Genie answer, whose
+/// raw text has no size limit of its own (unlike the model's own answer, already cut to
+/// `ANSWER_MAX_CHARS` by the time this ever scans it), so a huge table cannot make the scan slow.
+fn find_links(text: &str, cap_chars: usize) -> Vec<FoundLink> {
+    static MD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static BARE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let md = MD.get_or_init(|| {
+        regex::Regex::new(r"\[([^\]\n]{1,200})\]\((https?://[^\s()]+)\)").expect("a fixed pattern")
+    });
+    // Unlike the Markdown form, a bare URL has no delimiter of its own: the match can run on
+    // into trailing sentence punctuation, a closing `)` that is the sentence's and not the
+    // URL's, or a wrapper like `**bold**` or `<angle brackets>`. `trim_bare_url` cleans that up.
+    let bare =
+        BARE.get_or_init(|| regex::Regex::new(r"https?://[^\s\[\]]+").expect("a fixed pattern"));
+    let bound: String = text.chars().take(cap_chars).collect();
+    let mut spans: Vec<(usize, usize, FoundLink)> = Vec::new();
+    for c in md.captures_iter(&bound) {
+        let m = c.get(0).expect("group 0");
+        spans.push((
+            m.start(),
+            m.end(),
+            FoundLink {
+                label: c[1].to_owned(),
+                url: c[2].to_owned(),
+            },
+        ));
+    }
+    for m in bare.find_iter(&bound) {
+        // Already captured as a Markdown link's own URL.
+        if spans
+            .iter()
+            .any(|&(s, e, _)| m.start() >= s && m.end() <= e)
+        {
+            continue;
+        }
+        let trimmed = trim_bare_url(m.as_str());
+        if trimmed.is_empty() {
+            continue;
+        }
+        spans.push((
+            m.start(),
+            m.start() + trimmed.len(),
+            FoundLink {
+                label: trimmed.to_owned(),
+                url: trimmed.to_owned(),
+            },
+        ));
+    }
+    spans.sort_by_key(|&(start, _, _)| start);
+    spans.into_iter().map(|(_, _, l)| l).collect()
+}
+
+/// Trim what a sentence puts right against a bare URL with no delimiter of its own: trailing
+/// `.`, `,`, `;`, `:`, `!`, `?`, a quote, `*`, `_`, `>` or a backtick (sentence punctuation, or
+/// the far side of a `**bold**`, `_italic_` or `<angle-bracket>` wrapper), and a closing `)`
+/// that does not match an opening `(` inside the match (a sentence's own parenthesis, not part
+/// of the URL).
+fn trim_bare_url(mut u: &str) -> &str {
+    loop {
+        let Some(last) = u.chars().next_back() else {
+            return u;
+        };
+        let punct = matches!(
+            last,
+            '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '>' | '`'
+        );
+        let unmatched_paren = last == ')' && u.matches('(').count() < u.matches(')').count();
+        if !punct && !unmatched_paren {
+            return u;
+        }
+        u = &u[..u.len() - last.len_utf8()];
+    }
+}
+
+/// A URL for comparison only, never for display: collapses an HTML-escaped `&amp;` back to `&`
+/// (a raw Genie answer can carry it literally, and the prompt tells the model to write `&`, not
+/// `&amp;`, so the two must count as the same link), and drops one trailing `/` (Genie and the
+/// model do not always agree on one).
+fn normalize_url(u: &str) -> String {
+    let u = u.replace("&amp;", "&");
+    match u.strip_suffix('/') {
+        Some(s) => s.to_owned(),
+        None => u,
+    }
+}
+
+/// Append a `**Links**` section listing every URL that `texts` (the Genie answers the model
+/// cited) carries but `answer` (the model's own text) does not, in the order each first
+/// appears. Compared and de-duplicated by `normalize_url`, not by substring, so `.../a` is
+/// never counted as present just because `.../a/b` is in the answer, and a URL that repeats, in
+/// one text or across several, is appended once.
+fn append_missing_links(answer: &str, texts: &[String]) -> String {
+    let present: std::collections::HashSet<String> = find_links(answer, answer.chars().count())
+        .into_iter()
+        .map(|l| normalize_url(&l.url))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut missing = Vec::new();
+    for t in texts {
+        for link in find_links(t, guard::receipt::MAX_TEXT_CHARS) {
+            let norm = normalize_url(&link.url);
+            if seen.insert(norm.clone()) && !present.contains(&norm) {
+                missing.push(link);
+            }
+        }
+    }
+    if missing.is_empty() {
+        return answer.to_owned();
+    }
+    let mut out = answer.trim_end().to_owned();
+    out.push_str("\n\n**Links**");
+    for l in &missing {
+        out.push_str(&format!("\n- [{}]({})", l.label, l.url));
+    }
+    out
 }
 
 /// Cut an answer that is too long back to its last line break before the limit, so a link or a
@@ -1397,6 +1900,83 @@ fn names_alias(text: &str, alias: &str) -> bool {
         |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'));
     t.match_indices(&a)
         .any(|(i, m)| !part(t[..i].chars().next_back()) && !part(t[i + m.len()..].chars().next()))
+}
+
+/// A workspace name that is also an everyday word. The bare word alone is too likely to appear
+/// in the question by coincidence ("the test failed", "what's the plan for main"), so the
+/// home-first exception (ADR 0122 amendment) needs a clear cue next to it.
+const COMMON_WORKSPACE_NAMES: &[&str] =
+    &["test", "default", "dev", "prod", "demo", "main", "staging"];
+
+/// One word of a question, normalized for `names_workspace`: lower case, with leading and
+/// trailing sentence punctuation stripped. `raw` keeps the word as written (quotes, `@`, case),
+/// for the cue check of a common name.
+struct QWord<'a> {
+    norm: String,
+    raw: &'a str,
+}
+
+/// Split `text` on white space, and within each white-space word, on a hyphen: spaces and
+/// hyphens are interchangeable ("log mog" names `log-mog`). Each piece keeps the white-space
+/// word it came from as `raw`, so a cue (`@`, quotes) next to the whole word is still visible.
+/// A trailing possessive ('s or ’s) is stripped too, so "finance's" names `finance`.
+fn q_words(text: &str) -> Vec<QWord<'_>> {
+    let mut out = Vec::new();
+    for raw in text.split_whitespace() {
+        for piece in raw.split('-') {
+            let trimmed = piece.trim_matches(|c: char| !c.is_alphanumeric());
+            let stripped = trimmed
+                .strip_suffix("'s")
+                .or_else(|| trimmed.strip_suffix("’s"))
+                .unwrap_or(trimmed);
+            let norm = stripped.to_lowercase();
+            if !norm.is_empty() {
+                out.push(QWord { norm, raw });
+            }
+        }
+    }
+    out
+}
+
+/// Whether `raw` (the white-space word of a matched cue candidate) carries an `@` or a quote
+/// mark right against the word, as written in the question.
+fn has_at_or_quote(raw: &str) -> bool {
+    let quote = |c: char| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’');
+    raw.starts_with('@') || raw.starts_with(quote) || raw.ends_with(quote)
+}
+
+/// Whether the user's question names `name` as a workspace: its alias, its display name or its
+/// profile. A dedicated matcher for the home-first rule (ADR 0122 amendment); `names_alias` (used
+/// elsewhere, for the sources footer) has no multi-word, hyphen or common-name handling.
+///
+/// Matching is case-insensitive, ignores leading and trailing sentence punctuation on each word
+/// (including a trailing possessive, 's or ’s), and treats a space and a hyphen as the same
+/// separator. A name that is also an everyday word
+/// (`COMMON_WORKSPACE_NAMES`) matches only with a cue next to it: "in NAME", "NAME workspace",
+/// "@NAME", or "NAME" in quotes.
+pub(super) fn names_workspace(question: &str, name: &str) -> bool {
+    let want: Vec<String> = q_words(name).into_iter().map(|w| w.norm).collect();
+    let n = want.len();
+    if n == 0 {
+        return false;
+    }
+    let all = q_words(question);
+    if all.len() < n {
+        return false;
+    }
+    let Some(start) = (0..=all.len() - n).find(|&i| (0..n).all(|k| all[i + k].norm == want[k]))
+    else {
+        return false;
+    };
+    if n != 1 || !COMMON_WORKSPACE_NAMES.contains(&want[0].as_str()) {
+        return true;
+    }
+    // A common name needs a cue: "in NAME", "NAME workspace", "@NAME" or "NAME" in quotes.
+    let before = start.checked_sub(1).and_then(|i| all.get(i));
+    let after = all.get(start + 1);
+    before.is_some_and(|w| w.norm == "in")
+        || after.is_some_and(|w| w.norm == "workspace")
+        || has_at_or_quote(all[start].raw)
 }
 
 /// Bottle draws the sources of an answer itself (ADR 0122), so a sources footer that the model

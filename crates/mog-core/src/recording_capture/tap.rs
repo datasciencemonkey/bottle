@@ -57,6 +57,41 @@ struct Shared {
     lease_live: AtomicBool,
     /// The gate stays closed until this clock time (ms): the 250 ms tail.
     closed_until_ms: AtomicU64,
+    /// Counts since the arm, for the content-free capture check ([`CaptureCounts`]).
+    mic_blocks: AtomicU64,
+    system_blocks: AtomicU64,
+    gated_blocks: AtomicU64,
+    /// The clock time (ms) of the arm.
+    armed_at_ms: AtomicU64,
+    /// Ms from the arm to the first queued mic block; [`NEVER`] until one comes.
+    first_mic_ms: AtomicU64,
+    /// Ms from the arm to the first queued system audio block; [`NEVER`] until one comes
+    /// (CAP-10c diagnostic: tells a late system audio tap from one that never opened).
+    first_system_ms: AtomicU64,
+}
+
+/// No mic block yet.
+const NEVER: u64 = u64::MAX;
+
+/// What reached the recording, as counts only (no samples, no levels). A recording with no
+/// part shows here whether the mic stream gave frames at all (`micBlocks`, `firstMicMs`), or
+/// whether the writer dropped them (`dropped`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCounts {
+    /// Mic blocks queued for the writer since the arm.
+    pub mic_blocks: u64,
+    /// Of those, blocks the talk-key gate sent as zeros.
+    pub gated_mic_blocks: u64,
+    /// System audio blocks queued since the arm.
+    pub system_blocks: u64,
+    /// Blocks dropped because the queue was full.
+    pub dropped: u64,
+    /// Ms from the arm to the first mic block; `None`: no mic block came at all.
+    pub first_mic_ms: Option<u64>,
+    /// Ms from the arm to the first system audio block; `None`: no system audio block came at
+    /// all (CAP-10c diagnostic, alongside `firstMicMs`).
+    pub first_system_ms: Option<u64>,
 }
 
 /// The arm slot and the sinks. Clones share one slot.
@@ -84,6 +119,12 @@ impl RecordingTap {
                 key_down: AtomicBool::new(false),
                 lease_live: AtomicBool::new(false),
                 closed_until_ms: AtomicU64::new(0),
+                mic_blocks: AtomicU64::new(0),
+                system_blocks: AtomicU64::new(0),
+                gated_blocks: AtomicU64::new(0),
+                armed_at_ms: AtomicU64::new(0),
+                first_mic_ms: AtomicU64::new(NEVER),
+                first_system_ms: AtomicU64::new(NEVER),
             }),
         }
     }
@@ -112,6 +153,18 @@ impl RecordingTap {
             .last_system_sound_ms
             .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
         self.shared.dropped.store(0, Ordering::SeqCst);
+        for c in [
+            &self.shared.mic_blocks,
+            &self.shared.system_blocks,
+            &self.shared.gated_blocks,
+        ] {
+            c.store(0, Ordering::SeqCst);
+        }
+        self.shared
+            .armed_at_ms
+            .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
+        self.shared.first_mic_ms.store(NEVER, Ordering::SeqCst);
+        self.shared.first_system_ms.store(NEVER, Ordering::SeqCst);
         // Nothing of the gate resets. The flags and the tail are live state: an overlay lease
         // that was granted between the session lease and this arm, a key that is down now, or a
         // tail that still runs must keep the gate closed (a stale `true` only silences the mic;
@@ -187,9 +240,34 @@ impl RecordingTap {
         self.shared.last_system_sound_ms.load(Ordering::SeqCst)
     }
 
+    /// A system audio tap just went live (CAP-10c), maybe long after the arm (a late-adopted
+    /// open, review of #593's ~8.6 s build). Reset the silence clock to now, so the CAP-10a 5 s
+    /// check starts fresh from the moment sound could first flow, instead of reading the
+    /// silence window that already elapsed while the tap was still unavailable as an instant
+    /// `silent_or_denied`. `fetch_max`: never moves the clock backward past a real sound a
+    /// frame may have already stamped.
+    pub fn note_system_live(&self) {
+        self.shared
+            .last_system_sound_ms
+            .fetch_max(now_ms(&*self.shared.clock), Ordering::SeqCst);
+    }
+
     /// Blocks dropped since the arm because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::SeqCst)
+    }
+
+    /// The counts since the arm (content-free).
+    pub fn counts(&self) -> CaptureCounts {
+        let s = &self.shared;
+        CaptureCounts {
+            mic_blocks: s.mic_blocks.load(Ordering::SeqCst),
+            gated_mic_blocks: s.gated_blocks.load(Ordering::SeqCst),
+            system_blocks: s.system_blocks.load(Ordering::SeqCst),
+            dropped: s.dropped.load(Ordering::SeqCst),
+            first_mic_ms: Some(s.first_mic_ms.load(Ordering::SeqCst)).filter(|&t| t != NEVER),
+            first_system_ms: Some(s.first_system_ms.load(Ordering::SeqCst)).filter(|&t| t != NEVER),
+        }
     }
 }
 
@@ -241,7 +319,29 @@ impl FrameSink for TapSink {
             gated,
         };
         match tx.try_send(block) {
-            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Ok(()) => {
+                let s = &self.shared;
+                match self.track {
+                    Track::Mic => {
+                        if s.mic_blocks.fetch_add(1, Ordering::Relaxed) == 0 {
+                            let after = now_ms(&*s.clock)
+                                .saturating_sub(s.armed_at_ms.load(Ordering::Relaxed));
+                            s.first_mic_ms.store(after, Ordering::Relaxed);
+                        }
+                    }
+                    Track::System => {
+                        if s.system_blocks.fetch_add(1, Ordering::Relaxed) == 0 {
+                            let after = now_ms(&*s.clock)
+                                .saturating_sub(s.armed_at_ms.load(Ordering::Relaxed));
+                            s.first_system_ms.store(after, Ordering::Relaxed);
+                        }
+                    }
+                }
+                if gated {
+                    s.gated_blocks.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(_)) => {
                 self.shared.dropped.fetch_add(1, Ordering::Relaxed);
             }

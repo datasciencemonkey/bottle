@@ -48,6 +48,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "0004_exchange_citations",
         sql: include_str!("migrations/0004_exchange_citations.sql"),
     },
+    Migration {
+        version: 5,
+        name: "0005_recording_index",
+        sql: include_str!("migrations/0005_recording_index.sql"),
+    },
 ];
 
 /// The newest version this binary knows.

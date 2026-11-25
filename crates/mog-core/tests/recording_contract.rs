@@ -1,11 +1,13 @@
 //! The call recording contract of ADR 0103: the settings defaults, the Rust knob gate on
 //! `recording_start`, the error-kind codes and the content-free `Debug` of the transcript types.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mog_core::error::CoreError;
 use mog_core::ipc_gateway::{GatewayComponents, ERROR_CODES};
-use mog_core::recording::{MemorySettingsStore, RecordingComponent, RecordingSettingsStore};
+use mog_core::recording::{
+    MemorySettingsStore, RecordingComponent, RecordingSettingsStore, SYSTEM_AUDIO_SETTINGS_URL,
+};
 use mog_core::types::{
     RecordingDetail, RecordingErrorKind, RecordingSegment, RecordingSettings, RecordingStatus,
     RecordingSummary, RECORDING_DEFAULT_ENDPOINT, RECORDING_DEFAULT_INSTRUCTIONS,
@@ -133,6 +135,40 @@ fn sec_02b_a_bad_settings_patch_is_invalid_args() {
     );
 }
 
+/// ADR 0123, the general rule ("E"/"10", owner review 2026-11-26): Bottle calls only
+/// `system.ai.*` ids. A write that would set either endpoint outside that namespace is
+/// refused outright (the same `invalid_args` code a malformed request already uses — no new
+/// contract error code), and the store is left untouched, rather than silently accepted and
+/// only corrected on the next load.
+#[test]
+fn rec_settings_write_refuses_a_non_system_ai_endpoint() {
+    let (c, store) = component(RecordingSettings::default());
+    for patch in [
+        json!({"transcribeEndpoint": "my-own-model"}),
+        json!({"notesEndpoint": "databricks-claude-sonnet-5-5"}),
+    ] {
+        assert_eq!(
+            code(c.call("recording_settings_write", json!({ "patch": patch }))),
+            "invalid_args",
+            "{patch}"
+        );
+    }
+    // Refused, so the store still has the system.ai defaults, not a half-applied patch.
+    let s = store.load().unwrap();
+    assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    // A `system.ai.*` id, even one other than the default, is accepted.
+    c.call(
+        "recording_settings_write",
+        json!({"patch": {"notesEndpoint": "system.ai.gpt-oss-20b"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        store.load().unwrap().notes_endpoint.as_str(),
+        "system.ai.gpt-oss-20b"
+    );
+}
+
 #[test]
 fn cap_06_every_other_recording_command_is_a_typed_stub() {
     let (c, _) = component(RecordingSettings::default());
@@ -152,10 +188,13 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
             "recording_open",
             json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         ),
-        ("recording_open_system_audio_settings", json!({})),
     ] {
         assert_eq!(code(c.call(name, args)), "not_implemented", "{name}");
     }
+    // `recording_open_system_audio_settings` needs no profile and no `connect_capture` link
+    // (CAP-10c, #593 follow-up), so it is not one of the stubs above: it is a real host
+    // handler with its own `rec_open_system_audio_settings_*` tests below, which inject a fake
+    // opener (or run only off macOS) so nothing here ever really opens System Settings.
 }
 
 #[test]
@@ -209,6 +248,67 @@ fn sec_03_every_error_kind_maps_to_an_ipc_code() {
         "audio_unreadable"
     );
     assert_eq!(RecordingErrorKind::ALL.len(), 16);
+}
+
+// CAP-10c (#593 follow-up): `recording_open_system_audio_settings` needs no profile and no
+// `connect_capture` link, unlike `recording_start`. `RecordingComponent::set_open_url` injects
+// the opener, so the two tests below run on every OS with a fake that opens nothing, checking
+// the exact URL and the mapping of a refusal to `host_failed` — the real NSWorkspace call
+// behind the default opener is not exercised by any test (it would really open System Settings
+// on the machine that runs it); a human reviewer checks that one line by reading it.
+
+#[test]
+fn rec_open_system_audio_settings_asks_the_injected_opener_for_the_right_url() {
+    let (c, _) = component(RecordingSettings::default());
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let s = seen.clone();
+    c.set_open_url(Arc::new(move |url: &str| {
+        *s.lock().unwrap() = Some(url.to_owned());
+        true
+    }));
+    assert_eq!(
+        c.call("recording_open_system_audio_settings", json!({})),
+        Ok(json!({}))
+    );
+    assert_eq!(
+        seen.lock().unwrap().as_deref(),
+        Some(SYSTEM_AUDIO_SETTINGS_URL)
+    );
+}
+
+#[test]
+fn rec_open_system_audio_settings_maps_a_false_opener_to_host_failed() {
+    let (c, _) = component(RecordingSettings::default());
+    c.set_open_url(Arc::new(|_url: &str| false));
+    assert_eq!(
+        code(c.call("recording_open_system_audio_settings", json!({}))),
+        "host_failed"
+    );
+}
+
+/// A later `set_open_url` is ignored (mirrors `set_cloud`): the first opener wins, same as the
+/// first `connect_capture`/`set_cloud` call.
+#[test]
+fn rec_open_system_audio_settings_keeps_its_first_injected_opener() {
+    let (c, _) = component(RecordingSettings::default());
+    c.set_open_url(Arc::new(|_url: &str| true));
+    c.set_open_url(Arc::new(|_url: &str| false));
+    assert_eq!(
+        c.call("recording_open_system_audio_settings", json!({})),
+        Ok(json!({}))
+    );
+}
+
+/// With nothing injected, the component's default opener refuses outright (CAP-10c review: it
+/// must never call the real `NSWorkspace` off the main thread on its own). Safe on every OS,
+/// including macOS: the default never touches `open_url_on_this_thread`.
+#[test]
+fn rec_open_system_audio_settings_refuses_with_no_opener_injected() {
+    let (c, _) = component(RecordingSettings::default());
+    assert_eq!(
+        code(c.call("recording_open_system_audio_settings", json!({}))),
+        "host_failed"
+    );
 }
 
 const MARKER: &str = "the secret plan for the merger";

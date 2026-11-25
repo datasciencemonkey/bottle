@@ -140,7 +140,14 @@ export type ConversationsAction =
   | { action: 'conversations.opened' }
   /** `onlyFailed`: Clear failed. The brain re-checks each key and skips a thread that has an
    *  answered or in-progress exchange by the time the delete runs. */
-  | { action: 'conversations.delete'; threads: string[]; onlyFailed?: true };
+  | { action: 'conversations.delete'; threads: string[]; onlyFailed?: true }
+  /** The owner's "little button on the Conversations copy" request: an explicit "Copy
+   * Markdown" click on a direct answer. The brain resolves `requestId` from its own last list
+   * read (never from the view) and writes that row's Markdown, plain text only, with no html. */
+  | { action: 'conversations.copy_markdown'; requestId: string }
+  /** The owner's "Copy" button request (ADR 0124 amendment): an explicit, formatted (html plus
+   * text) copy of a row's answer, next to "Copy Markdown". Resolved the same way. */
+  | { action: 'conversations.copy'; requestId: string };
 
 /** One thread: every exchange that shares one Genie `conversationId`, oldest first. */
 export interface ConversationThread {
@@ -255,6 +262,10 @@ export function asConversationsAction(p: unknown): ConversationsAction | undefin
   if (!isObj(p)) return undefined;
   const a = p['action'];
   if (a === 'conversations.ready' || a === 'conversations.opened') return { action: a };
+  if (a === 'conversations.copy_markdown' || a === 'conversations.copy') {
+    const r = p['requestId'];
+    return isStr(r) && r.length > 0 && r.length <= 64 ? { action: a, requestId: r } : undefined;
+  }
   if (a !== 'conversations.delete') return undefined;
   const t = p['threads'];
   if (!Array.isArray(t) || t.length < 1 || t.length > CONVERSATIONS_DELETE_MAX) return undefined;

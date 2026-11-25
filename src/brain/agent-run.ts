@@ -101,6 +101,13 @@ export interface AgentClientDeps {
   showTurn(mogId: MogId, turn: AgentTurnView): void;
   /** The card of a turn that left (a removed turn, a cleared session). */
   dropTurn(mogId: MogId, turnId: string): void;
+  /**
+   * An `answered` turn reached its final view: `view.parts` and `view.summary` are settled (the
+   * late pulls, `summarise` and `syncParts` have all run). Never fires for a stopped, failed or
+   * otherwise unanswered turn. The owner's "attach Genie's answer to the clipboard" request
+   * (`answer-clipboard.ts`) hooks here, not `showTurn`, which can still fire mid-settle.
+   */
+  finished?(mogId: MogId, view: AgentTurnView): void;
   /** A one-line pop-up on the card of `mogId` (the queue is full). */
   note?(mogId: MogId, text: string): void;
   /** The MOG mood follows the turn. */
@@ -118,7 +125,6 @@ interface TurnRec {
   view: AgentTurnView;
   origin: AgentTurn;
   catalog: Map<string, AgentWorkspace>;
-  crossWorkspace: boolean;
   agentProfile: ProfileName | undefined;
   /** The answered parts, by call id, in the order the calls ended. */
   parts: Map<string, AgentPartView>;
@@ -173,7 +179,6 @@ const CALL_STATES: readonly string[] = [
 const REFUSED_CODES: readonly string[] = [
   'workspace_not_available',
   'budget_reached',
-  'cross_workspace_off',
   'invalid_args',
 ];
 const OUTCOMES: readonly string[] = [
@@ -222,6 +227,10 @@ export function asTurnEvent(p: unknown): AgentTurnEvent | undefined {
       if (!REFUSED_CODES.includes(code as string) || !isCount(p['used'])) return undefined;
       return { kind: 'refused', turnId, code: code as never, used: p['used'] };
     }
+    case 'signing_in':
+      return typeof p['workspaceId'] === 'string'
+        ? { kind: 'signing_in', turnId, workspaceId: p['workspaceId'] }
+        : undefined;
     case 'ended': {
       if (!OUTCOMES.includes(p['outcome'] as string) || !isCount(p['calls'])) return undefined;
       const tokens = p['tokens'];
@@ -278,7 +287,7 @@ export interface AgentClient {
     turn: AgentTurn,
     mode: AgentMode,
     actionTicket?: string,
-    /** The thread this turn continues (the hub thread composer). Else see `lastAnswered`. */
+    /** The thread this turn continues (the hub thread composer). Else see `currentThread`. */
     threadId?: string,
   ): Promise<void>;
   onTurnEvent(payload: unknown): void;
@@ -301,7 +310,18 @@ export interface AgentClient {
   panel(): Panel;
   /** The turn view of `turnId`, if the client holds it. */
   turn(turnId: string): AgentTurnView | undefined;
-  /** The thread (root UUID) of `turnId`, if the client holds the turn. */
+  /**
+   * The owner's "attach Genie's answer to the clipboard" request: set `copyNote` on the turn's
+   * own record and republish it (`showTurn` and the hub's `onChange`), so the card and
+   * Conversations both show the current, not a stale, note. `undefined` clears it (the brain
+   * does this itself, a short time after setting it, so "Copied" never resurfaces hours later on
+   * a remount or a reopened thread). A no-op for a turn the client no longer holds.
+   */
+  markCopied(turnId: string, outcome: 'copied' | 'failed' | undefined): void;
+  /**
+   * The thread (root UUID) of `turnId`. A turn that the client no longer holds (a session end
+   * forgot it) gives the thread that it started as a new ask; a bad turn id gives undefined.
+   */
   threadOf(turnId: string): string | undefined;
   /** The MOG that asked in a thread of the panel, if the client holds one of its turns. */
   threadMog(threadId: string): MogId | undefined;
@@ -317,7 +337,11 @@ export interface AgentClient {
     inProgress: boolean;
     shown: boolean;
   }[];
-  /** Whether the open session holds a turn of this thread (a reply is a `follow_up`). */
+  /**
+   * Whether a reply in this thread is a `follow_up`: the open session's model history is this
+   * thread (the thread of the newest new ask). A reply in an older thread is a new ask, so the
+   * model never answers it with the context of a later thread.
+   */
   inSession(threadId: string): boolean;
   /** Delete: forget the finished turns of a thread (an in-progress turn stays). */
   forgetThread(threadId: string): void;
@@ -331,8 +355,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   let seq = 0;
   /** The session ended in a way that leaves its failed turns on screen until the next start. */
   let stale = false;
-  /** The thread of the newest answered turn: a ⌥G follow-up continues it (R-13). */
-  let lastAnswered: string | undefined;
+  /**
+   * The thread whose turns the core holds as its model history: the thread of the newest new ask
+   * (the core clears the history on a new ask). Undefined with no session.
+   */
+  let currentThread: string | undefined;
   /**
    * A brain-side Wipe fence (security L3): it counts the Wipes this brain saw. A write notes the
    * number when it starts and refuses to save when the number moved by the time it is ready.
@@ -437,13 +464,11 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       return;
     }
     r.fetched.add(callId);
-    const ws = r.catalog.get(d.workspaceId);
     const host = await deps.hostOf(d.profile).catch(() => undefined);
     if (recs.get(r.view.turnId) !== r) return;
     const part = partOf(d, {
       chip: deps.chipOf(d.profile),
       host,
-      notShownToAgent: !r.crossWorkspace && ws !== undefined && !ws.isAgentWorkspace,
     });
     if (part) r.parts.set(callId, part);
     syncParts(r);
@@ -672,6 +697,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (recs.get(id) !== r) return;
     } else {
       update(r);
+      // The core counted the turn before `ended`: the header shows the new count now, not
+      // after the pulls and the row below.
+      void refresh();
     }
     // The calls that ended just before the turn finish their pulls first.
     await Promise.allSettled([...r.pending]);
@@ -685,6 +713,15 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     if (recs.get(id) !== r) return;
     syncParts(r);
     update(r);
+    // The view is now settled (parts and summary final): the one point an `answered` turn may
+    // trigger the owner's clipboard copy. `deps.finished` never fires for any other outcome.
+    if (out === 'answered') {
+      try {
+        deps.finished?.(r.origin.mogId, r.view);
+      } catch {
+        fault();
+      }
+    }
     // A turn that the session end cut off writes its row when the `agent:session` event arrives:
     // the core sends the turn `ended` first and the session `ended{wipe}` right after, and a Wipe
     // must leave no turn row.
@@ -695,10 +732,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         r.origin.mogId,
         out === 'answered' ? 'answered' : out === 'stopped' ? 'cancelled' : 'failed',
       );
-    if (out === 'answered') {
-      deps.followUp?.answered();
-      lastAnswered = r.threadId;
-    }
+    if (out === 'answered') deps.followUp?.answered();
     void refresh();
   }
 
@@ -723,16 +757,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       if (r.parts.has(s.callId) || !CALL_ID.test(s.callId)) continue;
       try {
         const d = await deps.api.callDetail(s.turnId, s.callId);
-        // The D1 value of the turn that made the call, not of this turn.
-        const known = recs.get(s.turnId);
-        const src = known ?? r;
-        const ws = src.catalog.get(d.workspaceId);
-        // A turn that is forgotten has no D1 value: fail closed, as if D1 were off.
-        const d1 = known !== undefined || s.turnId === r.view.turnId ? src.crossWorkspace : false;
         const part = partOf(d, {
           chip: deps.chipOf(d.profile),
           fromEarlier: s.turnId !== r.view.turnId,
-          notShownToAgent: ws !== undefined && !ws.isAgentWorkspace && !d1,
         });
         if (part) r.parts.set(s.callId, part);
       } catch {
@@ -768,8 +795,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     });
     const summary: NonNullable<AgentTurnView['summary']> = {
       md,
-      // Only D1 on can combine: with D1 off the kind stays "note" (AC-2b.6; the owner rule of the answer supersedes its label: the view shows no note label).
-      kind: r.crossWorkspace ? res.answerKind : 'note',
+      // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+      // 2026-11-24): cross-workspace data is always on, so the kind is always the real one.
+      kind: res.answerKind,
       workspaces,
       ...(citations.length > 0 ? { citations } : {}),
     };
@@ -799,6 +827,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       case 'refused':
         r.view = { ...r.view, used: e.used };
         return update(r);
+      case 'signing_in': {
+        // ADR 0122 amendment (owner decision 2026-11-24): a workspace's call signed out, and
+        // Bottle starts its browser sign-in. The existing one-line pop-up carries the status;
+        // no new card UI.
+        const name = r.catalog.get(e.workspaceId)?.name ?? e.workspaceId;
+        deps.note?.(r.origin.mogId, `Signing in to ${name}… finish in your browser.`);
+        return;
+      }
       case 'slow':
         r.view = { ...r.view, state: 'slow' };
         return update(r);
@@ -823,7 +859,13 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
   }
 
   return {
-    async submit(turn, mode, actionTicket, threadId) {
+    async submit(turn, asked, actionTicket, threadId) {
+      // A ⌥G follow-up continues the thread the core holds. With none, it is a new ask: the
+      // thread of an older answer is not the model history any more.
+      const mode =
+        asked === 'follow_up' && threadId === undefined && currentThread === undefined
+          ? 'ask'
+          : asked;
       const opId = deps.newId();
       let a: AgentTurnAccepted;
       try {
@@ -852,7 +894,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         view: newView(a, turn.question),
         origin: turn,
         catalog: new Map(a.catalog.map((c) => [c.workspaceId, c])),
-        crossWorkspace: a.crossWorkspace,
         agentProfile: a.catalog.find((c) => c.isAgentWorkspace)?.profile,
         parts: new Map(),
         fetched: new Set(),
@@ -862,13 +903,15 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         fellBack: false,
         // A new ask starts a thread (its root is this turn); a follow-up joins one.
         threadId:
-          threadId ?? (mode === 'follow_up' ? lastAnswered : undefined) ?? uuidOfTurn(a.turnId),
+          threadId ?? (mode === 'follow_up' ? currentThread : undefined) ?? uuidOfTurn(a.turnId),
         recorded: false,
         rowIds: new Map(),
         noRecord: false,
         settled: false,
       };
       recs.set(a.turnId, rec);
+      // A new ask replaces the model history of the session with its own thread (`pump`).
+      if (mode !== 'follow_up') currentThread = rec.threadId;
       deps.phase?.(turn.mogId, 'working');
       update(rec);
       void refresh();
@@ -899,7 +942,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         return changed();
       }
       deps.followUp?.reset();
-      lastAnswered = undefined;
+      currentThread = undefined;
       // A Wipe leaves nothing on disk: no turn, ended or not, writes a row after it, and a write
       // that is already in flight finds the fence moved.
       if (e.reason === 'wipe') fenceWrites();
@@ -967,7 +1010,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       };
     },
     turn: (turnId) => recs.get(turnId)?.view,
-    threadOf: (turnId) => recs.get(turnId)?.threadId,
+    markCopied(turnId, outcome) {
+      const r = recs.get(turnId);
+      if (!r) return;
+      r.view = { ...r.view, copyNote: outcome };
+      update(r);
+    },
+    threadOf: (turnId) =>
+      recs.get(turnId)?.threadId ?? (TURN_ID.test(turnId) ? uuidOfTurn(turnId) : undefined),
     threadMog: (threadId) => [...recs.values()].find((r) => r.threadId === threadId)?.origin.mogId,
     turns: () => {
       const { live, waiting, earlier } = shown();
@@ -982,7 +1032,9 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       }));
     },
     inSession: (threadId) =>
-      session.state !== 'none' && [...recs.values()].some((r) => r.threadId === threadId),
+      session.state !== 'none' &&
+      threadId === currentThread &&
+      [...recs.values()].some((r) => r.threadId === threadId),
     forgetThread(threadId) {
       // A deleted thread gets no row from a lift.
       for (const r of [...deferredTurns.keys()])
@@ -991,7 +1043,7 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       for (const [again, r] of [...deferredRows])
         if (r.threadId === threadId) deferredRows.delete(again);
       for (const [id, r] of recs) if (r.threadId === threadId && r.settled) forget(id, r);
-      if (lastAnswered === threadId) lastAnswered = undefined;
+      if (currentThread === threadId) currentThread = undefined;
       changed();
     },
   };

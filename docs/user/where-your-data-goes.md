@@ -73,13 +73,14 @@ The copy comes from one file: `src/views/hub/disclosures.ts`. If you change the 
 - The cleanup step waits 1.5 seconds at most. Then Bottle pastes the local text.
 - The setting Clean up dictation switches this step off. Then dictation text stays on this computer.
 - When you press ⌥G, Bottle sends your question to the orchestrator model in your home workspace.
-- The model decides which of your workspaces to ask. It asks only workspaces you turned on.
+- Bottle asks your home workspace first. It asks your other workspaces only when home has no answer or your question names one. It asks only workspaces you turned on.
 - The model has two tools: ask Genie in one workspace, and submit the answer.
 - Every ask goes through a guard in the Bottle core. The guard sets a budget and blocks quarantined text.
 - The model cannot start recording, send context, publish a Page or change the workspace.
-- Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.
+- The model sees the answers of every workspace it asks, and it can combine them into one answer.
 - A combined answer cites each workspace with a numbered marker. Each marker links to the answer of that workspace.
 - If the model is not reachable, Bottle asks Genie One in your home workspace and shows a short notice.
+- Bottle copies each finished answer to the clipboard on this Mac only. The setting Copy Genie answers to the clipboard switches this off.
 
 ## Genie history
 

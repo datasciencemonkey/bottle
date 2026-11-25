@@ -428,7 +428,8 @@ html[data-side='left'] .card-genie .popup {
    `.genie-when` ("now") shifted "now" about 4px above the button baseline (review round 2,
    finding "also fix if cheap"). */
 .genie-toggle,
-.genie-remember {
+.genie-remember,
+.genie-copy {
   appearance: none;
   flex: none;
   margin: 0;
@@ -448,16 +449,27 @@ html[data-side='left'] .card-genie .popup {
 }
 
 .genie-toggle:hover,
-.genie-remember:hover {
+.genie-remember:hover,
+.genie-copy:hover {
   color: var(--mog-text);
   text-decoration-color: currentColor;
 }
 
 .genie-toggle:focus-visible,
-.genie-remember:focus-visible {
+.genie-remember:focus-visible,
+.genie-copy:focus-visible {
   outline: none;
   border-radius: var(--mog-radius-sm);
   box-shadow: var(--mog-focus-ring);
+}
+
+/* The owner's "Copy" button request (ADR 0124 amendment): a quiet text control with its icon,
+   same footer row as "Open in Bottle" and "Remember this" (review: "keep them quiet and small"). */
+.genie-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-decoration: none;
 }
 
 /* #523: "Open in Databricks" is a link, styled like the other quiet footer controls. */

@@ -28,6 +28,8 @@ import {
   RECORDING_TEXT,
   RECORDING_VIEW_ID,
   recordingNotice,
+  SYSTEM_AUDIO_HINT,
+  SYSTEM_AUDIO_SETTINGS_OPEN_FAILED,
   VOLUME_PATH,
   type HubRecording,
   type HubRecordingDetail,
@@ -54,6 +56,8 @@ import {
 } from '../shared/ipc';
 import type { ProfileName } from '../shared/interfaces';
 import { onViewInput, type BrainBus } from './bus';
+import { timeoutScheduler, type Scheduler } from './card-stack';
+import { createSystemClock, type MonotonicClock } from './clock';
 
 /** The recording settings as the brain reads and writes them. No secrets. */
 export interface RecSettings {
@@ -77,6 +81,8 @@ export interface RecState {
   startedAtMs?: number;
   endsAtMs?: number;
   systemAudio?: 'ok' | 'silent_or_denied' | 'mic_only';
+  /** The recording's folder name (matches `RecSummary.id`/`.name`): "A", review 2026-11-25. */
+  name?: string;
 }
 
 /** One recording in the volume (`recording_list`). */
@@ -139,7 +145,13 @@ export interface RecordingApi {
   start(instructions?: string): Promise<RecState>;
   stop(): Promise<RecState>;
   state(): Promise<RecState>;
-  list(): Promise<RecSummary[]>;
+  /**
+   * `reconcile`: owner authorization 2026-11-25. Default (`false` or absent): the local index,
+   * merged with the live overlays, with no network call. `true`: also read the volume once and
+   * refresh the index, for the hub's first open and after a recording reaches `done` or
+   * `failed`. Every other call omits it, so most reads make no network call at all.
+   */
+  list(reconcile?: boolean): Promise<RecSummary[]>;
   detail(id: string): Promise<RecDetail>;
   retry(id: string): Promise<unknown>;
   /** Delete a recording that is only on this Mac. */
@@ -165,10 +177,22 @@ export interface RecordingWireDeps {
   mood?: RecordingMood;
   /** A short OS notice. It never carries transcript or notes text. */
   notify?: (text: string) => void;
+  /** Default: the system clock. Tests pass a `SimClock` to control the system audio hint timer. */
+  clock?: MonotonicClock;
+  /** Default: `timeoutScheduler(clock)`. */
+  schedule?: Scheduler;
 }
 
 /** The OS notice when the notes of a recording are ready. */
 export const NOTES_READY_TEXT = 'Your call notes are ready.';
+
+/**
+ * CAP-10a, ADR 0103 (#593 follow-up): how long system audio must stay silent before the calm
+ * hint shows. macOS gives the same digital silence whether the permission is denied or nothing
+ * is playing yet (the core's own 5 s check, `SYSTEM_SILENCE_MS`), so a short red alert on every
+ * quiet moment is a false alarm; this waits much longer before saying anything.
+ */
+export const SYSTEM_AUDIO_HINT_MS = 20_000;
 
 /** The refusals of `recordingProfile`: they have their own plain words. */
 const PROFILE_CODES: ReadonlySet<string> = new Set(['no_profile']);
@@ -314,6 +338,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   const send = deps.send ?? ((event: string, payload: unknown) => emitTo('hub', event, payload));
   const toHub = (event: string, payload: unknown) =>
     void send(event, payload).catch(() => undefined);
+  const clock = deps.clock ?? createSystemClock();
+  const schedule = deps.schedule ?? timeoutScheduler(clock);
 
   let settings: RecSettings | undefined;
   let myFiles: string | null | undefined;
@@ -367,10 +393,22 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         instructions,
       };
     }
-    if (error) m.error = error;
+    // A real error always wins; the calm hint only shows in its place, never over it (#593
+    // follow-up). Computed fresh on every publish, so the hint reappears at once as soon as a
+    // real error that was blocking it clears, with no need to catch that at the clearing site.
+    const shown = error ?? (systemAudioHintDue ? SYSTEM_AUDIO_HINT : undefined);
+    if (shown) m.error = shown;
     if (settingsError) m.settingsError = settingsError;
     toHub(HUB_RECORDING_EVENT, m);
   };
+
+  /**
+   * Set only while the most recent list read itself failed (review "3" of the 2026-11-26
+   * round): `publishList` still shows the last rows it has, not an emptied list, with this
+   * added so the hub can say the read failed without losing what was already known.
+   */
+  let listUnavailable = false;
+  let listErrorNotice: RecordingNotice | undefined;
 
   const publishList = () => {
     if (gone) return;
@@ -393,6 +431,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       }),
     };
     if (problem) out.storageProblem = problem;
+    if (listUnavailable) out.unavailable = true;
+    if (listErrorNotice) out.error = listErrorNotice;
     if (batch) {
       const states = [...batch.state.values()];
       out.uploadAll = {
@@ -409,16 +449,135 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   };
 
   let recOn = false;
+  /** Opus review round 2 (B1): one background reconcile per launch, from `recordings.ready`. */
+  let reconciled = false;
+  /** Opus review round 2 (L1): ids removed in this session. A late `recording.job` for one of
+   * them (a straggler queued before the delete, or from an in-flight worker) is ignored
+   * outright, never re-added to `rows`. Kept for the life of the brain session; never cleared. */
+  const removedIds = new Set<string>();
+  /** The name of the recording the device runs or just stopped (so Stop can select and read
+   * its own row at once, "D" review 2026-11-25/26), or `undefined` with none known yet. */
+  let currentName: string | undefined;
+  /** Whether the last state read `silent_or_denied` while recording (the hint timer tracks it). */
+  let systemAudioSilent = false;
+  let systemAudioHintTimer: (() => void) | undefined;
+  /** The one pending catch-up poll, or `undefined` with none scheduled. */
+  let catchUpTimer: (() => void) | undefined;
+  /**
+   * How long to wait before re-reading the list while a take is still uploading,
+   * transcribing or writing notes, or the list itself just failed to read ("A" review
+   * 2026-11-25/26, then "6" of the 2026-11-26 round): `recording.job` is not sticky and
+   * nothing else polls, so a missed or dropped event (or a transient list failure) must not
+   * leave things stale for good. Doubles each time this poll itself has to fire again (3, 6,
+   * 12, … up to `CATCH_UP_MAX_MS`), and resets to the base the moment a real `recording.job`
+   * event arrives — a sign that updates are flowing normally again.
+   */
+  const CATCH_UP_BASE_MS = 3_000;
+  const CATCH_UP_MAX_MS = 60_000;
+  let catchUpDelayMs = CATCH_UP_BASE_MS;
+  const resetCatchUpBackoff = () => {
+    catchUpDelayMs = CATCH_UP_BASE_MS;
+  };
+  const IN_FLIGHT_STATUSES: ReadonlySet<RecordingStatus> = new Set([
+    'recording',
+    'uploading',
+    'transcribing',
+    'writing_notes',
+  ]);
+  /**
+   * Re-read the list shortly, so a missed job event (or a slow or failed first read) still
+   * catches up on its own. `force` arms it even with nothing in flight (review "6": the
+   * list-failure path, which has no row statuses to check at all). The live take itself
+   * (`currentName`) never alone justifies a poll: it is expected to stay `recording` for the
+   * whole call, that is not something stalled. One timer at a time: each call replaces the
+   * one before it.
+   */
+  const scheduleCatchUp = (force = false) => {
+    catchUpTimer?.();
+    catchUpTimer = undefined;
+    const inFlight = rows.some((r) => r.id !== currentName && IN_FLIGHT_STATUSES.has(r.status));
+    if (gone || !(force || inFlight)) {
+      if (!force) resetCatchUpBackoff();
+      return;
+    }
+    const delay = catchUpDelayMs;
+    catchUpTimer = schedule(clock.now() + delay, () => {
+      catchUpTimer = undefined;
+      catchUpDelayMs = Math.min(catchUpDelayMs * 2, CATCH_UP_MAX_MS);
+      void refreshList();
+    });
+  };
+  /**
+   * The silence has lasted past `SYSTEM_AUDIO_HINT_MS` (#593 follow-up). Kept separate from
+   * `error`: a real error always wins in `publish`, but this stays true underneath it, so the
+   * hint reappears on its own the moment that real error clears, with no lost opportunity.
+   */
+  let systemAudioHintDue = false;
+
+  /** Cancel a pending hint timer, drop the due flag, and clear a shown hint or settings-open
+   * failure (sound arrived, or the recording ended). Real errors are untouched. */
+  const clearSystemAudioHint = () => {
+    systemAudioHintTimer?.();
+    systemAudioHintTimer = undefined;
+    systemAudioHintDue = false;
+    if (error === SYSTEM_AUDIO_HINT || error === SYSTEM_AUDIO_SETTINGS_OPEN_FAILED) {
+      error = undefined;
+    }
+  };
+
   const setState = (s: RecState) => {
     control = controlOf(s);
-    if (s.systemAudio === 'silent_or_denied') error = recordingNotice('system_audio_denied');
-    else if (error === recordingNotice('system_audio_denied')) error = undefined;
+    // CAP-10a: macOS gives the same digital silence whether System Audio Recording is denied
+    // or nothing else is playing, so a short silence is never a red alert (#593 follow-up). A
+    // long, unbroken silence gets a calm status hint instead, and sound clears it at once. The
+    // red `system_audio_denied` notice keeps its own meaning for a real refusal elsewhere.
+    const silentNow = s.systemAudio === 'silent_or_denied' && s.phase === 'recording';
+    if (silentNow && !systemAudioSilent) {
+      systemAudioHintTimer = schedule(clock.now() + SYSTEM_AUDIO_HINT_MS, () => {
+        systemAudioHintTimer = undefined;
+        systemAudioHintDue = true;
+        publish();
+      });
+    } else if (!silentNow && systemAudioSilent) {
+      clearSystemAudioHint();
+    }
+    systemAudioSilent = silentNow;
     const on = s.phase === 'recording';
     if (on !== recOn) {
       recOn = on;
       deps.mood?.callRecording(on);
-      if (on) void warnIfLocalOnly();
+      if (on) {
+        // "D" review 2026-11-25/26, then "4" and "5" of the 2026-11-26 round: a new take
+        // becomes the selected row the moment it starts, not only once it stops, so the
+        // detail pane never keeps showing an old recording while this one runs. `currentName`
+        // is set unconditionally, even with no name (nothing to track then either way).
+        currentName = s.name;
+        if (s.name) {
+          detailId = s.name;
+          // Select it, but do not fetch `detail` yet ("4"): there is nothing to show for a
+          // still-recording take (no transcript, no notes) and the call would just fail or
+          // run long. The detail pane follows this id for real once it is worth fetching:
+          // the first `recording.job` event (`onJob`, below), or the stop case below.
+          if (!gone)
+            toHub(HUB_RECORDING_DETAIL_EVENT, { id: s.name, status: 'recording', turns: [] });
+        }
+        void refreshList();
+        void warnIfLocalOnly();
+      } else {
+        // The call ended (Stop, ⌥R or the length): read the list now, so its row shows at
+        // once and goes on to uploading, transcribing and notes, also with no job event yet.
+        // Re-select the same take ("5"), but only if the user has not picked a different row
+        // to look at during the call: `detailId` still being `currentName` (the auto-select
+        // above, untouched since) or unset either way means nothing of the user's own choice
+        // would be lost. A deliberate pick survives the stop.
+        if (currentName && (detailId === currentName || detailId === undefined)) {
+          void showDetail(currentName);
+        }
+        currentName = undefined;
+        void refreshList();
+      }
     }
+    if (!on) clearSystemAudioHint();
     publish();
   };
 
@@ -499,26 +658,44 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     publish();
   };
 
-  async function refreshList(): Promise<void> {
+  /** Each list read takes a number; only the newest read's reply is kept (no stale overwrite). */
+  let listSeq = 0;
+  /**
+   * `reconcile`: owner authorization 2026-11-25, forwarded to `api.list`. The default read is
+   * the fast, index-only path; `recordings.ready` (the hub's first open) and a recording
+   * reaching `done` or `failed` (`onJob`, below) pass `true` so the index catches up with the
+   * volume and first-run users see their existing recordings (part G).
+   */
+  async function refreshList(reconcile = false): Promise<void> {
+    const mine = ++listSeq;
     if (!settings) settings = await api.readSettings().catch(() => undefined);
     if (myFiles === undefined && !batch?.running) await probe();
     try {
-      rows = await api.list();
+      const read = await api.list(reconcile);
+      if (mine !== listSeq) return;
+      rows = read;
       listed = true;
+      listUnavailable = false;
+      listErrorNotice = undefined;
     } catch (e) {
+      if (mine !== listSeq) return;
+      // Review "3" of the 2026-11-26 round: a failed read keeps the last rows this brain
+      // already has (never blanks the list to `[]`) and only adds the notice on top, since
+      // every recording exists locally first and this is the one call that could not run,
+      // not proof that nothing exists.
       const code = codeOf(e);
-      if (!gone)
-        toHub(
-          HUB_RECORDINGS_EVENT,
-          PROFILE_CODES.has(code)
-            ? { rows: [], unavailable: true, error: recordingNotice(code) }
-            : { rows: [], unavailable: true },
-        );
+      listUnavailable = true;
+      listErrorNotice = PROFILE_CODES.has(code) ? recordingNotice(code) : undefined;
+      publishList();
+      // "6": arm one retry on this path too, through the same bounded, backing-off timer the
+      // in-flight catch-up uses.
+      scheduleCatchUp(true);
       return;
     }
     for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r.status);
     if (batch && !batch.running) batch = undefined;
     publishList();
+    scheduleCatchUp();
   }
 
   /** Upload all: each waiting recording through the retry path, one at a time, oldest first. */
@@ -595,6 +772,9 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   }
 
   function onJob(j: RecJob): void {
+    // Opus review round 2 (L1): a straggler event for an id removed this session (queued
+    // before the delete, or from an in-flight worker wrapping up) never puts the row back.
+    if (removedIds.has(j.id)) return;
     const before = seen.get(j.id);
     seen.set(j.id, j.status);
     const row = rows.find((r) => r.id === j.id);
@@ -614,10 +794,28 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       if (j.partsTotal !== undefined) row.partsTotal = j.partsTotal;
       if (j.onDeviceOnly) row.onDeviceOnly = true;
       publishList();
+      // `recording.job` is not sticky and nothing else polls ("A" review 2026-11-25/26): keep
+      // a bounded catch-up armed in case the next event is missed, until the row reaches a
+      // terminal status. A real event arriving is evidence updates are flowing normally
+      // again, so the backoff resets to its base ("6" of the 2026-11-26 round) rather than
+      // keeping whatever it had climbed to.
+      resetCatchUpBackoff();
+      scheduleCatchUp();
     } else void refreshList();
-    if (j.status === 'done' && before !== 'done') {
-      deps.notify?.(NOTES_READY_TEXT);
-      deps.mood?.ready();
+    // Opus review round 2 (B2): `before === undefined` means this is the first time this
+    // brain has ever heard of this id (freshly seen in a list reply, not a live transition
+    // just now), so the terminal-status branch below — the reconcile and the user-facing
+    // notice — only runs for an id this brain was already tracking.
+    if (before !== undefined) {
+      // A recording reaching a terminal status reconciles the index in the background (owner
+      // authorization 2026-11-25, part C): the row itself already updated above, so this does
+      // not block that; it just catches up the index and any other row the volume knows about.
+      if ((j.status === 'done' || j.status === 'failed') && before !== j.status)
+        void refreshList(true);
+      if (j.status === 'done' && before !== 'done') {
+        deps.notify?.(NOTES_READY_TEXT);
+        deps.mood?.ready();
+      }
     }
     if (detailId === j.id) void showDetail(j.id);
   }
@@ -729,10 +927,26 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void stop();
         break;
       case 'recording.system_audio':
-        void api.openSystemAudioSettings().catch(() => undefined);
+        // A failure (no host handler, or the OS refused to open the pane) shows plain steps
+        // with no action, never nothing: Retry would just fail the same way again.
+        void api.openSystemAudioSettings().catch(() => {
+          error = SYSTEM_AUDIO_SETTINGS_OPEN_FAILED;
+          publish();
+        });
         break;
       case 'recordings.ready':
-        void refreshList();
+        // Opus review round 2 (B1): the fast, index-only path paints first, every time the
+        // area shows, so first paint never waits on a reconcile's volume read. Only one
+        // reconcile runs per launch (part G: a first-run user with an empty index still sees
+        // the volume's existing recordings once that one background read lands, and the
+        // index is written so every later open is instant with no reconcile at all).
+        if (listed) publishList();
+        void refreshList().then(() => {
+          if (!reconciled) {
+            reconciled = true;
+            void refreshList(true);
+          }
+        });
         break;
       case 'recordings.detail':
         void showDetail(a.id);
@@ -745,7 +959,10 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         break;
       case 'recordings.delete':
         void api.delete(a.id).then(
-          () => refreshList(),
+          () => {
+            removedIds.add(a.id);
+            void refreshList();
+          },
           (e: unknown) => showError(e),
         );
         break;
@@ -769,6 +986,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   const offJob = api.onJob(onJob);
   return () => {
     gone = true;
+    systemAudioHintTimer?.();
+    catchUpTimer?.();
     offInput();
     offState();
     offJob();
@@ -783,6 +1002,7 @@ export function recStateOf(s: RecordingState): RecState {
   if (s.systemAudio === 'ok' || s.systemAudio === 'silent_or_denied')
     out.systemAudio = s.systemAudio;
   else if (s.systemAudio === 'unavailable') out.systemAudio = 'mic_only';
+  if (s.name !== undefined) out.name = s.name;
   return out;
 }
 
@@ -873,7 +1093,13 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
     },
     stop: async () => recStateOf(await call('recording_stop', {})),
     state: async () => recStateOf(await call('recording_state', {})),
-    list: async () => (await call('recording_list', { profile: await home() })).map(summaryOf),
+    list: async (reconcile) =>
+      (
+        await call(
+          'recording_list',
+          reconcile ? { profile: await home(), reconcile: true } : { profile: await home() },
+        )
+      ).map(summaryOf),
     detail: async (id) => {
       const d = await call('recording_detail', { profile: await home(), id });
       const r: RecDetail = {

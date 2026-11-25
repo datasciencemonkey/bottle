@@ -326,11 +326,17 @@ struct FakeHost {
     builds: Arc<AtomicUsize>,
     live: Arc<AtomicUsize>,
     hang: Option<Duration>,
+    /// The stream's own `Drop` sleeps this long (simulates a real `AudioDeviceStop` on a tap
+    /// whose IO proc never ran: review of the owner's 2026-11-25 report).
+    drop_hang: Option<Duration>,
 }
 
-struct FakeStream(Arc<AtomicUsize>);
+struct FakeStream(Arc<AtomicUsize>, Option<Duration>);
 impl Drop for FakeStream {
     fn drop(&mut self) {
+        if let Some(d) = self.1 {
+            std::thread::sleep(d);
+        }
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -348,7 +354,7 @@ impl MicHost for FakeHost {
         *self.data.lock().unwrap() = Some(on_data);
         *self.fault.lock().unwrap() = Some(on_fault);
         self.live.fetch_add(1, Ordering::SeqCst);
-        Ok(FakeStream(Arc::clone(&self.live)))
+        Ok(FakeStream(Arc::clone(&self.live), self.drop_hang))
     }
     fn play(&mut self, _stream: &FakeStream) -> Result<(), DeviceError> {
         Ok(())
@@ -452,6 +458,252 @@ fn adr_0103_a_slow_system_audio_open_times_out_and_cleans_up() {
     }
     std::thread::sleep(Duration::from_millis(450));
     assert_eq!(host.live.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
+    // The build (and so the whole open) takes longer than the open timeout, like the review's
+    // ~8.6 s `AudioDeviceStart` outliving an 8 s timeout. It still succeeds, so the worker
+    // adopts it instead of leaving a live stream that `status` does not know about.
+    let host = FakeHost {
+        hang: Some(Duration::from_millis(150)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_millis(30),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-cap10c");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    let info = session.start(opts("cap-10c", 60)).unwrap();
+    // The open already answered `Unavailable` (mic-only, for now); the late build+play has not
+    // resolved yet.
+    assert_eq!(info.system_audio, SystemAudioState::Unavailable);
+    for _ in 0..100 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the late build was adopted"
+    );
+    // CAP-10c: `system_state` has no latch, so the session follows the device's own late
+    // adoption on the very next tick (the host's ticker calls this every 250 ms); it must not
+    // stay stuck at `unavailable` (the owner's exact symptom). No sound was ever fed to the
+    // tap and the sim clock never advanced, so once live this reads `ok`, not
+    // `silent_or_denied`.
+    for _ in 0..100 {
+        session.tick();
+        if matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ),
+        "a late-adopted tap must leave `unavailable` once it is really live: got {:?}",
+        session.snapshot()
+    );
+    let done = session.stop(StopCause::User).unwrap();
+    assert_eq!(
+        done.system_audio,
+        SystemAudioState::Ok,
+        "`FinishedRecording.system_audio` must reflect the late adoption too, not stay stuck"
+    );
+    assert!(
+        done.system_open_timed_out,
+        "the resolution took longer than its timeout"
+    );
+    assert!(
+        done.system_open_ms >= 150,
+        "system_open_ms should cover the real build time, got {}",
+        done.system_open_ms
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn rec_a_late_adopted_system_open_gets_a_fresh_silence_grace_not_instant_silence() {
+    // Like the test above, but the sim clock moves past the 5 s CAP-10a window while the open
+    // is still pending (the owner's review: an 8.6 s build well past both the open timeout and
+    // the silence window). Without a reset, the first tick after adoption would compute
+    // `quiet` against the stale arm-time stamp and read `silent_or_denied` at once.
+    let host = FakeHost {
+        hang: Some(Duration::from_millis(150)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_millis(30),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-cap10c-silence");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    session.start(opts("cap-10c-silence", 60)).unwrap();
+    // The 5 s CAP-10a window elapses (on the sim clock) while the real open is still pending
+    // (on the real, wall-clock `hang`).
+    clock.advance(Duration::from_millis(6_000));
+    for _ in 0..200 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the late build was adopted"
+    );
+    for _ in 0..100 {
+        session.tick();
+        if matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio != SystemAudioState::Unavailable
+        ) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        matches!(
+            session.snapshot(),
+            Snapshot::Recording(ref i) if i.system_audio == SystemAudioState::Ok
+        ),
+        "a late adoption must get a fresh silence grace, not an instant `silent_or_denied`: got {:?}",
+        session.snapshot()
+    );
+    let _ = session.stop(StopCause::User);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Regression (owner review, 2026-11-25, "C"): a real Core Audio `AudioDeviceStop` on a tap
+/// whose IO proc never ran can take far longer than `SystemAudioDevice`'s own `close_wait`
+/// (the real stream's `Drop`, not the message round trip `close` bounds). `stop` must not then
+/// wait for that slow teardown either, through `tap.disarm` or the writer join: the user's
+/// Stop must resolve close to `close_wait`, not to the stream's real drop time.
+#[test]
+fn rec_stop_does_not_wait_for_a_slow_system_audio_teardown() {
+    let host = FakeHost {
+        drop_hang: Some(Duration::from_millis(600)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn_with_close_wait(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_secs(5),
+        Duration::from_millis(50),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-stop-slow-close");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    session.start(opts("stop-slow-close", 60)).unwrap();
+    for _ in 0..200 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the fake tap must open"
+    );
+    let t0 = std::time::Instant::now();
+    session.stop(StopCause::User).unwrap();
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "stop must not wait for the stream's own slow teardown (close_wait is 50 ms, the \
+         real drop takes 600 ms): took {elapsed:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -813,6 +1065,50 @@ fn cap_10a_five_seconds_of_zero_system_audio_is_silent_or_denied() {
     };
     assert_eq!(info.system_audio, SystemAudioState::Ok);
     r.session.stop(StopCause::User).unwrap();
+}
+
+#[test]
+fn cap_10a_denied_system_audio_still_records_the_mic_and_never_stops_the_call() {
+    // System Audio Recording not allowed: the tap gives zeros. The notice state is set, but the
+    // recording runs on and its part holds the whole mic track.
+    let r = rig();
+    r.session.start(opts("n", 60)).unwrap();
+    play(&r, 8_000, 0.2, 0.0);
+    r.session.tick();
+    let Snapshot::Recording(info) = r.session.snapshot() else {
+        panic!("still recording")
+    };
+    assert_eq!(info.system_audio, SystemAudioState::SilentOrDenied);
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.cause, StopCause::User);
+    assert_eq!(done.parts.len(), 1);
+    let (_, _, _, s) = decode(&done.parts[0].path);
+    assert!(s.len() >= 8 * 16_000 - 1_600, "{} samples", s.len());
+    assert!(
+        (s[64_000] - (0.2 * 32_767.0) as i32).abs() < 50,
+        "the mic is in it"
+    );
+}
+
+#[test]
+fn rec_capture_counts_say_whether_mic_frames_reached_the_writer() {
+    // A stop with no mic frame at all: no part, and the counts show it (no samples kept).
+    let r = rig();
+    r.session.start(opts("n", 60)).unwrap();
+    let none = r.session.stop(StopCause::User).unwrap();
+    assert!(none.parts.is_empty());
+    assert_eq!(none.capture.mic_blocks, 0);
+    assert_eq!(none.capture.first_mic_ms, None);
+    // A normal call: every block counts, from the arm on.
+    r.session.start(opts("m", 60)).unwrap();
+    r.clock.advance(Duration::from_millis(30));
+    play(&r, 500, 0.1, 0.1);
+    let done = r.session.stop(StopCause::User).unwrap();
+    assert_eq!(done.capture.mic_blocks, 50);
+    assert_eq!(done.capture.gated_mic_blocks, 0);
+    assert!(done.capture.system_blocks > 0);
+    assert_eq!(done.capture.dropped, 0);
+    assert_eq!(done.capture.first_mic_ms, Some(30));
 }
 
 #[test]

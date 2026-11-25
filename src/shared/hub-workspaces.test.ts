@@ -13,9 +13,8 @@ const list = {
   rows: [row],
   home: 'sales',
   agent: {
-    crossWorkspaceData: false,
-    crossWorkspaceLocked: false,
     genieCallBudget: 10,
+    copyGenieAnswer: true,
   },
 };
 
@@ -50,9 +49,16 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
       name: 'Fin',
     });
     expect(asWorkspaceAction({ action: 'workspace.budget', genieCallBudget: 20 })).toBeDefined();
+    expect(asWorkspaceAction({ action: 'workspace.copy_genie_answer', on: false })).toEqual({
+      action: 'workspace.copy_genie_answer',
+      on: false,
+    });
+  });
+
+  it('refuses the removed D1 action (ADR 0122 amendment, owner decision 2026-11-24)', () => {
     expect(
       asWorkspaceAction({ action: 'workspace.cross', crossWorkspaceData: true }),
-    ).toBeDefined();
+    ).toBeUndefined();
   });
 
   it('refuses the removed agent profile action', () => {
@@ -64,6 +70,8 @@ describe('hub-workspaces shape checks (ADR 0117)', () => {
   it('refuses bad shapes', () => {
     expect(asWorkspaceAction({ action: 'workspace.make_home', profile: 'p' })).toBeUndefined();
     expect(asWorkspaceAction({ action: 'workspace.budget', genieCallBudget: 7 })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.copy_genie_answer', on: 'yes' })).toBeUndefined();
+    expect(asWorkspaceAction({ action: 'workspace.copy_genie_answer' })).toBeUndefined();
     expect(
       asWorkspaceAction({ action: 'workspace.set_available', profile: '', available: true }),
     ).toBeUndefined();

@@ -89,7 +89,35 @@ export type RecordingActionTarget = 'settings' | 'system_audio' | 'retry' | 'ope
 export interface RecordingNotice {
   text: string;
   action?: { label: string; target: RecordingActionTarget };
+  /**
+   * `status`: a calm, non-alarming notice (CAP-10a review, #593 follow-up): the view shows it
+   * with `role="status"`, not the red `role="alert"` banner. Missing, or `alert`: the usual
+   * red error banner.
+   */
+  role?: 'alert' | 'status';
 }
+
+/**
+ * CAP-10a, ADR 0103 (#593 follow-up): macOS gives the same digital silence on system audio
+ * whether the permission is denied or nothing is playing yet, so a plain, ongoing silence is
+ * not an error. This is the calm hint `recording-wiring.ts` shows once a recording has stayed
+ * silent for `SYSTEM_AUDIO_HINT_MS`; it clears as soon as sound arrives. The red
+ * `RECORDING_ERRORS.system_audio_denied` notice keeps its own meaning for a real refusal.
+ */
+export const SYSTEM_AUDIO_HINT: RecordingNotice = {
+  text: "No sound from other apps yet. If you're on a call and this stays, check that Bottle can record system audio.",
+  action: { label: 'Open System Settings', target: 'system_audio' },
+  role: 'status',
+};
+
+/**
+ * `recording.system_audio` itself failed (no host handler for this OS, or the OS refused to
+ * open the pane; #593 follow-up). Plain steps, no action: a button that would only run the
+ * same failing call again helps nobody.
+ */
+export const SYSTEM_AUDIO_SETTINGS_OPEN_FAILED: RecordingNotice = {
+  text: 'Open System Settings > Privacy & Security > Screen & System Audio Recording, then allow Bottle.',
+};
 
 /** The error kinds of the core and the job, and their plain words. */
 export const RECORDING_ERRORS = {
@@ -379,6 +407,7 @@ export const ENDPOINT_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
 function isNotice(v: unknown): v is RecordingNotice {
   if (!isObj(v) || !isStr(v['text'])) return false;
+  if (v['role'] !== undefined && v['role'] !== 'alert' && v['role'] !== 'status') return false;
   const act = v['action'];
   return (
     act === undefined ||
@@ -564,12 +593,11 @@ export function rowActionOf(row: {
 }
 
 /**
- * May the row be deleted from this Mac? Only a recording that never reached the volume: on this
- * device only, or failed with no part uploaded. Rust checks again and refuses the rest.
+ * May the row show Remove (owner authorization 2026-11-25)? Every row the user sees, except
+ * one that is recording right now or a worker is uploading right now: Rust refuses those with
+ * `recording_busy`, and the row would just error back at once. A copy already in Databricks is
+ * never touched; Remove only clears this Mac and this list.
  */
-export function rowCanDeleteOf(
-  row: Pick<RecordingRow, 'status' | 'partsUploaded' | 'onDeviceOnly' | 'waitingNetwork'>,
-): boolean {
-  if (row.onDeviceOnly) return true;
-  return row.status === 'failed' && !row.waitingNetwork && (row.partsUploaded ?? 0) === 0;
+export function rowCanDeleteOf(row: Pick<RecordingRow, 'status'>): boolean {
+  return row.status !== 'recording' && row.status !== 'uploading';
 }

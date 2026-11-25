@@ -2,11 +2,14 @@
  * #162: the brain side of "Connect a workspace" (W-07a, W-07b, W-07c, W-07f, W-07g, W-07h,
  * W-07i, W-15). Fake hosts and fake profiles only; no CLI runs and no token exists here.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { CONNECT_EVENT, CONNECT_VIEW_ID, type ConnectModel } from '../shared/connect-view';
 import { BrainBus } from './bus';
 import {
   CONNECT_TEXT,
   CONNECTED_CLOSE_MS,
+  DATABRICKS_DOMAINS,
   proposedProfileName,
   wireConnectWorkspace,
   workspaceHost,
@@ -71,6 +74,34 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
     );
   });
 
+  it('[owner review 2026-11-24] this domain list matches the Rust allowlist exactly', () => {
+    const rs = readFileSync(
+      resolve(import.meta.dirname, '../../crates/mog-core/src/http_transport/host_policy.rs'),
+      'utf8',
+    );
+    const m = /pub const DATABRICKS_DOMAINS: \[&str; \d+\] = \[([^\]]*)\]/.exec(rs);
+    expect(m).not.toBeNull();
+    const rustDomains = [...((m as RegExpExecArray)[1] ?? '').matchAll(/"([^"]+)"/g)].map(
+      (x) => x[1],
+    );
+    expect([...DATABRICKS_DOMAINS]).toEqual(rustDomains);
+  });
+
+  it('[owner review 2026-11-24] a staging, dev, Azure or GCP workspace host is accepted', () => {
+    expect(workspaceHost('https://dogfood.staging.databricks.com')).toBe(
+      'https://dogfood.staging.databricks.com',
+    );
+    expect(workspaceHost('https://fevm-serverless-9cefok.cloud.databricks.com')).toBe(
+      'https://fevm-serverless-9cefok.cloud.databricks.com',
+    );
+    expect(workspaceHost('https://acme.dev.databricks.com/browse')).toBe(
+      'https://acme.dev.databricks.com',
+    );
+    expect(workspaceHost('https://acme.gcp.databricks.com')).toBe(
+      'https://acme.gcp.databricks.com',
+    );
+  });
+
   it('[W-07b] a non-Databricks domain is refused', () => {
     for (const bad of [
       'https://example.com/?o=1',
@@ -80,6 +111,13 @@ describe('Connect a workspace: URL step (W-07a, W-07b, W-07g)', () => {
       'http://acme-prod.cloud.databricks.com',
       'https://u@acme-prod.cloud.databricks.com',
       'https://acme-prod.cloud.databricks.com:8443',
+      // Marketing and bare second-level domains, and tricks with the new staging/dev suffixes.
+      'https://www.databricks.com',
+      'https://databricks.com',
+      'https://staging.databricks.com',
+      'https://dev.databricks.com',
+      'https://acme.staging.databricks.com.evil.example',
+      'https://accounts.staging.databricks.com',
       '',
     ]) {
       expect(workspaceHost(bad), bad).toBeUndefined();

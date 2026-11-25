@@ -45,13 +45,20 @@ pub fn install_with<R: Runtime>(
     let (store, records) =
         prepare_device_records(dir, vault, Arc::clone(&clock), ConsentRetention::default())?;
     let records = Arc::new(records);
+    // The local recording index (migration 0005; owner authorization 2026-11-25): the same
+    // store and key as Conversations (ADR 0105), managed so `recording_cloud_host::install`
+    // can wire it into `CloudAdapter`, and Settings -> Wipe clears it below.
+    let recording_index: Arc<dyn mog_core::recording_index::RecordingIndexStore> = Arc::new(
+        mog_core::recording_index::SqlRecordingIndex::new(Arc::clone(&store)),
+    );
     // Plan A3.7: every Wipe scope first ends the agent session and drops its history.
     // The slot is empty until `agent_session_host::install` binds the orchestrator host.
     let agent_slot = Arc::new(AgentWipeSlot::default());
     let wipe = Arc::new(
         LocalWipeService::new(Arc::clone(&store), clock)
             .with_expiry(Arc::clone(&records) as Arc<dyn SecurityExpiry>)
-            .with_agent_hook(Arc::clone(&agent_slot) as Arc<dyn AgentWipeHook>),
+            .with_agent_hook(Arc::clone(&agent_slot) as Arc<dyn AgentWipeHook>)
+            .with_recording_index(Arc::clone(&recording_index)),
     );
     // 9.2: the content-free expiries run once, right after the first open (ADR 0105). A failure
     // leaves the records for the next run. The hook holds the service weakly: no cycle.
@@ -65,6 +72,7 @@ pub fn install_with<R: Runtime>(
     app.manage(records);
     app.manage(wipe);
     app.manage(agent_slot);
+    app.manage(recording_index);
     Ok(())
 }
 

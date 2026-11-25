@@ -249,8 +249,15 @@ fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
         duration_ms: 0,
         cause: StopCause::User,
         system_audio: mog_core::recording_capture::session::SystemAudioState::Ok,
+        system_open_ms: 0,
+        system_open_timed_out: false,
+        system_sample_rate_hz: 0,
+        system_device_kind: "unknown",
+        system_rebuilds: 0,
+        stop_timings: Default::default(),
         profile: None,
         instructions: None,
+        capture: Default::default(),
     };
     // Not connected: the parts stay in the temp dir for the launch scan ("Upload failed").
     slot.finished(rec.clone());
@@ -262,6 +269,67 @@ fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
     slot.finished(rec);
     assert_eq!(cloud.0.lock().unwrap().len(), 2);
     assert!(slot.pending().is_empty());
+}
+
+/// A hand-off whose own `finished` takes `delay` before it returns (simulating a dispatch
+/// that briefly blocks, for example a slow lock).
+struct SlowHandoff {
+    delay: Duration,
+    seen: Mutex<Vec<FinishedRecording>>,
+}
+impl PartsHandoff for SlowHandoff {
+    fn finished(&self, rec: FinishedRecording) {
+        std::thread::sleep(self.delay);
+        self.seen.lock().unwrap().push(rec);
+    }
+}
+
+/// Owner review 2026-11-26, "7": `stop_timings.handoff_ms` in `last-capture.json` must reflect
+/// how long the hand-off's own dispatch actually took, not stay the placeholder `0` the
+/// session set before this ever ran.
+#[test]
+fn adr_0103_the_handoff_slot_times_its_own_dispatch_for_last_capture_json() {
+    use bottle_lib::recording_host::{HandoffSlot, CAPTURE_CHECK_FILE};
+    let root =
+        std::env::temp_dir().join(format!("bottle-rec-handoff-timing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("rec-a1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let rec = FinishedRecording {
+        id: "a1".into(),
+        name: "n".into(),
+        dir,
+        parts: Vec::new(),
+        started_at_ms: 0,
+        duration_ms: 0,
+        cause: StopCause::User,
+        system_audio: mog_core::recording_capture::session::SystemAudioState::Ok,
+        system_open_ms: 0,
+        system_open_timed_out: false,
+        system_sample_rate_hz: 0,
+        system_device_kind: "unknown",
+        system_rebuilds: 0,
+        stop_timings: Default::default(),
+        profile: None,
+        instructions: None,
+        capture: Default::default(),
+    };
+    let slot = HandoffSlot::default();
+    let slow = Arc::new(SlowHandoff {
+        delay: Duration::from_millis(60),
+        seen: Mutex::new(Vec::new()),
+    });
+    slot.connect(slow.clone());
+    slot.finished(rec);
+    assert_eq!(slow.seen.lock().unwrap().len(), 1);
+    let text = std::fs::read_to_string(root.join(CAPTURE_CHECK_FILE)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let handoff_ms = v["stopTimings"]["handoffMs"].as_u64().unwrap();
+    assert!(
+        handoff_ms >= 50,
+        "handoffMs must cover the real dispatch time, got {handoff_ms}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 fn code(r: mog_core::error::CoreResult<Value>) -> &'static str {

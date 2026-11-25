@@ -47,6 +47,16 @@ describe('hub-agent shape checks (slice 2a)', () => {
       action: 'agent.remove_queued',
       turnId: T1,
     });
+    // [ADR 0124 amendment] the "Copy Markdown" button.
+    expect(asAgentAction({ action: 'agent.copy_markdown', turnId: T1, z: 3 })).toEqual({
+      action: 'agent.copy_markdown',
+      turnId: T1,
+    });
+    // [ADR 0124 amendment] the "Copy" button.
+    expect(asAgentAction({ action: 'agent.copy', turnId: T1, z: 3 })).toEqual({
+      action: 'agent.copy',
+      turnId: T1,
+    });
   });
 
   it('refuses bad actions', () => {
@@ -55,6 +65,10 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(
       asAgentAction({ action: 'agent.remove_queued', turnId: T1.toUpperCase() }),
     ).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy_markdown' })).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy_markdown', turnId: 'nope' })).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy' })).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy', turnId: 'nope' })).toBeUndefined();
     expect(asAgentAction({ action: 'workspace.cross' })).toBeUndefined();
     expect(asAgentAction(null)).toBeUndefined();
   });
@@ -78,6 +92,13 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(t?.state).toBe('needs_you');
     expect(t?.seenAt).toBe(99);
     expect(t).not.toHaveProperty('extra');
+  });
+
+  it('keeps a valid copyNote on a turn, so the card and Conversations show "Copied"', () => {
+    expect(asAgentTurnView({ ...turn, copyNote: 'copied' })?.copyNote).toBe('copied');
+    expect(asAgentTurnView({ ...turn, copyNote: 'failed' })?.copyNote).toBe('failed');
+    expect(asAgentTurnView({ ...turn, copyNote: 'other' })).not.toHaveProperty('copyNote');
+    expect(asAgentTurnView(turn)).not.toHaveProperty('copyNote');
   });
 
   it('drops unknown fields at every level', () => {

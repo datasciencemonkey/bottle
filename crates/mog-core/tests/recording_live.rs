@@ -62,6 +62,8 @@ struct FakeVolume {
     offline: AtomicBool,
     deny: AtomicBool,
     fail_job_writes: AtomicUsize,
+    /// The notes call answers 500 once, and the job.json write right after it fails.
+    notes_fail_and_lose_write: AtomicBool,
 }
 
 fn ok(status: u16) -> CoreResult<Reply> {
@@ -179,6 +181,9 @@ impl RecordingHttp for FakeVolume {
                         json!({"choices":[{"message":{"role":"assistant","content":
                             "[00:00] Speaker 1: Hello.\n[01:00] Speaker 2: Hi."}}]}),
                     )
+                } else if self.notes_fail_and_lose_write.swap(false, Ordering::SeqCst) {
+                    self.fail_job_writes.store(1, Ordering::SeqCst);
+                    json_reply(500, json!({"error_code":"INTERNAL_ERROR"}))
                 } else {
                     json_reply(
                         200,
@@ -867,4 +872,151 @@ fn rec_parts_retry_of_a_device_only_recording_uploads_it() {
         .filter(|c| c["model"].as_str().unwrap().contains("gemini"))
         .count();
     assert_eq!(transcribe, 1, "one transcription over both parts");
+}
+
+#[test]
+fn rec_parts_a_stop_with_no_audio_ends_failed_and_the_row_stays_in_the_list() {
+    // The call stopped before any audio reached a part: the worker still ends the job, so the
+    // row never vanishes (before, the job.json stayed at `recording` and the list hid it).
+    let r = rig("noaudio", 0, vec![]);
+    let out = run(&r, &r.ctx(true), |i, _| match i {
+        0 => Recv::Msg(LiveMsg::Finished(Vec::new())),
+        _ => panic!("no wait: nothing to send"),
+    })
+    .expect("a result");
+    assert_eq!(out.status, RecordingStatus::Failed, "{out:?}");
+    assert_eq!(out.error_kind, Some(RecordingErrorKind::AudioUnreadable));
+    assert_eq!(r.job_json().status, Status::Failed);
+    assert!(
+        r.vol.vol.lock().unwrap().model_calls.is_empty(),
+        "no model call"
+    );
+    let log = r.vol.vol.lock().unwrap().log.clone();
+    assert_eq!(
+        log,
+        vec!["job:Recording:0".to_owned(), "job:Failed:0".to_owned()],
+        "no uploading or transcribing step"
+    );
+    let rows = r
+        .adapter
+        .list(&ProfileName::try_from(P.to_owned()).unwrap(), &storage())
+        .unwrap();
+    let row = rows.iter().find(|x| x.name == NAME).expect("the row stays");
+    assert_eq!(row.status, RecordingStatus::Failed);
+    assert_eq!(row.error_kind, Some(RecordingErrorKind::AudioUnreadable));
+    let last = r.summaries.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        last.status,
+        RecordingStatus::Failed,
+        "the hub hears the end"
+    );
+}
+
+#[test]
+fn rec_parts_a_notes_failure_whose_job_write_is_lost_reads_failed_and_retry_finishes() {
+    // The notes call fails and the job.json write of that failure does not land: the volume
+    // still says `writing_notes`. The list must not show "Writing notes" for a run that has
+    // ended, and Retry must run the notes step again.
+    let r = rig("notesfail", 1, vec![]);
+    let p1 = r.write_part(0);
+    r.vol
+        .notes_fail_and_lose_write
+        .store(true, Ordering::SeqCst);
+    let out = run(&r, &r.ctx(true), |i, _| match i {
+        0 => Recv::Msg(LiveMsg::Finished(vec![p1.clone()])),
+        _ => panic!("no wait"),
+    })
+    .unwrap();
+    assert_eq!(out.status, RecordingStatus::Failed, "{out:?}");
+    assert_eq!(out.error_stage, Some(RecordingStatus::WritingNotes));
+    assert_eq!(
+        r.job_json().status,
+        Status::WritingNotes,
+        "the failure write was lost"
+    );
+    let profile = ProfileName::try_from(P.to_owned()).unwrap();
+    let rows = r.adapter.list(&profile, &storage()).unwrap();
+    let row = rows.iter().find(|x| x.name == NAME).unwrap();
+    assert_eq!(row.status, RecordingStatus::Failed, "{row:?}");
+    assert_eq!(row.error_stage, Some(RecordingStatus::WritingNotes));
+    let id = mog_core::types::RecordingId::try_from(NAME.to_owned()).unwrap();
+    assert_eq!(
+        r.adapter
+            .detail(&profile, &storage(), &id)
+            .unwrap()
+            .summary
+            .status,
+        RecordingStatus::Failed
+    );
+    // Retry: only the notes step runs again (no second transcription), and the job is done.
+    let again = r.adapter.retry(&profile, &storage(), &id).unwrap();
+    assert_eq!(again.status, RecordingStatus::Done, "{again:?}");
+    assert_eq!(r.job_json().status, Status::Done);
+    let v = r.vol.vol.lock().unwrap();
+    let gemini = v
+        .model_calls
+        .iter()
+        .filter(|c| c["model"].as_str().unwrap().contains("gemini"))
+        .count();
+    assert_eq!(gemini, 1);
+    assert!(v.files.contains_key(&format!("{FOLDER}/{NAME}.notes.md")));
+}
+
+#[test]
+fn rec_parts_a_stop_with_no_audio_while_offline_ends_at_once_and_still_lists_the_row() {
+    // Offline for the whole call, and no audio: no wait for the network, no volume folder, and
+    // the failed row still shows (from this run's end) once the list can be read.
+    let r = rig("noaudio-off", 0, vec![]);
+    r.vol.offline.store(true, Ordering::SeqCst);
+    let out = run(&r, &r.ctx(true), |i, _| match i {
+        0 => Recv::Msg(LiveMsg::Finished(Vec::new())),
+        _ => panic!("no network wait for a call with no audio"),
+    })
+    .expect("a result");
+    assert_eq!(out.status, RecordingStatus::Failed);
+    assert_eq!(out.error_kind, Some(RecordingErrorKind::AudioUnreadable));
+    r.vol.offline.store(false, Ordering::SeqCst);
+    assert!(
+        r.vol.vol.lock().unwrap().files.is_empty(),
+        "nothing in the volume"
+    );
+    let rows = r
+        .adapter
+        .list(&ProfileName::try_from(P.to_owned()).unwrap(), &storage())
+        .unwrap();
+    let row = rows.iter().find(|x| x.name == NAME).expect("the row stays");
+    assert_eq!(row.status, RecordingStatus::Failed);
+    assert_eq!(row.error_kind, Some(RecordingErrorKind::AudioUnreadable));
+}
+
+#[test]
+fn rec_parts_the_upload_writes_audio_and_job_json_under_the_volume_folder() {
+    // Where the files land: `<root>/Bottle/Recordings/<name>/`, the audio, the instructions,
+    // the job.json and the three result files. The local part goes after its upload.
+    let r = rig("layout", 1, vec![]);
+    let p1 = r.write_part(0);
+    let out = run(&r, &r.ctx(true), |i, _| match i {
+        0 => Recv::Msg(LiveMsg::Finished(vec![p1.clone()])),
+        _ => panic!("no wait"),
+    })
+    .unwrap();
+    assert_eq!(out.status, RecordingStatus::Done, "{out:?}");
+    let v = r.vol.vol.lock().unwrap();
+    for f in [
+        "part01.opus",
+        "instructions.md",
+        "job.json",
+        "transcript.json",
+        "transcript.md",
+        "notes.md",
+    ] {
+        let path = format!("{FOLDER}/{NAME}.{f}");
+        assert!(v.files.contains_key(&path), "missing {path}");
+    }
+    assert!(
+        v.files.keys().all(|k| k.starts_with(FOLDER)),
+        "{:?}",
+        v.files.keys()
+    );
+    assert!(!p1.path.exists(), "the local part goes after the upload");
 }

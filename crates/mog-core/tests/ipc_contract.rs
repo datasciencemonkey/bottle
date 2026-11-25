@@ -29,6 +29,8 @@ const SPEC_COMMANDS: &[(&str, &[WindowClass])] = {
         ("consent_records_list", &[B]),
         ("stt_transcribe", &[B]),
         ("insert_text", &[B]),
+        // The owner's "attach Genie's answer to the clipboard" request: brain only.
+        ("clipboard_write_text", &[B]),
         ("agent_start", &[B]),
         ("agent_stop", &[B]),
         ("agent_send", &[B]),
@@ -1213,4 +1215,57 @@ fn recording_open_takes_only_the_three_known_targets() {
         let err = ipc::handle("hub", "recording_open", args).unwrap_err();
         assert!(matches!(err, IpcError::InvalidArgs { .. }), "{target}");
     }
+}
+
+// ---------- `clipboard_write_text`: the owner's "attach Genie's answer to the clipboard" ----------
+
+#[test]
+fn clipboard_write_text_is_brain_only_and_takes_text_with_optional_html() {
+    let row = ipc::command("clipboard_write_text").expect("a clipboard_write_text row");
+    assert_eq!(row.windows, [WindowClass::Brain]);
+    assert_eq!(row.phase, Phase::MvpD);
+    let good = json!({"text": "the answer"});
+    for label in ["hub", "mog-a1", "card-a1"] {
+        assert!(
+            matches!(
+                ipc::handle(label, "clipboard_write_text", good.clone()).unwrap_err(),
+                IpcError::WindowNotAllowed { .. }
+            ),
+            "{label}"
+        );
+    }
+    for bad in [
+        json!({}),
+        json!({"text": 1}),
+        json!({"text": "ok", "mogId": "a1"}),
+        json!({"text": "ok", "html": 1}),
+    ] {
+        assert!(
+            matches!(
+                ipc::handle("brain", "clipboard_write_text", bad.clone()).unwrap_err(),
+                IpcError::InvalidArgs { .. }
+            ),
+            "{bad}"
+        );
+    }
+    // The gateway checks pass; the host routes the write to the component.
+    assert!(matches!(
+        ipc::handle("brain", "clipboard_write_text", good).unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    // ADR 0124 amendment: `html` is accepted alongside `text`, still gateway-valid, still only
+    // reaching `NotImplemented` (no component wired in this test harness).
+    assert!(matches!(
+        ipc::handle(
+            "brain",
+            "clipboard_write_text",
+            json!({"text": "the answer", "html": "<p>the answer</p>"}),
+        )
+        .unwrap_err(),
+        IpcError::NotImplemented { .. }
+    ));
+    let schema = &ipc::schemas()["clipboard_write_text"];
+    assert_eq!(schema["required"], json!(["text"]));
+    assert!(schema["properties"]["html"].is_object(), "{schema}");
+    assert_eq!(schema["additionalProperties"], json!(false));
 }

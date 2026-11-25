@@ -532,12 +532,9 @@ export function WorkspaceSettings({
   list,
   homeDomains = [],
   onChoose,
-  agentBusy = false,
   orchestrator,
 }: {
   list: HubWorkspaceList | undefined;
-  /** A turn of the agent runs, so a change of the combine switch applies after it. */
-  agentBusy?: boolean;
   /** ADR 0122: the orchestrator model controls. Undefined until the brain sends them. */
   orchestrator?: HubOrchestratorView | undefined;
   /** MOG states that carry the home domain picker (PG-18, PG-20). */
@@ -666,7 +663,7 @@ export function WorkspaceSettings({
       </p>
       {/* ADR 0122: the orchestrator model, dictation cleanup, and how many Genie calls one
           question may make. */}
-      <AgentSettings list={list} orchestrator={orchestrator} busy={agentBusy} />
+      <AgentSettings list={list} orchestrator={orchestrator} />
     </section>
   );
 }

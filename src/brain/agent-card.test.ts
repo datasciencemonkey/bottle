@@ -10,6 +10,7 @@ import {
   cardChips,
   createAgentCard,
   fallbackNotice,
+  openTurnInConversations,
   parseAgentChip,
   partOf,
   whyOfOutcome,
@@ -70,9 +71,9 @@ describe('partOf', () => {
     ]);
   });
 
-  it('marks a part from an earlier turn, and a part the agent did not see', () => {
-    const p = partOf(answeredCall('x'), { chip, fromEarlier: true, notShownToAgent: true });
-    expect(p).toMatchObject({ fromEarlier: true, notShownToAgent: true });
+  it('marks a part from an earlier turn', () => {
+    const p = partOf(answeredCall('x'), { chip, fromEarlier: true });
+    expect(p).toMatchObject({ fromEarlier: true });
   });
 
   it('shows a fixed text for a withheld answer, never the withheld text', () => {
@@ -342,9 +343,15 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
     const b = 'b'.repeat(32);
     r.card.show(MOG, view({ turnId: a, state: 'running' }));
     r.card.show(MOG, view({ turnId: b, state: 'queued' }));
+    expect(r.card.isDismissed(a)).toBe(false);
+    expect(r.card.isDismissed(b)).toBe(false);
     r.card.close(MOG);
     r.card.show(MOG, view({ turnId: b, state: 'planning' }));
     expect(r.card.shown(MOG)).toBeUndefined();
+    // [owner request] a turn still open when the card closes is dismissed: its eventual answer
+    // must never be copied to the clipboard.
+    expect(r.card.isDismissed(a)).toBe(true);
+    expect(r.card.isDismissed(b)).toBe(true);
   });
 
   it('a dropped turn leaves the card', () => {
@@ -381,6 +388,41 @@ describe('the card controller and the arrival gate (UX slice 1)', () => {
   });
 });
 
+describe('Open in Conversations', () => {
+  const THREAD = '51111111-2222-4333-8444-00000000000a';
+
+  it('shows the hub first, then opens Conversations on the thread of the turn', async () => {
+    const log: string[] = [];
+    let shown!: () => void;
+    const showing = new Promise<void>((res) => (shown = res));
+    const done = openTurnInConversations(T1, {
+      showHub: async () => {
+        log.push('show');
+        await showing;
+      },
+      threadOf: (t) => (t === T1 ? THREAD : undefined),
+      openThread: async (id) => void log.push(`open:${id}`),
+    });
+    await Promise.resolve();
+    // The open waits for the hub.
+    expect(log).toEqual(['show']);
+    shown();
+    await done;
+    expect(log).toEqual(['show', `open:${THREAD}`]);
+  });
+
+  it('opens the thread even when the hub could not be shown, and nothing for no thread', async () => {
+    const opened: string[] = [];
+    const deps = {
+      showHub: () => Promise.reject(new Error('no hub')),
+      openThread: async (id: string) => void opened.push(id),
+    };
+    await openTurnInConversations(T1, { ...deps, threadOf: () => THREAD });
+    await openTurnInConversations(T1, { ...deps, threadOf: () => undefined });
+    expect(opened).toEqual([THREAD]);
+  });
+});
+
 describe('chip clicks from the card', () => {
   function chipRig() {
     const bus = new BrainBus();
@@ -390,6 +432,7 @@ describe('chip clicks from the card', () => {
       openAgent: (id) => void log.push(`open:${id}`),
       openSettings: () => void log.push('settings'),
       cardDone: (m) => void log.push(`done:${m === MOG ? 'mog' : m}`),
+      copy: (id) => void log.push(`copy:${id}`),
     };
     wireAgentChips(bus, deps);
     const input = (from: string, kind: string, payload: unknown, actionTicket?: string) =>
@@ -429,6 +472,15 @@ describe('chip clicks from the card', () => {
     r.input(`card-${MOG}`, 'chip_click', { chipId: 5 });
     r.input(`card-${MOG}`, 'chip_click', { chipId: 'agent-stop:' });
     expect(r.log).toEqual(['done:mog']);
+  });
+
+  it('[ADR 0124 amendment] a card Copy click names the turn, only from the card', () => {
+    const r = chipRig();
+    r.input(`card-${MOG}`, 'click', { action: 'agent.copy', turnId: T1 });
+    r.input('hub', 'click', { action: 'agent.copy', turnId: T1 });
+    r.input(`mog-${MOG}`, 'click', { action: 'agent.copy', turnId: T1 });
+    r.input(`card-${MOG}`, 'click', { action: 'agent.copy' });
+    expect(r.log).toEqual([`copy:${T1}`]);
   });
 });
 

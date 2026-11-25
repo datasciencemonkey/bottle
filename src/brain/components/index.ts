@@ -55,7 +55,8 @@ import {
   type ThreadStatus,
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
-import { createAgentCard, wireAgentChips } from '../agent-card';
+import { createAgentCard, openTurnInConversations, wireAgentChips } from '../agent-card';
+import { createAnswerClipboard } from './answer-clipboard';
 import {
   asTurnEvent,
   createAgentClient,
@@ -73,6 +74,7 @@ import {
 } from '../hub-agent-wiring';
 import { MOG_PALETTE } from '../../shared/mog-palette';
 import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
+import { formatAnswerForClipboard } from '../../shared/answer-clipboard-format';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { wireHubMemory } from '../hub-memory-wiring';
@@ -250,6 +252,19 @@ export function startBrain(): Brain {
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
       hubPresent: () => hubExists(),
+      // The owner's "little button on the Conversations copy" request: the direct answer's
+      // Markdown only, no html, independent of the "Copy Genie answers" toggle.
+      copyMarkdown: (text) => call('clipboard_write_text', { text }),
+      // The owner's "Copy" button request (ADR 0124 amendment): formatted (html plus text),
+      // next to "Copy Markdown". No note round-trip here either (the view's own optimistic
+      // check-mark state, same as "Copy Markdown").
+      copyFormatted: (md, host) => {
+        const { text, html } = formatAnswerForClipboard(md, {
+          profileHost: host,
+          allowedAppUrls: [],
+        });
+        void call('clipboard_write_text', { text, html });
+      },
     });
     // The hub asks for its list with `conversations.ready`, and that request is lost while this
     // brain has no Channel yet (the core refuses `view_emit`) or while the store is locked. So
@@ -421,6 +436,10 @@ export function startBrain(): Brain {
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
+    /** The owner's "Copy" button request (ADR 0124 amendment): the direct answer's own
+     * markdown and workspace host, for an explicit click on the card after the auto-copy (if
+     * any) already ran. Keyed by MOG; a stale `requestId` from an older answer is ignored. */
+    const lastDirectAnswer = new Map<MogId, { opId: string; md: string; host?: string }>();
     const stackFor = (mogId: MogId): CardStack => {
       let s = stacks.get(mogId);
       if (!s)
@@ -462,6 +481,14 @@ export function startBrain(): Brain {
         void workspaces.showSettings();
       },
       hostOf: async (profile) => (await ipcListProfiles()).find((p) => p.name === profile)?.host,
+      // The owner's "attach Genie's answer to the clipboard" request (H2): the direct path is
+      // the default for most users (the router's direct route, the zero-call fallback and the
+      // refused-submit fallback all share this one `send`), so it gets its own copy hook, not
+      // just the orchestrator turn's.
+      onAnswered: (mogId, opId, md, host) => {
+        lastDirectAnswer.set(mogId, { opId, md, ...(host !== undefined ? { host } : {}) });
+        answerClipboard.onDirectAnswered(mogId, opId, md, host);
+      },
     });
     // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
     // events into the card of the turn and the history rows; the follow-up window is R-13.
@@ -472,6 +499,31 @@ export function startBrain(): Brain {
       showCard: (mogId) => call('window_card_show', { mogId }),
       arrivals: arrivalGate,
       onCardOpen: (open) => followUp.card(open),
+      onFault: () => void agentLog.event('card.render', { ok: 0 }),
+    });
+    // The owner's "attach Genie's answer to the clipboard" request: one `clipboard_write_text`
+    // write for the one answer a finished orchestrator turn or a direct Genie send shows.
+    // `agentClient` (below) is declared after this, but `noteTurn` only reaches it once a write
+    // resolves, well after `agentClient` exists: an ordinary forward reference in a closure.
+    const answerClipboard = createAnswerClipboard({
+      enabled: () => workspaces.last()?.agent.copyGenieAnswer ?? true,
+      // ADR 0124 amendment: `html` is the Docs/email/Excel form; the manual "Copy Markdown"
+      // button sends no `html`, so `clipboard_write_text` gets `text` only then too.
+      write: async (text, html) =>
+        (await call('clipboard_write_text', { text, ...(html !== undefined ? { html } : {}) }))
+          .result,
+      whenClear: (fn) => arrivalGate.whenClear(fn),
+      // The turn's own record takes the note (not a direct `agentCard.show`): the view then
+      // comes from `agent-run.ts`'s current state, not a stale snapshot, and `update()` there
+      // also reaches Conversations (`onChange`), not just the card.
+      noteTurn: (turnId, outcome) => agentClient.markCopied(turnId, outcome),
+      // The direct path has no `AgentTurnView`: the card stack's own `copyNote` field (not a
+      // blurb — a blurb takes a card slot, can evict the answer, and flips `CardView`'s `genie`
+      // check false, breaking the Genie card's layout). `GenieCard` renders it with the same
+      // `CopyAnswerNote` the turn-based card uses.
+      noteDirect: (mogId, _opId, outcome) => stackFor(mogId).setCopyNote(outcome),
+      // No new telemetry span (ADR 0079's closed set is shared with the Rust gate): a failed
+      // clipboard write is a card-render-adjacent fault, the same bucket `agentCard` uses above.
       onFault: () => void agentLog.event('card.render', { ok: 0 }),
     });
     const routeNames = () => {
@@ -518,6 +570,16 @@ export function startBrain(): Brain {
         });
       },
       showTurn: (mogId, view) => agentCard.show(mogId, view),
+      // H1: `showTurn` can fire mid-settle (before the late pulls, `summarise` and `syncParts`
+      // finish); `finished` is the one point the view is final, and only for an answered turn.
+      // Owner decision: a turn the user already dismissed (closed its card, or the whole agent
+      // card while this turn was still open) is never copied either — the same rule as the
+      // direct path's dismissed ready pill, so a silent clipboard overwrite never surprises
+      // someone who already closed the answer.
+      finished: (mogId, view) => {
+        if (agentCard.isDismissed(view.turnId)) return;
+        answerClipboard.onTurnFinished(mogId, view);
+      },
       dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),
@@ -564,6 +626,7 @@ export function startBrain(): Brain {
     agentClear.fn = () => {
       agentClient.clear();
       void hubRef.current?.push();
+      lastDirectAnswer.clear();
     };
     agentClear.fence = () => agentClient.fence();
     bus.on(EVENTS['agent.turn'].name, (p) => {
@@ -593,6 +656,12 @@ export function startBrain(): Brain {
       }),
     );
     // The agent turns in memory (live, waiting, earlier) go to hub Conversations (ADR 0121).
+    // The owner's "Copy" button request (ADR 0124 amendment): an explicit, formatted (html
+    // plus text) copy of a finished turn, from the card or from hub Conversations alike.
+    const copyAgentTurn = (turnId: string) => {
+      const turn = agentClient.turn(turnId);
+      if (turn) answerClipboard.copyNow(turnId, turn);
+    };
     hubRef.current = wireHubAgent(bus, {
       client: agentClient,
       send: sendHubAgent,
@@ -600,21 +669,30 @@ export function startBrain(): Brain {
         void showHub();
         void workspaces.showSettings();
       },
+      // The owner's "little button on the Conversations copy" request: an explicit, repeatable
+      // Markdown-only copy, independent of the "Copy Genie answers" toggle.
+      copyMarkdown: (turnId) => {
+        const turn = agentClient.turn(turnId);
+        if (turn) answerClipboard.copyMarkdownNow(turnId, turn);
+      },
+      copy: copyAgentTurn,
     });
     // The agent chips of the card: Stop, Open in Conversations, Open Settings.
     wireAgentChips(bus, {
       stop: (turnId) => void agentClient.stop(turnId),
       // ADR 0121: the thread of the turn opens in hub Conversations, also before it is stored.
-      openAgent: (turnId) => {
-        void showHub();
-        const threadId = agentClient.threadOf(turnId);
-        if (threadId !== undefined) void conversations.openThread(threadId);
-      },
+      openAgent: (turnId) =>
+        void openTurnInConversations(turnId, {
+          showHub: () => showHub(),
+          threadOf: (id) => agentClient.threadOf(id),
+          openThread: (id) => conversations.openThread(id),
+        }).catch(() => undefined),
       openSettings: () => {
         void showHub();
         void workspaces.showSettings();
       },
       cardDone: (mogId) => agentCard.close(mogId),
+      copy: copyAgentTurn,
     });
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
     // Nothing goes to Genie without ⌥G or a chip press.
@@ -777,6 +855,16 @@ export function startBrain(): Brain {
       changeHome: () => {
         void showHub();
         void workspaces.showSettings();
+      },
+      // The owner's "Copy" button request (ADR 0124 amendment): the direct answer's own,
+      // explicit, formatted copy. `requestId` (when the view sends one) must match the
+      // newest direct answer this MOG's card knows: a stale click on an answer that already
+      // scrolled off copies nothing, rather than silently copying a newer one.
+      copyAnswer: (mogId, requestId) => {
+        const last = lastDirectAnswer.get(mogId);
+        if (last && (requestId === undefined || last.opId === requestId)) {
+          answerClipboard.copyDirectNow(mogId, last.opId, last.md, last.host);
+        }
       },
     });
     // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG

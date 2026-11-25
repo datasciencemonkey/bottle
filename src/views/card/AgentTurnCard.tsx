@@ -16,11 +16,14 @@
  *   it; a part withheld from the agent stays in view with "Not shown to the agent".
  *   A part of an earlier turn says so.
  * - A queued turn shows the pill "Queued" and "Sends when the answer above lands".
+ * - A finished turn shows a quiet "Copied" / "Couldn't copy" note (`copy-answer-note.tsx`) once
+ *   the brain's `clipboard_write_text` call resolves (the owner's "attach Genie's answer to the
+ *   clipboard" request).
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { ChevronRight, EyeOff } from 'lucide-react';
+import { ChevronRight, Copy, EyeOff, FileCode } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
@@ -33,6 +36,7 @@ import type {
   CardSection,
 } from '../../shared/ipc';
 import {
+  finishedAnswerText,
   foldedUnderLone,
   genieOneLinks,
   loneAnswerIndex,
@@ -43,6 +47,7 @@ import {
 import { LINK_OPEN, bareHost, openInDatabricksUrl } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
+import { CopyAnswerNote } from './copy-answer-note';
 import { SafeMarkdown } from './safe-markdown';
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -412,7 +417,7 @@ export function TurnParts({
   answersFirst?: boolean;
   /**
    * The text of the model is the main answer: the parts of the workspaces fold under it, except
-   * a part that the agent did not see (a receipt, or withheld), which stays in view with its tag.
+   * a withheld part (the agent never saw it either), which stays in view with its tag.
    */
   combined?: boolean;
   /** The calls that fold under the lone answer (an earlier wording to the same workspace). */
@@ -510,7 +515,27 @@ export interface TurnBodyProps {
   live?: boolean;
   /** The caller draws the footer itself (the card keeps it outside its scroll region). */
   footerOutside?: boolean;
+  /**
+   * The owner's "little button on the Conversations copy" request: an explicit "Copy Markdown"
+   * click. Undefined where the surface does not offer it (the small MOG card does not; hub
+   * Conversations does, via `AgentThread.tsx`). Shown only for a done turn with an answer to
+   * copy ({@link finishedAnswerText}).
+   */
+  onCopyMarkdown?: (() => void) | undefined;
+  /**
+   * The owner's "Copy" button request (ADR 0124 amendment): an explicit, formatted (html plus
+   * text) copy, next to "Copy Markdown" where both show. Shown only for a done turn with an
+   * answer to copy ({@link finishedAnswerText}).
+   */
+  onCopy?: (() => void) | undefined;
 }
+
+export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
+export const COPY_LABEL = 'Copy';
+/** Round 2 (Opus review): the two buttons used to be icon-only and identical, so a visible
+ * text label and a different icon tell them apart; the title and `aria-label` of the
+ * Markdown button stay the fuller {@link COPY_MARKDOWN_LABEL}. */
+const MARKDOWN_SHORT_LABEL = 'Markdown';
 
 /** The footer of a turn: the planner and the tokens, then the controls. */
 export function TurnFooter({ turn, actions }: { turn: AgentTurnView; actions?: ReactNode }) {
@@ -612,6 +637,8 @@ export function TurnBody({
   actions,
   live = false,
   footerOutside = false,
+  onCopyMarkdown,
+  onCopy,
 }: TurnBodyProps) {
   const queued = turn.state === 'queued';
   const rootRef = useRef<HTMLDivElement>(null);
@@ -740,6 +767,37 @@ export function TurnBody({
         underLone={underLone}
         linked={onOpenLink ? linked : undefined}
       />
+      {(turn.state === 'done' || turn.copyNote !== undefined) && (
+        <div className="agent-copy-row">
+          <CopyAnswerNote outcome={turn.copyNote} />
+          {turn.state === 'done' && onCopy && finishedAnswerText(turn) !== undefined && (
+            <button
+              type="button"
+              className="agent-copy-markdown"
+              data-action="copy"
+              title={COPY_LABEL}
+              aria-label={COPY_LABEL}
+              onClick={onCopy}
+            >
+              <Copy aria-hidden="true" size={12} strokeWidth={2} />
+              {COPY_LABEL}
+            </button>
+          )}
+          {turn.state === 'done' && onCopyMarkdown && finishedAnswerText(turn) !== undefined && (
+            <button
+              type="button"
+              className="agent-copy-markdown"
+              data-action="copy-markdown"
+              title={COPY_MARKDOWN_LABEL}
+              aria-label={COPY_MARKDOWN_LABEL}
+              onClick={onCopyMarkdown}
+            >
+              <FileCode aria-hidden="true" size={12} strokeWidth={2} />
+              {MARKDOWN_SHORT_LABEL}
+            </button>
+          )}
+        </div>
+      )}
       {onOpenLink && <GenieOneLinks links={genieLinks} onOpenLink={onOpenLink} />}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}
@@ -908,7 +966,18 @@ export function AgentTurnCard({
         </svg>
       </button>
       <div className="agent-card-body" tabIndex={0} aria-label="Agent turn">
-        <TurnBody turn={turn} now={now} onOpenLink={openLink} live footerOutside />
+        <TurnBody
+          turn={turn}
+          now={now}
+          onOpenLink={openLink}
+          live
+          footerOutside
+          onCopy={() =>
+            void emitView(mogId, 'click', { action: 'agent.copy', turnId: turn.turnId }).catch(
+              () => undefined,
+            )
+          }
+        />
       </div>
       {queued.length > 0 && (
         <>

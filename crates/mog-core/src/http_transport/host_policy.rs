@@ -17,13 +17,17 @@ use serde_json::Value;
 
 use crate::egress_policy::TokenEgressPolicy;
 
-/// The Databricks domain list of 4.6 rule 2.
-pub const DATABRICKS_DOMAINS: [&str; 5] = [
+/// The Databricks domain list of 4.6 rule 2. `staging.databricks.com` and `dev.databricks.com`
+/// cover internal staging/dev workspaces (e.g. `dogfood.staging.databricks.com`), owner review
+/// 2026-11-24: Connect and `profile_reauth` refused those hosts before this list named them.
+pub const DATABRICKS_DOMAINS: [&str; 7] = [
     "cloud.databricks.com",
     "gcp.databricks.com",
     "azuredatabricks.net",
     "cloud.databricks.us",
     "databricks.azure.us",
+    "staging.databricks.com",
+    "dev.databricks.com",
 ];
 
 /// The production [`TokenEgressPolicy`]. TODO(#207): replace with the http-policy adapter.

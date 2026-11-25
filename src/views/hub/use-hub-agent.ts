@@ -1,8 +1,7 @@
 /**
  * The hub's copy of the orchestrator agent view (slice 2a). Thin view (ARC-2, ARC-4): it keeps the
  * `HubAgentView` that the brain sends on `hub:agent` and sends `agent.ready` once the listener is
- * on. Conversations draws it inside the agent threads, and the Hub reads it for Settings
- * (`agentBusy`).
+ * on. Conversations draws it inside the agent threads.
  */
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';

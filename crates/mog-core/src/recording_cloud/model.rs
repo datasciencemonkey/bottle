@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use super::errors::ErrorKind;
 use super::settings_store::{current_endpoint, is_endpoint_name};
 use super::transcript::RawSegment;
+use crate::types::{RECORDING_DEFAULT_ENDPOINT, RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT};
 
 /// The largest model request Bottle sends (bytes).
 pub const REQUEST_BUDGET: usize = 24 * 1024 * 1024;
@@ -128,7 +129,7 @@ pub fn audio_chat_body(
     audio: &[u8],
     max_tokens: u32,
 ) -> Result<Value, ErrorKind> {
-    let endpoint = current_endpoint(endpoint);
+    let endpoint = current_endpoint(endpoint, RECORDING_DEFAULT_TRANSCRIBE_ENDPOINT);
     if !is_endpoint_name(endpoint) {
         return Err(ErrorKind::TranscribeEndpointMissing);
     }
@@ -154,7 +155,7 @@ pub fn notes_request(
     instructions: &str,
     transcript: &str,
 ) -> Result<Value, ErrorKind> {
-    let endpoint = current_endpoint(endpoint);
+    let endpoint = current_endpoint(endpoint, RECORDING_DEFAULT_ENDPOINT);
     if !is_endpoint_name(endpoint) {
         return Err(ErrorKind::NotesEndpointMissing);
     }

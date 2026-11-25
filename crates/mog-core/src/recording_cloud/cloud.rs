@@ -806,6 +806,29 @@ impl RecordingCloudService {
         self.run_from_stage(p, &root, job, m, Stage::Uploading, on)
     }
 
+    /// The call stopped and no audio ever came in: nothing to upload or transcribe. The job
+    /// ends failed (`AudioMissing`) at once, with no model call and no new volume folder. Its
+    /// job.json is written (best effort) only when the call's start wrote one (`m` is `Some`).
+    pub fn live_no_audio(
+        &self,
+        p: &str,
+        job: &RecordingJob,
+        m: Option<JobManifest>,
+        on: &mut dyn FnMut(&JobManifest),
+    ) -> JobManifest {
+        let root = m.as_ref().and_then(|_| VolumeRoot::parse(&job.root).ok());
+        let mut m = m.unwrap_or_else(|| self.fresh_manifest(job));
+        self.finish_fail(
+            p,
+            root.as_ref(),
+            &mut m,
+            ErrorKind::AudioMissing,
+            Stage::Transcribing,
+            on,
+        );
+        m
+    }
+
     fn fresh_manifest(&self, job: &RecordingJob) -> JobManifest {
         JobManifest::new(
             &job.id,
@@ -1105,7 +1128,12 @@ impl RecordingCloudService {
 
     // ---------- list, detail, link ----------
 
-    /// The recordings in `<root>/Bottle/Recordings/`, newest first (from each job.json).
+    /// The recordings in `<root>/Bottle/Recordings/`, newest first (from each job.json). A
+    /// transport-class fault (offline, a token not yet refreshed, a 5xx) reads as
+    /// [`ErrorKind::Offline`], not [`ErrorKind::VolumeNotFound`] (owner review 2026-11-26,
+    /// "3"): the volume may well exist, this call just could not read it this time, and the
+    /// contract seam (`CloudAdapter::list`) treats that as degradable, never as "no volume".
+    /// `403` and a genuine transport sign-in fault still map to their own real kinds.
     pub fn list(&self, p: &str, root: &str) -> Result<Vec<JobManifest>, RecordingError> {
         let e = RecordingError::new;
         let root = VolumeRoot::parse(root).map_err(e)?;
@@ -1118,12 +1146,12 @@ impl RecordingCloudService {
             }
             let r = self
                 .send(p, "files.list_directory", params, ReqBody::None)
-                .map_err(|x| e(from_core(&x, ErrorKind::VolumeNotFound)))?;
+                .map_err(|x| e(from_core(&x, ErrorKind::Offline)))?;
             if r.status == 404 {
                 return Ok(Vec::new());
             }
             if !r.ok() {
-                return Err(e(from_files_status(r.status, ErrorKind::VolumeNotFound)));
+                return Err(e(from_files_status(r.status, ErrorKind::Offline)));
             }
             for c in r
                 .json()

@@ -196,6 +196,8 @@ pub struct LocalWipeService {
     clock: Arc<dyn WallClock>,
     expiries: Vec<Arc<dyn SecurityExpiry>>,
     agent: Option<Arc<dyn AgentWipeHook>>,
+    /// The local recording index (migration 0005), if the host wired it in.
+    recording_index: Option<Arc<dyn crate::recording_index::RecordingIndexStore>>,
 }
 
 impl LocalWipeService {
@@ -206,6 +208,7 @@ impl LocalWipeService {
             clock,
             expiries: Vec::new(),
             agent: None,
+            recording_index: None,
         }
     }
 
@@ -218,6 +221,16 @@ impl LocalWipeService {
     /// Add a content-free security expiry. They run in the order they were added.
     pub fn with_expiry(mut self, e: Arc<dyn SecurityExpiry>) -> Self {
         self.expiries.push(e);
+        self
+    }
+
+    /// Clear the local recording index too (migration 0005; owner authorization 2026-11-25):
+    /// Settings -> Wipe removes its rows the same way it removes every other table's.
+    pub fn with_recording_index(
+        mut self,
+        index: Arc<dyn crate::recording_index::RecordingIndexStore>,
+    ) -> Self {
+        self.recording_index = Some(index);
         self
     }
 }
@@ -250,7 +263,7 @@ impl WipeService for LocalWipeService {
             h.end_for_wipe();
         }
         let cutoff = scope.cutoff_ms(self.clock.now_ms());
-        self.store.core_transaction(|tx| {
+        let mut report = self.store.core_transaction(|tx| {
             let mut report = WipeReport::default();
             let mogs: Vec<String> = tx
                 .device_query(&catalog::WIPE_MOG_LIST)?
@@ -277,7 +290,20 @@ impl WipeService for LocalWipeService {
                 report.local += changes(&tx.group(group, &params)?);
             }
             Ok(report)
-        })
+        })?;
+        // The recording index (migration 0005) carries no `mog_id` (its own table, scoped by
+        // profile, not by MOG), so it wipes once, device-wide, in its own write rather than
+        // inside the MOG-scoped transaction above (owner authorization 2026-11-25). A failure
+        // here does not undo the wipe above; it is reported like any other partial expiry.
+        if let Some(index) = &self.recording_index {
+            let removed = match cutoff {
+                Some(before) => index.wipe_before(before.max(0)),
+                None => index.wipe_everything(),
+            }
+            .unwrap_or(0);
+            report.local += removed;
+        }
+        Ok(report)
     }
 
     fn run_security_expiries(&self) -> CoreResult<ExpiryReport> {

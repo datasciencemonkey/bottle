@@ -1520,6 +1520,13 @@
     margin: 0;
   }
 
+  /* A calm status hint (CAP-10a review, #593 follow-up): same layout as .rec-alert, a
+     muted tone instead of the red alert. */
+  .rec-alert--status {
+    border-color: rgb(182 191 208 / 35%);
+    background: rgb(182 191 208 / 10%);
+  }
+
   /* The record dot and the REC indicator. */
   .rec-dot {
     flex: none;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bottle",
-  "version": "0.1.4",
+  "version": "0.1.10",
   "identifier": "com.databricks.bottle",
   "build": {
     "beforeDevCommand": "pnpm dev",

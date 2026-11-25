@@ -83,6 +83,7 @@ fn sample(command: &str) -> (&'static str, Value) {
             json!({"segmentId": "s1", "provider": "local_parakeet", "tags": t})
         }
         "insert_text" => json!({"mogId": "a1", "text": "hello", "leaseId": "1"}),
+        "clipboard_write_text" => json!({"text": "hello"}),
         "agent_start" => json!({"mogId": "a1", "harness": "claude"}),
         "agent_stop" | "mog_set_active" | "window_mog_close" | "window_card_show"
         | "window_card_hide" => json!({"mogId": "a1"}),
@@ -836,7 +837,7 @@ fn adr_0117_workspace_settings_write_refuses_a_bad_budget_or_endpoint() {
     for good in [
         json!({"genieCallBudget": 5}),
         json!({"genieCallBudget": 20}),
-        json!({"agentEndpoint": "system.ai.claude-haiku-5-5", "crossWorkspaceData": false}),
+        json!({"agentEndpoint": "system.ai.claude-haiku-5-5"}),
         json!({"cleanDictation": false}),
     ] {
         if let Err(e) = handle("brain", "workspace_settings_write", good.clone()) {

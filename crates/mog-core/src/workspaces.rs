@@ -8,6 +8,14 @@
 //!   entry per `binding.home`, all available. The home is set only when exactly one profile
 //!   exists. Bottle never picks a home for the user (ADR 0117, FLAG 5).
 //! - A file that cannot be read or parsed is an error. It is never deleted or rewritten.
+//! - `workspace_list` renders a stored entry whose profile does not answer in the current CLI
+//!   read as absent (owner review 2026-11-24: `databricks auth logout --delete` left a dead row
+//!   behind), and a vanished home as `home: None` (so the hub falls back to its normal "Choose
+//!   a home workspace" flow). This is cosmetic only, for one render: the file on disk, its
+//!   entries, `mog_ids`, `available` and the stored `home` (and so `lamp_mog_id`, which this
+//!   never touches) are left exactly as they were. A profile that comes back (or an empty or
+//!   failed CLI read that was only a transient glitch, never proof the profile is gone) shows
+//!   its row again with its old links, with nothing to restore.
 //! - [`WorkspaceGate`] is the allow-list of R8 (FLAG 7): `genie_ask` goes only to the home
 //!   profile and to an available profile.
 //!
@@ -35,8 +43,9 @@ use crate::mog_config::MogConfigStore;
 use crate::profile_service::ProfileService;
 use crate::token_broker::{CliTokenBroker, TokenBroker};
 use crate::types::{
-    default_clean_dictation, AgentSettings, GenieCallBudget, MogId, OrchestratorModel, Profile,
-    ProfileName, TokenState, WorkspaceList, WorkspaceRow, WorkspaceSignIn,
+    default_clean_dictation, default_copy_genie_answer, AgentSettings, GenieCallBudget, MogId,
+    OrchestratorModel, Profile, ProfileName, TokenState, WorkspaceList, WorkspaceRow,
+    WorkspaceSignIn,
 };
 
 /// The file name in the app config dir.
@@ -75,26 +84,6 @@ pub trait WorkspaceGate: Send + Sync + std::fmt::Debug {
 /// T7 as the store sees it: the profile list.
 pub trait ProfileSource: Send + Sync {
     fn profiles(&self, refresh: bool) -> CoreResult<Vec<Profile>>;
-}
-
-/// SEC-28b: the admin lock on D1 as read from its source. `None` means the read failed.
-/// No admin source exists before slice 3, so it reads "not locked".
-fn read_d1_lock() -> Option<bool> {
-    Some(false)
-}
-
-/// SEC-28b: an admin lock on D1. It fails closed: a lock that cannot be read counts as locked.
-fn d1_locked() -> bool {
-    lock_of(read_d1_lock())
-}
-
-fn lock_of(read: Option<bool>) -> bool {
-    read.unwrap_or(true)
-}
-
-/// D1 as the agent session sees it: the lock forces it off (AC-2b.5).
-fn effective_d1(setting: bool, locked: bool) -> bool {
-    setting && !locked
 }
 
 impl ProfileSource for ProfileService {
@@ -193,7 +182,6 @@ fn migrate_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OrchestratorM
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentData {
-    cross_workspace_data: bool,
     genie_call_budget: GenieCallBudget,
     /// ADR 0122: the orchestrator model. A stored value that is not a `system.ai.` id (the old
     /// D9 default `databricks-claude-sonnet-5-5`) reads as the default.
@@ -204,10 +192,19 @@ struct AgentData {
     /// ADR 0123: dictation goes to the home AI Gateway. A file from before reads as false.
     #[serde(default)]
     cloud_dictation: bool,
+    /// "Copy Genie answers to the clipboard" (Settings → Workspace). A file from before this
+    /// field reads as true.
+    #[serde(default = "default_copy_genie_answer")]
+    copy_genie_answer: bool,
     /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
     /// kept and never written.
     #[serde(default, skip_serializing, rename = "runProfile")]
     _legacy_run_profile: Option<serde_json::Value>,
+    /// D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    /// 2026-11-24): cross-workspace data is always on. Read so that a file from before the
+    /// removal still loads; never kept and never written.
+    #[serde(default, skip_serializing, rename = "crossWorkspaceData")]
+    _legacy_cross_workspace_data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,12 +465,13 @@ impl WorkspaceStore {
             home,
             workspaces,
             agent: AgentData {
-                cross_workspace_data: false,
                 genie_call_budget: GenieCallBudget::DEFAULT,
                 endpoint: default_model(),
                 clean_dictation: true,
                 cloud_dictation: false,
+                copy_genie_answer: true,
                 _legacy_run_profile: None,
+                _legacy_cross_workspace_data: None,
             },
         })
     }
@@ -541,40 +539,46 @@ impl WorkspaceStore {
         self.cloud_dictation_flag.load(Ordering::SeqCst)
     }
 
+    /// The current T7 read, for a render. A transient failure (or an empty read: no `HOME`, no
+    /// config file, mid-rewrite) must never look like proof that every profile is gone, so this
+    /// is read before the store guard and is never allowed to drive a write of the file.
+    fn t7(&self, refresh: bool) -> CoreResult<Vec<Profile>> {
+        self.profiles
+            .profiles(refresh)
+            .map_err(|_| refused("host_failed"))
+    }
+
     /// `workspace_list`.
     pub fn list(&self, refresh: bool) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(refresh)?;
         let data = {
             let _g = self.guard();
             self.load()?
         };
-        self.render(&data, refresh)
+        self.render(&data, &t7, refresh)
     }
 
-    fn render(&self, data: &Data, refresh: bool) -> CoreResult<WorkspaceList> {
-        let t7 = self
-            .profiles
-            .profiles(refresh)
-            .map_err(|_| refused("host_failed"))?;
-        let mut names: Vec<&str> = t7.iter().map(|p| p.name.as_str()).collect();
-        for e in &data.workspaces {
-            if !names.contains(&e.profile.as_str()) {
-                names.push(&e.profile);
-            }
-        }
-        let mut rows: Vec<WorkspaceRow> = names
-            .into_iter()
-            .map(|name| {
-                let p = t7.iter().find(|p| p.name == name);
-                let entry = data.entry(name);
-                let is_home = data.home.as_deref() == Some(name);
-                let (host, sign_in) = match p {
-                    None => (String::new(), WorkspaceSignIn::Missing),
-                    Some(p) if !p.supported => (p.host.clone(), WorkspaceSignIn::Unsupported),
-                    Some(p) => (p.host.clone(), self.cached_state(name)),
+    /// The rows and settings `data` and the current T7 read `t7` give. A stored entry whose
+    /// profile is not in `t7` (owner review 2026-11-24: `databricks auth logout --delete` left a
+    /// dead row behind) has no row this time; a vanished home renders as `home: None`, so the
+    /// hub falls back to its normal "Choose a home workspace" flow instead of a dead home row.
+    /// This never writes anything: `data.workspaces`, `data.home` and `data.lamp_mog_id` on disk
+    /// stay exactly as they were, `mog_ids` included, so the workspace returns with its old
+    /// links the moment its profile answers in `t7` again.
+    fn render(&self, data: &Data, t7: &[Profile], refresh: bool) -> CoreResult<WorkspaceList> {
+        let mut rows: Vec<WorkspaceRow> = t7
+            .iter()
+            .map(|p| {
+                let entry = data.entry(&p.name);
+                let is_home = data.home.as_deref() == Some(p.name.as_str());
+                let sign_in = if !p.supported {
+                    WorkspaceSignIn::Unsupported
+                } else {
+                    self.cached_state(&p.name)
                 };
                 WorkspaceRow {
-                    profile: name.to_owned(),
-                    host,
+                    profile: p.name.clone(),
+                    host: p.host.clone(),
                     mog_ids: entry.map(|e| e.mog_ids.clone()).unwrap_or_default(),
                     available: is_home || entry.is_some_and(|e| e.available),
                     is_home,
@@ -586,18 +590,20 @@ impl WorkspaceStore {
             self.probe(&mut rows);
         }
         rows.sort_by(|a, b| b.is_home.cmp(&a.is_home).then(a.profile.cmp(&b.profile)));
-        let locked = d1_locked();
+        let home = data
+            .home
+            .clone()
+            .filter(|h| t7.iter().any(|p| &p.name == h));
         Ok(WorkspaceList {
-            home: data.home.clone(),
+            home,
             lamp_mog_id: data.lamp_mog_id.clone(),
             workspaces: rows,
             agent: AgentSettings {
-                cross_workspace_data: effective_d1(data.agent.cross_workspace_data, locked),
-                cross_workspace_locked: locked,
                 genie_call_budget: data.agent.genie_call_budget,
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
                 cloud_dictation: data.agent.cloud_dictation,
+                copy_genie_answer: data.agent.copy_genie_answer,
             },
         })
     }
@@ -661,13 +667,14 @@ impl WorkspaceStore {
         available: bool,
         mog_id: Option<&str>,
     ) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
             if data.home.as_deref() == Some(profile) {
                 if available {
                     // Home is on already.
-                    return self.render(&data, false);
+                    return self.render(&data, &t7, false);
                 }
                 return Err(refused("home_always_available"));
             }
@@ -686,11 +693,12 @@ impl WorkspaceStore {
             self.save(&data)?;
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 
     /// `workspace_make_home`.
     pub fn make_home(&self, profile: &str, mog_id: Option<&str>) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
@@ -711,23 +719,20 @@ impl WorkspaceStore {
             self.save(&data)?;
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 
-    /// The agent session snapshot: the catalog with model aliases, D1, D2, the home profile and
+    /// The agent session snapshot: the catalog with model aliases, D2, the home profile and
     /// the orchestrator model. It probes nothing. The catalog holds home and each available
     /// profile that T7 supports, home first. A model alias is the profile name in lower case with
     /// every other character turned into `-`, and a repeat gets `-2`, `-3`. The model never sees
     /// the profile name itself in the prompt, only the alias and a display name.
     pub fn catalog_snapshot(&self) -> CoreResult<crate::agent_run::orchestrator::Snapshot> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             self.load()?
         };
-        let t7 = self
-            .profiles
-            .profiles(false)
-            .map_err(|_| refused("host_failed"))?;
         // The model runs on the AI Gateway of the home profile (ADR 0122), so home is the agent
         // workspace.
         let home = data.home.clone();
@@ -766,24 +771,28 @@ impl WorkspaceStore {
                 is_agent_workspace: home.as_deref() == Some(name),
             });
         }
+        // ADR 0122 amendment (owner decision 2026-11-24): the cached sign-in state only, no new
+        // network probe. `Unknown` is not "known signed out": a turn with no cached answer yet
+        // still tries the live call first, as it always did.
+        let home_signed_out = home
+            .as_deref()
+            .is_some_and(|p| self.cached_state(p) == WorkspaceSignIn::Expired);
         Ok(crate::agent_run::orchestrator::Snapshot {
             catalog,
-            cross_workspace: effective_d1(data.agent.cross_workspace_data, d1_locked()),
             budget: data.agent.genie_call_budget.get(),
             home_profile: home,
             model: data.agent.endpoint.as_str().to_owned(),
+            home_signed_out,
         })
     }
 
-    /// `workspace_settings_write`: D1, D2 and the agent endpoint. The argument types hold only
+    /// `workspace_settings_write`: D2 and the agent endpoint. The argument types hold only
     /// valid values, so a bad value never gets here.
     pub fn settings_write(&self, a: &WorkspaceSettingsWriteArgs) -> CoreResult<WorkspaceList> {
+        let t7 = self.t7(false)?;
         let data = {
             let _g = self.guard();
             let mut data = self.load()?;
-            if let Some(v) = a.cross_workspace_data {
-                data.agent.cross_workspace_data = v;
-            }
             if let Some(v) = a.genie_call_budget {
                 data.agent.genie_call_budget = v;
             }
@@ -796,6 +805,9 @@ impl WorkspaceStore {
             if let Some(v) = a.cloud_dictation {
                 data.agent.cloud_dictation = v;
             }
+            if let Some(v) = a.copy_genie_answer {
+                data.agent.copy_genie_answer = v;
+            }
             self.save(&data)?;
             // Only after a successful save: a failed write must not make the fast flag
             // (ADR 0123) disagree with the file that is actually on disk.
@@ -804,7 +816,7 @@ impl WorkspaceStore {
             }
             data
         };
-        self.render(&data, false)
+        self.render(&data, &t7, false)
     }
 }
 
@@ -849,24 +861,3 @@ impl GatewayComponents for WorkspaceStore {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod d1_lock_tests {
-    use super::{d1_locked, effective_d1};
-
-    #[test]
-    fn ac_2b_5_a_lock_forces_d1_off_and_no_lock_keeps_the_setting() {
-        assert!(!effective_d1(true, true));
-        assert!(!effective_d1(false, true));
-        assert!(effective_d1(true, false));
-        assert!(!effective_d1(false, false));
-        assert!(!d1_locked(), "no admin source before slice 3");
-    }
-
-    #[test]
-    fn l3_a_lock_that_cannot_be_read_counts_as_locked() {
-        assert!(super::lock_of(None));
-        assert!(!super::lock_of(Some(false)));
-        assert!(super::lock_of(Some(true)));
-    }
-}

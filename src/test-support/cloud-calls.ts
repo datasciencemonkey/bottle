@@ -29,6 +29,7 @@ export const CALL_CLASS = {
   consent_records_list: 'local',
   stt_transcribe: 'cloud_unless_local_stt',
   insert_text: 'local',
+  clipboard_write_text: 'local', // the OS pasteboard only; never leaves the device
   agent_start: 'cloud', // the harness process can reach the network
   agent_stop: 'local',
   agent_send: 'cloud', // the harness model call goes through the AI Gateway

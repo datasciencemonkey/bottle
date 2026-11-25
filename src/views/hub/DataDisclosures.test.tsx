@@ -66,10 +66,10 @@ describe('Table SEC-DISC disclosures', () => {
     for (const d of SEC_DISC) expect(d.v1).toBe(d.item.startsWith('(v1)'));
   });
 
-  it('[SEC-17] the agent disclosure says other answers stay out unless D1 is on', () => {
-    expect(text('agent-harness')).toContain(
-      'Answers from your other workspaces stay out of it unless you turn on Combine across workspaces.',
-    );
+  it('[SEC-17] the agent disclosure says home is asked first and answers can be combined', () => {
+    expect(text('agent-harness')).toContain('Bottle asks your home workspace first.');
+    expect(text('agent-harness')).toContain('it can combine them into one answer');
+    expect(text('agent-harness')).not.toContain('Combine across workspaces');
   });
 
   it('[SEC-17] [AT-24] the hub data panel shows every SEC-DISC disclosure', async () => {

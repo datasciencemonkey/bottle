@@ -116,6 +116,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("consent_records_list", B),
     row("stt_transcribe", B),
     row("insert_text", B),
+    // ADR 0124: the owner's "attach Genie's answer to the clipboard" request. Brain only, like
+    // `insert_text`: a view never touches the OS clipboard.
+    row("clipboard_write_text", B),
     row("agent_start", B),
     row("agent_stop", B),
     row("agent_send", B),
@@ -1016,11 +1019,11 @@ args!(
     }
 );
 args!(
-    /// `workspace_settings_write` (ADR 0117): D1, the D2 Genie call budget (5, 10 or 20) and
+    /// `workspace_settings_write` (ADR 0117): the D2 Genie call budget (5, 10 or 20) and
     /// the D9 orchestrator model (a `system.ai.<name>` id, ADR 0122) and "Clean up dictation".
+    /// D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
+    /// 2026-11-24): cross-workspace data is always on.
     WorkspaceSettingsWriteArgs {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cross_workspace_data: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         genie_call_budget: Option<crate::types::GenieCallBudget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1041,6 +1044,15 @@ args!(
         )]
         #[schemars(with = "bool")]
         cloud_dictation: Option<bool>,
+        /// The owner's "attach Genie's answer to the clipboard" request: "Copy Genie answers to
+        /// the clipboard" (Settings → Workspace), default true.
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "bool")]
+        copy_genie_answer: Option<bool>,
     }
 );
 
@@ -1132,6 +1144,19 @@ args!(InsertTextArgs {
     // that had the focus when that lease was granted; else `target_changed`.
     lease_id: LeaseRef,
 });
+args!(
+    /// `clipboard_write_text` (ADR 0124): the one new IPC command of the owner's "attach Genie's
+    /// answer to the clipboard" request. `text` plus `html` (ADR 0124 amendment: paste
+    /// formatted into Docs, email and Excel) each have their own size bound
+    /// (`window_host::CLIPBOARD_WRITE_MAX_BYTES`, `window_host::CLIPBOARD_WRITE_HTML_MAX_BYTES`);
+    /// either one over its bound answers `too_large`, not a schema refusal (so the brain still
+    /// gets a clean typed outcome, not `invalid_args`).
+    ClipboardWriteTextArgs {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        html: Option<String>,
+    }
+);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1424,9 +1449,15 @@ args!(
     }
 );
 args!(
-    /// `recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.
+    /// `recording_list` (ADR 0103): the local recording index (migration 0005), merged with
+    /// the live, active and in-flight overlays; no network call. `reconcile`: owner
+    /// authorization 2026-11-25, the brain sets this at most once per hub open or launch, plus
+    /// after a recording reaches `done` or `failed`, to read the volume once and refresh the
+    /// index. Absent or `false`: the fast path only.
     RecordingListArgs {
         profile: ProfileName,
+        #[serde(default)]
+        reconcile: bool,
     }
 );
 args!(
@@ -1723,6 +1754,7 @@ macro_rules! for_command {
             "consent_notice_record" => Some($f::<ConsentNoticeRecordArgs>()),
             "stt_transcribe" => Some($f::<SttTranscribeArgs>()),
             "insert_text" => Some($f::<InsertTextArgs>()),
+            "clipboard_write_text" => Some($f::<ClipboardWriteTextArgs>()),
             "agent_start" => Some($f::<AgentStartArgs>()),
             "agent_send" => Some($f::<AgentSendArgs>()),
             "agent_tool_result" => Some($f::<AgentToolResultArgs>()),
