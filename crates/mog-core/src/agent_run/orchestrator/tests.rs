@@ -184,7 +184,9 @@ fn r8_reply(sc: Value) -> McpReply {
 }
 
 impl FakeR8 {
-    fn answering(f: fn(&str) -> &'static str) -> Arc<Self> {
+    /// `f` is usually a plain `fn` item; it can also be a closure that captures its own
+    /// `'static` data, for a test that needs a fresh answer per case.
+    fn answering(f: impl Fn(&str) -> &'static str + Send + Sync + 'static) -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::default(),
             handler: Box::new(move |profile, tool| {
@@ -899,7 +901,12 @@ fn a_combined_answer_s_missing_links_are_de_duplicated() {
 }
 
 #[test]
-fn a_withheld_part_s_url_is_never_added_to_the_links_section() {
+fn the_links_section_draws_only_from_cited_sources_not_every_answered_call() {
+    // "ops" is asked and answered (its text, with its own URL, sits in the session's call log),
+    // but the model never cites it: citing a withheld call would hide the whole answer, so it
+    // cites only the two clean workspaces. This proves the links guard reads `cited_texts`
+    // (the validated, cited sources alone), never the session's full call log, so a withheld
+    // part's URL (or any other uncited call's) can never reach the Links section.
     let r = rig(
         10,
         FakeR8::answering(with_links_and_evil),
@@ -954,9 +961,130 @@ fn a_lone_answer_is_untouched_by_the_links_guard() {
     assert_eq!(o, AgentTurnOutcome::Answered);
     let res = r.host.turn_result(&tid).unwrap();
     assert_eq!(res.answer_kind, AgentAnswerKind::Note);
-    // "answer [1]" never mentions the Dashboard link that the sales Genie answer carried, but a
-    // lone answer is shown verbatim and the links guard never touches it.
+    // "answer [1]" never mentions the Dashboard link that the sales Genie answer carried. The
+    // links guard only touches a Combined answer: for a lone (one-workspace) answer, the card
+    // and the copy show that workspace's own Genie text verbatim, not this model summary (see
+    // `src/shared/agent-answer-rule.ts`), so its links are already safe there.
     assert_eq!(res.answer.as_deref(), Some("answer [1]"));
+}
+
+#[test]
+fn a_long_combined_answer_still_keeps_its_links_section() {
+    // Appending after the cut (not before) means a 9000-char answer, cut to 8000, still gets
+    // its Links section: appending before the cut could have thrown the whole section away.
+    let r = rig(
+        10,
+        FakeR8::answering(with_links),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let sources: Vec<Value> =
+                    results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+                let long = "a".repeat(9000);
+                reply_of(vec![final_item(json!({
+                    "answer": format!("{long} [1][2]"),
+                    "sources": sources,
+                }))])
+            }
+        }),
+    );
+    let (tid, o) = r.run("compare sales to finance");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
+    let answer = res.answer.unwrap();
+    assert!(answer.chars().count() > host::ANSWER_MAX_CHARS, "{answer}");
+    assert!(
+        answer.ends_with(
+            "\n\n**Links**\n\
+             - [Dashboard](https://sales.example/dash)\n\
+             - [Report](https://finance.example/report)"
+        ),
+        "{answer}"
+    );
+}
+
+/// One case of `the_links_guard_normalizes_a_cited_url_before_comparing`: `sales_genie` is the
+/// raw Genie text for "sales", and `model_link` is how the model's own answer writes that same
+/// URL back. Both should count as the same link, so no Links section is appended.
+struct LinkNormCase {
+    sales_genie: &'static str,
+    model_answer: &'static str,
+}
+
+#[test]
+fn the_links_guard_normalizes_a_cited_url_before_comparing() {
+    let cases = [
+        // Sentence punctuation right against a bare URL, rewritten by the model as a clean
+        // Markdown link (the owner's own example).
+        LinkNormCase {
+            sales_genie: "See https://x.example/dash. for details.",
+            model_answer: "Sales rose, see [label](https://x.example/dash) [1]. \
+                Costs held [2].",
+        },
+        // A trailing slash the Genie answer has and the model's rewrite drops.
+        LinkNormCase {
+            sales_genie: "See https://x.example/dash/ for details.",
+            model_answer: "Sales rose, see [label](https://x.example/dash) [1]. \
+                Costs held [2].",
+        },
+        // An HTML-escaped `&amp;` in the raw Genie text; the model writes a plain `&` instead
+        // (as the prompt itself tells it to).
+        LinkNormCase {
+            sales_genie: "See https://x.example/dash?a=1&amp;b=2 for details.",
+            model_answer: "Sales rose, see [label](https://x.example/dash?a=1&b=2) [1]. \
+                Costs held [2].",
+        },
+        // A bare URL the model wraps in `**bold**`.
+        LinkNormCase {
+            sales_genie: "See https://x.example/dash for details.",
+            model_answer: "Sales rose, see **https://x.example/dash** [1]. Costs held [2].",
+        },
+        // A bare URL the model wraps in `<angle brackets>`.
+        LinkNormCase {
+            sales_genie: "See https://x.example/dash for details.",
+            model_answer: "Sales rose, see <https://x.example/dash> [1]. Costs held [2].",
+        },
+    ];
+    for case in cases {
+        let answer_body = case.model_answer.to_owned();
+        let r = rig(
+            10,
+            FakeR8::answering(move |p| {
+                if p == "p-sales" {
+                    case.sales_genie
+                } else {
+                    FIN
+                }
+            }),
+            Box::new(move |body, n| match n {
+                0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+                _ => {
+                    let sources: Vec<Value> =
+                        results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+                    reply_of(vec![final_item(json!({
+                        "answer": answer_body.clone(),
+                        "sources": sources,
+                    }))])
+                }
+            }),
+        );
+        let (tid, o) = r.run("compare sales to finance");
+        assert_eq!(o, AgentTurnOutcome::Answered, "{}", case.sales_genie);
+        let res = r.host.turn_result(&tid).unwrap();
+        assert_eq!(
+            res.answer_kind,
+            AgentAnswerKind::Combined,
+            "{}",
+            case.sales_genie
+        );
+        let answer = res.answer.unwrap();
+        assert!(
+            !answer.contains("**Links**"),
+            "case {:?} wrongly got a Links section: {answer}",
+            case.sales_genie
+        );
+    }
 }
 
 #[test]

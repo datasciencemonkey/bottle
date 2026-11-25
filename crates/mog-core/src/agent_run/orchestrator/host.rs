@@ -1683,15 +1683,21 @@ fn build_result(
     let combined = cites_many_workspaces(&out);
     let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
     let aliases: Vec<&str> = out.iter().map(|s| s.workspace_id.as_str()).collect();
-    let mut answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
-    // The real fix behind the prompt's "never drop a URL" rule (ADR 0122 amendment, 2026-11-25):
-    // a combined answer that dropped a link the model used still gets it, appended. A lone
-    // answer (one workspace) is shown verbatim and is never touched.
+    let answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
+    // Cut first, append the links section after (round 2): appending before the cut risked the
+    // cut throwing the whole section away on a long answer. A lone answer (one workspace) is
+    // never touched here: the card and the copy show that workspace's own Genie text verbatim
+    // (`src/shared/agent-answer-rule.ts`), not this model summary, so its links are already
+    // safe there.
+    let mut answer = cut_answer(&answer);
     if combined {
+        // The real fix behind the prompt's "never drop a URL" rule (ADR 0122 amendment,
+        // 2026-11-25): a combined answer that dropped a link the model used still gets it,
+        // appended.
         answer = append_missing_links(&answer, &cited_texts);
     }
     AgentTurnResult {
-        answer: Some(cut_answer(&answer)),
+        answer: Some(answer),
         answer_kind: if combined {
             AgentAnswerKind::Combined
         } else {
@@ -1724,17 +1730,21 @@ struct FoundLink {
 }
 
 /// The Markdown links (`[label](https://…)`) and bare `https://…` URLs of `text`, in the order
-/// they appear. Capped at `guard::receipt::MAX_TEXT_CHARS` chars, the same bound the model's own
-/// `<genie_answer>` block uses, so a long table cannot make the scan slow.
-fn find_links(text: &str) -> Vec<FoundLink> {
+/// they appear, each capped to `cap_chars`: that bound exists for a cited Genie answer, whose
+/// raw text has no size limit of its own (unlike the model's own answer, already cut to
+/// `ANSWER_MAX_CHARS` by the time this ever scans it), so a huge table cannot make the scan slow.
+fn find_links(text: &str, cap_chars: usize) -> Vec<FoundLink> {
     static MD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static BARE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let md = MD.get_or_init(|| {
         regex::Regex::new(r"\[([^\]\n]{1,200})\]\((https?://[^\s()]+)\)").expect("a fixed pattern")
     });
+    // Unlike the Markdown form, a bare URL has no delimiter of its own: the match can run on
+    // into trailing sentence punctuation, a closing `)` that is the sentence's and not the
+    // URL's, or a wrapper like `**bold**` or `<angle brackets>`. `trim_bare_url` cleans that up.
     let bare =
-        BARE.get_or_init(|| regex::Regex::new(r"https?://[^\s()\[\]]+").expect("a fixed pattern"));
-    let bound: String = text.chars().take(guard::receipt::MAX_TEXT_CHARS).collect();
+        BARE.get_or_init(|| regex::Regex::new(r"https?://[^\s\[\]]+").expect("a fixed pattern"));
+    let bound: String = text.chars().take(cap_chars).collect();
     let mut spans: Vec<(usize, usize, FoundLink)> = Vec::new();
     for c in md.captures_iter(&bound) {
         let m = c.get(0).expect("group 0");
@@ -1755,12 +1765,16 @@ fn find_links(text: &str) -> Vec<FoundLink> {
         {
             continue;
         }
+        let trimmed = trim_bare_url(m.as_str());
+        if trimmed.is_empty() {
+            continue;
+        }
         spans.push((
             m.start(),
-            m.end(),
+            m.start() + trimmed.len(),
             FoundLink {
-                label: m.as_str().to_owned(),
-                url: m.as_str().to_owned(),
+                label: trimmed.to_owned(),
+                url: trimmed.to_owned(),
             },
         ));
     }
@@ -1768,15 +1782,56 @@ fn find_links(text: &str) -> Vec<FoundLink> {
     spans.into_iter().map(|(_, _, l)| l).collect()
 }
 
+/// Trim what a sentence puts right against a bare URL with no delimiter of its own: trailing
+/// `.`, `,`, `;`, `:`, `!`, `?`, a quote, `*`, `_`, `>` or a backtick (sentence punctuation, or
+/// the far side of a `**bold**`, `_italic_` or `<angle-bracket>` wrapper), and a closing `)`
+/// that does not match an opening `(` inside the match (a sentence's own parenthesis, not part
+/// of the URL).
+fn trim_bare_url(mut u: &str) -> &str {
+    loop {
+        let Some(last) = u.chars().next_back() else {
+            return u;
+        };
+        let punct = matches!(
+            last,
+            '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '>' | '`'
+        );
+        let unmatched_paren = last == ')' && u.matches('(').count() < u.matches(')').count();
+        if !punct && !unmatched_paren {
+            return u;
+        }
+        u = &u[..u.len() - last.len_utf8()];
+    }
+}
+
+/// A URL for comparison only, never for display: collapses an HTML-escaped `&amp;` back to `&`
+/// (a raw Genie answer can carry it literally, and the prompt tells the model to write `&`, not
+/// `&amp;`, so the two must count as the same link), and drops one trailing `/` (Genie and the
+/// model do not always agree on one).
+fn normalize_url(u: &str) -> String {
+    let u = u.replace("&amp;", "&");
+    match u.strip_suffix('/') {
+        Some(s) => s.to_owned(),
+        None => u,
+    }
+}
+
 /// Append a `**Links**` section listing every URL that `texts` (the Genie answers the model
 /// cited) carries but `answer` (the model's own text) does not, in the order each first
-/// appears. De-duplicated: a URL that repeats, in one text or across several, is appended once.
+/// appears. Compared and de-duplicated by `normalize_url`, not by substring, so `.../a` is
+/// never counted as present just because `.../a/b` is in the answer, and a URL that repeats, in
+/// one text or across several, is appended once.
 fn append_missing_links(answer: &str, texts: &[String]) -> String {
+    let present: std::collections::HashSet<String> = find_links(answer, answer.chars().count())
+        .into_iter()
+        .map(|l| normalize_url(&l.url))
+        .collect();
     let mut seen = std::collections::HashSet::new();
     let mut missing = Vec::new();
     for t in texts {
-        for link in find_links(t) {
-            if seen.insert(link.url.clone()) && !answer.contains(&link.url) {
+        for link in find_links(t, guard::receipt::MAX_TEXT_CHARS) {
+            let norm = normalize_url(&link.url);
+            if seen.insert(norm.clone()) && !present.contains(&norm) {
                 missing.push(link);
             }
         }
