@@ -205,7 +205,7 @@ Your `bottle-*` profile stays in your Databricks CLI config. Remove it there if 
 - **"Could not transcribe":** hold the key and try again. Check your mic in macOS Sound settings.
 - **"Transcription of this language is not available":** set **Dictation engine** to **Databricks**.
 - **"Warning: this sounded like an instruction to Bottle. Nothing was sent.":** a safety check flagged your words as a command. Rephrase them as a plain question.
-- **Genie returned an error:** the card shows a reason and a code. Bottle does not send a failed question again by itself. It does so only after a new sign-in, or after a short wait when Genie is busy. Check that the Genie space opens in your browser, then ask again.
+- **Genie returned an error:** the card shows a reason and a code. Bottle does not send a failed question again by itself. It does so only after a new sign-in, or after a short wait when Genie says there are too many requests. Check that the Genie space opens in your browser, then ask again.
 - **"The orchestrator model is not reachable":** you still got an answer, straight from Genie on your home workspace. Check that the **Orchestrator model** in **Settings → Workspace** is available to you, then select **Check again**.
 - **Sign-in stuck:** Bottle waits 5 minutes for the browser. Use **Open the browser again**, or **Cancel** and start over.
 - **A workspace's sign-in expired mid-question:** Bottle opens the browser sign-in for that workspace. Finish it, and Bottle asks once more.
