@@ -49,12 +49,18 @@ Windows and Linux are work in progress. Ignore any Windows installer on this pag
 - **Sign-in on demand.** When a workspace's sign-in is missing or has expired, Bottle opens the
   browser sign-in and then asks again once.
 - **Copy answers.** Bottle copies each finished Genie answer to your clipboard and shows "Copied".
-  The copy stays on this Mac. Turn it off in **Settings → Workspace**.
+  It pastes formatted into Docs, Gmail and Word, and as cells into Excel and Sheets. The copy
+  stays on this Mac. Turn it off in **Settings → Workspace**.
+- **Copy and Markdown buttons.** Each answer has a **Copy** button for a formatted copy at any
+  time. In **Conversations**, a **Markdown** button copies the raw Markdown instead.
+- **Links kept.** When Bottle combines answers from several workspaces, every Genie link stays in
+  the answer.
 - **Databricks dictation** as an alternative to local speech.
-- **Call recording fixes.** System audio now records reliably. A take shows in the list at once,
-  with its status, until it is done. Stop responds at once. A calm hint shows when other apps are
-  silent, and **Open System Settings** opens the right page.
-- **Recordings.** Delete a recording that failed or stayed on this Mac.
+- **Call recording fixes.** System audio now records reliably. Stop responds at once. A calm
+  hint shows when other apps are silent, and **Open System Settings** opens the right page.
+- **Recordings are instant.** The list opens at once from this Mac. A take shows the moment you
+  press Stop, then moves to Done. **Remove** takes any take off this Mac and the list, and warns
+  you when the audio never reached Databricks.
 - **Workspaces.** Refresh the profile list, name a profile when you connect, and connect to more
   Databricks hosts.
 - Removed: the "Combine across workspaces" switch. Answers from several workspaces are now always
