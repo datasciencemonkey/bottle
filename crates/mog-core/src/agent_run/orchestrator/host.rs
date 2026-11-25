@@ -66,8 +66,6 @@ const ACTOR_WAIT: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub catalog: Vec<CatalogEntry>,
-    /// D1 "Combine across workspaces".
-    pub cross_workspace: bool,
     /// D2 "Genie calls per question": 5, 10 or 20.
     pub budget: u8,
     /// The home profile: its AI Gateway runs the model. `None`: no home yet.
@@ -209,7 +207,6 @@ enum Msg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Fingerprint {
     profile: Option<String>,
-    d1: bool,
     catalog: Vec<(String, String, bool)>,
 }
 
@@ -217,7 +214,6 @@ impl Fingerprint {
     fn of(s: &Snapshot) -> Self {
         Self {
             profile: s.home_profile.clone(),
-            d1: s.cross_workspace,
             catalog: s
                 .catalog
                 .iter()
@@ -229,8 +225,6 @@ impl Fingerprint {
     fn drift(&self, now: &Fingerprint) -> Option<AgentSessionEndReason> {
         if self.profile != now.profile {
             Some(AgentSessionEndReason::ProfileChanged)
-        } else if self.d1 != now.d1 {
-            Some(AgentSessionEndReason::D1Changed)
         } else if self.catalog != now.catalog {
             Some(AgentSessionEndReason::CatalogChanged)
         } else {
@@ -239,12 +233,11 @@ impl Fingerprint {
     }
 }
 
-/// One session: the D1, catalog and profile snapshot, and the thread history (memory only).
+/// One session: the catalog and profile snapshot, and the thread history (memory only).
 struct Session {
     id: String,
     fp: Fingerprint,
     catalog: Vec<CatalogEntry>,
-    cross_workspace: bool,
     started_wall_ms: i64,
     turns: u32,
     tokens: u64,
@@ -254,7 +247,7 @@ struct Session {
 struct QTurn {
     id: String,
     question: String,
-    /// A new question: it must not run on a tainted session.
+    /// A new question: it starts a new thread (its history is cleared).
     fresh: bool,
 }
 
@@ -460,15 +453,11 @@ impl Engine {
                 position,
             });
         } else {
-            // Nothing runs: this turn is the live one. A tainted or drifted session first ends.
+            // Nothing runs: this turn is the live one. A drifted session first ends.
             if let Some(s) = &self.session {
-                let tainted = turn.fresh && self.d.guard.tainted(&s.id);
                 let drift = s.fp.drift(&Fingerprint::of(&snap));
                 if let Some(r) = drift {
                     self.end_session_core(r);
-                    new_session = true;
-                } else if tainted {
-                    self.end_session_core(AgentSessionEndReason::Tainted);
                     new_session = true;
                 }
             }
@@ -484,7 +473,6 @@ impl Engine {
             position,
             new_session,
             budget,
-            cross_workspace: s.cross_workspace,
             catalog: s
                 .catalog
                 .iter()
@@ -529,7 +517,6 @@ impl Engine {
         let spec = SessionSpec {
             session_id: session_id.clone(),
             catalog: snap.catalog.clone(),
-            cross_workspace: snap.cross_workspace,
         };
         self.d
             .guard
@@ -539,7 +526,6 @@ impl Engine {
             id: session_id.clone(),
             fp: Fingerprint::of(snap),
             catalog: snap.catalog.clone(),
-            cross_workspace: snap.cross_workspace,
             started_wall_ms: self.d.wall.now_ms(),
             turns: 0,
             tokens: 0,
@@ -571,7 +557,7 @@ impl Engine {
         let Some(s) = self.session.as_ref() else {
             return;
         };
-        let (sid, catalog, cross) = (s.id.clone(), s.catalog.clone(), s.cross_workspace);
+        let (sid, catalog) = (s.id.clone(), s.catalog.clone());
         let budget = snap.budget;
         let (turn_id, question, cancel, fresh) = {
             let l = self.live.as_ref().expect("checked above");
@@ -605,15 +591,9 @@ impl Engine {
         {
             return self.finish(AgentTurnOutcome::Failed);
         }
-        let agent_alias = catalog
-            .iter()
-            .find(|c| c.is_agent_workspace)
-            .map(|c| c.alias.clone());
         let system = prompt::system(&PromptInput {
             catalog: &catalog,
             budget,
-            cross_workspace: cross,
-            agent_alias: agent_alias.as_deref(),
         });
         // Home first (ADR 0122 amendment): the alias of the home workspace, and the catalog
         // aliases that the question names directly. With no home in the catalog, both stay
@@ -623,9 +603,9 @@ impl Engine {
             catalog
                 .iter()
                 .filter(|c| {
-                    names_alias(&question, &c.alias)
-                        || names_alias(&question, &c.name)
-                        || names_alias(&question, &c.profile)
+                    names_workspace(&question, &c.alias)
+                        || names_workspace(&question, &c.name)
+                        || names_workspace(&question, &c.profile)
                 })
                 .map(|c| c.alias.clone())
                 .collect()
@@ -757,12 +737,10 @@ impl Engine {
         let calls_all = self.d.guard.calls(&sid);
         let calls = calls_all.iter().filter(|c| c.turn_id == turn_id).count();
         if outcome == AgentTurnOutcome::Answered {
-            let d1 = self.session.as_ref().is_some_and(|s| s.cross_workspace);
             let r = build_result(
                 live.final_text.as_deref(),
                 live.usage,
                 &calls_all,
-                d1,
                 self.d.guard.as_ref(),
             );
             let hidden = r.answer_kind == AgentAnswerKind::Hidden;
@@ -812,7 +790,7 @@ impl Engine {
         }
     }
 
-    /// Run the next waiting turn, after a settings change or a taint if one is due.
+    /// Run the next waiting turn, after a settings change if one is due.
     fn advance(&mut self) {
         loop {
             if self.live.is_some() {
@@ -830,11 +808,6 @@ impl Engine {
             let Some(next) = self.waiting.pop() else {
                 return;
             };
-            if let Some(s) = &self.session {
-                if next.fresh && self.d.guard.tainted(&s.id) {
-                    self.end_session_core(AgentSessionEndReason::Tainted);
-                }
-            }
             let Ok(snap) = self.d.workspaces.snapshot() else {
                 self.emit_ended_unrun(&next.id, AgentTurnOutcome::Failed);
                 continue;
@@ -1139,9 +1112,9 @@ fn output_item(call_id: &str, text: &str) -> Value {
 /// and counts the refusal (the third one stops the turn). A stopped turn runs nothing.
 /// The second value is true when the guard accepted the call (it used budget), whatever came
 /// back; a refusal is a bare code, not JSON.
-fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
+fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (String, bool) {
     if ctx.cancel.load(Ordering::SeqCst) {
-        return (output_item(&call.call_id, guard::RUN_STOPPED), false);
+        return (guard::RUN_STOPPED.to_owned(), false);
     }
     let args = serde_json::from_str::<Value>(&call.arguments)
         .ok()
@@ -1152,7 +1125,7 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
     };
     let out = ctx.guard.ask_genie(&ctx.session_id, &ctx.turn_id, &run);
     let accepted = !(out.is_error && !out.text.starts_with('{'));
-    (output_item(&call.call_id, &out.text), accepted)
+    (out.text, accepted)
 }
 
 /// Model-facing code: the home-first rule (ADR 0122 amendment) refuses this call of the turn's
@@ -1161,22 +1134,41 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
 /// question names, instead; the rest open from the turn's second `ask_genie` step.
 const HOME_FIRST_REFUSAL: &str = "ask_home_first";
 
-/// Whether `call` may run on the turn's home-first step: it asks the home workspace, or the
-/// question names its workspace (`home_first_allows` reads the `workspace` argument itself, not
-/// the guard's parsed and checked one, since this runs before the guard sees the call). A call
-/// whose arguments do not hold a readable `workspace` string is left to the guard's own checks.
-fn home_first_allows(ctx: &LoopCtx, call: &FnCall) -> bool {
-    let Some(ws) = serde_json::from_str::<Value>(&call.arguments)
+/// The `workspace` argument of a call, if its arguments parse as a JSON object with that field.
+fn call_workspace(call: &FnCall) -> Option<String> {
+    serde_json::from_str::<Value>(&call.arguments)
         .ok()
         .and_then(|v| {
             v.get("workspace")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })
-    else {
+}
+
+/// Whether `call` may run on the turn's home-first step: it asks the home workspace, or the
+/// question names its workspace (`home_first_allows` reads the `workspace` argument itself, not
+/// the guard's parsed and checked one, since this runs before the guard sees the call). A call
+/// whose arguments do not hold a readable `workspace` string is left to the guard's own checks.
+fn home_first_allows(ctx: &LoopCtx, call: &FnCall) -> bool {
+    let Some(ws) = call_workspace(call) else {
         return true;
     };
     ctx.home_alias.as_deref() == Some(ws.as_str()) || ctx.named_aliases.contains(&ws)
+}
+
+/// Whether `call` asks the home workspace by alias.
+fn is_home_call(ctx: &LoopCtx, call: &FnCall) -> bool {
+    ctx.home_alias.is_some() && call_workspace(call).as_deref() == ctx.home_alias.as_deref()
+}
+
+/// Whether a call's raw guard output names a terminal state that counts toward widening the
+/// home-first rule: answered, failed or timeout. A withheld, stopped, signed-out, no-answer,
+/// queued or asking state does not: home has not genuinely answered or failed yet.
+fn ends_for_widening(text: &str) -> bool {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| v["status"].as_str().map(str::to_owned))
+        .is_some_and(|s| matches!(s.as_str(), "answered" | "failed" | "timeout"))
 }
 
 /// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
@@ -1189,19 +1181,19 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     let cap = usize::from(ctx.budget)
         .saturating_sub(ctx.asked)
         .min(MAX_CALLS_PER_STEP);
-    // Home first (ADR 0122 amendment): while no step of this turn has asked `ask_genie` yet, and
-    // the catalog has a home workspace, only a call to home or to a workspace the question names
-    // may run. The rest get `HOME_FIRST_REFUSAL` without ever reaching the guard. After this
-    // step, every catalog workspace is open again, from the turn's next `ask_genie` step on.
+    // Home first (ADR 0122 amendment): while the turn has not yet widened, and the catalog has a
+    // home workspace, only a call to home or to a workspace the question names may run. The rest
+    // get `HOME_FIRST_REFUSAL` without ever reaching the guard. The turn widens (every catalog
+    // workspace opens, from the next `ask_genie` step on) only once a call to home itself is
+    // accepted by the guard and ends answered, failed or timeout: a blocked call, an unparsable
+    // one, or a call to a workspace the question merely names, must not widen it.
     let home_first = !ctx.widened && ctx.home_alias.is_some();
     let mut go = Vec::new();
     let mut blocked = Vec::new();
-    let mut any_ask_genie = false;
     for (i, c) in calls.iter().enumerate() {
         if c.name != guard::TOOL_NAME {
             continue;
         }
-        any_ask_genie = true;
         if home_first && !home_first_allows(ctx, c) {
             blocked.push(i);
         } else if go.len() < cap {
@@ -1209,36 +1201,48 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
         }
     }
     let done: &LoopCtx = ctx;
-    let (out, accepted) = thread::scope(|sc| {
+    let (out, accepted, home_ended) = thread::scope(|sc| {
         let hs: Vec<(usize, _)> = go
             .iter()
             .map(|&i| (i, sc.spawn(move || run_tool_call(done, &calls[i]))))
             .collect();
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
         let mut accepted = 0;
+        let mut home_ended = false;
         for (i, c) in calls.iter().enumerate() {
             if blocked.contains(&i) {
                 out[i] = Some(output_item(&c.call_id, HOME_FIRST_REFUSAL));
             } else if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
-                let (o, ok) = run_tool_call(done, c);
-                accepted += usize::from(ok && c.name == guard::TOOL_NAME);
-                out[i] = Some(o);
+                let (text, ok) = run_tool_call(done, c);
+                let is_ask = c.name == guard::TOOL_NAME;
+                accepted += usize::from(ok && is_ask);
+                if ok && is_ask && is_home_call(done, c) && ends_for_widening(&text) {
+                    home_ended = true;
+                }
+                out[i] = Some(output_item(&c.call_id, &text));
             }
         }
         for (i, h) in hs {
-            let (o, ok) = h
+            let (text, ok) = h
                 .join()
-                .unwrap_or_else(|_| (output_item(&calls[i].call_id, guard::RUN_STOPPED), false));
+                .unwrap_or_else(|_| (guard::RUN_STOPPED.to_owned(), false));
             accepted += usize::from(ok);
-            out[i] = Some(o);
+            if ok && is_home_call(done, &calls[i]) && ends_for_widening(&text) {
+                home_ended = true;
+            }
+            out[i] = Some(output_item(&calls[i].call_id, &text));
         }
-        (out.into_iter().flatten().collect::<Vec<_>>(), accepted)
+        (
+            out.into_iter().flatten().collect::<Vec<_>>(),
+            accepted,
+            home_ended,
+        )
     });
     // Only the calls that the guard accepted use up the budget of the cap.
     ctx.asked += accepted;
-    if any_ask_genie {
+    if home_ended {
         ctx.widened = true;
     }
     out
@@ -1368,7 +1372,6 @@ fn build_result(
     final_text: Option<&str>,
     usage: Usage,
     calls: &[CallRecord],
-    d1: bool,
     guard: &dyn OrchGuard,
 ) -> AgentTurnResult {
     let usage = Some(AgentUsage {
@@ -1424,7 +1427,9 @@ fn build_result(
     let answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
     AgentTurnResult {
         answer: Some(cut_answer(&answer)),
-        answer_kind: if d1 && cites_many_workspaces(&out) {
+        // Cross-workspace data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1
+        // removed), so an answer that cites more than one workspace is always Combined.
+        answer_kind: if cites_many_workspaces(&out) {
             AgentAnswerKind::Combined
         } else {
             AgentAnswerKind::Note
@@ -1487,6 +1492,78 @@ fn names_alias(text: &str, alias: &str) -> bool {
         |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'));
     t.match_indices(&a)
         .any(|(i, m)| !part(t[..i].chars().next_back()) && !part(t[i + m.len()..].chars().next()))
+}
+
+/// A workspace name that is also an everyday word. The bare word alone is too likely to appear
+/// in the question by coincidence ("the test failed", "what's the plan for main"), so the
+/// home-first exception (ADR 0122 amendment) needs a clear cue next to it.
+const COMMON_WORKSPACE_NAMES: &[&str] =
+    &["test", "default", "dev", "prod", "demo", "main", "staging"];
+
+/// One word of a question, normalized for `names_workspace`: lower case, with leading and
+/// trailing sentence punctuation stripped. `raw` keeps the word as written (quotes, `@`, case),
+/// for the cue check of a common name.
+struct QWord<'a> {
+    norm: String,
+    raw: &'a str,
+}
+
+/// Split `text` on white space, and within each white-space word, on a hyphen: spaces and
+/// hyphens are interchangeable ("log mog" names `log-mog`). Each piece keeps the white-space
+/// word it came from as `raw`, so a cue (`@`, quotes) next to the whole word is still visible.
+fn q_words(text: &str) -> Vec<QWord<'_>> {
+    let mut out = Vec::new();
+    for raw in text.split_whitespace() {
+        for piece in raw.split('-') {
+            let norm: String = piece
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            if !norm.is_empty() {
+                out.push(QWord { norm, raw });
+            }
+        }
+    }
+    out
+}
+
+/// Whether `raw` (the white-space word of a matched cue candidate) carries an `@` or a quote
+/// mark right against the word, as written in the question.
+fn has_at_or_quote(raw: &str) -> bool {
+    let quote = |c: char| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’');
+    raw.starts_with('@') || raw.starts_with(quote) || raw.ends_with(quote)
+}
+
+/// Whether the user's question names `name` as a workspace: its alias, its display name or its
+/// profile. A dedicated matcher for the home-first rule (ADR 0122 amendment); `names_alias` (used
+/// elsewhere, for the sources footer) has no multi-word, hyphen or common-name handling.
+///
+/// Matching is case-insensitive, ignores leading and trailing sentence punctuation on each word,
+/// and treats a space and a hyphen as the same separator. A name that is also an everyday word
+/// (`COMMON_WORKSPACE_NAMES`) matches only with a cue next to it: "in NAME", "NAME workspace",
+/// "@NAME", or "NAME" in quotes.
+pub(super) fn names_workspace(question: &str, name: &str) -> bool {
+    let want: Vec<String> = q_words(name).into_iter().map(|w| w.norm).collect();
+    let n = want.len();
+    if n == 0 {
+        return false;
+    }
+    let all = q_words(question);
+    if all.len() < n {
+        return false;
+    }
+    let Some(start) = (0..=all.len() - n).find(|&i| (0..n).all(|k| all[i + k].norm == want[k]))
+    else {
+        return false;
+    };
+    if n != 1 || !COMMON_WORKSPACE_NAMES.contains(&want[0].as_str()) {
+        return true;
+    }
+    // A common name needs a cue: "in NAME", "NAME workspace", "@NAME" or "NAME" in quotes.
+    let before = start.checked_sub(1).and_then(|i| all.get(i));
+    let after = all.get(start + 1);
+    before.is_some_and(|w| w.norm == "in")
+        || after.is_some_and(|w| w.norm == "workspace")
+        || has_at_or_quote(all[start].raw)
 }
 
 /// Bottle draws the sources of an answer itself (ADR 0122), so a sources footer that the model
