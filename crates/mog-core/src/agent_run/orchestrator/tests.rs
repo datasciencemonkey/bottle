@@ -707,7 +707,9 @@ fn two_workspaces_with_d1_on_give_a_combined_answer_that_cites_one_and_two() {
         FakeR8::answering(by_profile),
         ask_then_cite(&["sales", "finance"]),
     );
-    let (tid, o) = r.run("compare");
+    // The question names "finance" directly, so the home-first rule (ADR 0122 amendment) lets
+    // the model ask it alongside home in the turn's first step.
+    let (tid, o) = r.run("compare sales to finance");
     assert_eq!(o, AgentTurnOutcome::Answered);
     let res = r.host.turn_result(&tid).unwrap();
     assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
@@ -729,7 +731,9 @@ fn d1_off_gives_the_model_a_receipt_for_a_foreign_workspace() {
         FakeR8::answering(by_profile),
         ask_then_cite(&["finance"]),
     );
-    let (tid, o) = r.run("costs?");
+    // "finance" is named directly, so the home-first rule (ADR 0122 amendment) lets the model
+    // ask it at once, without asking home first.
+    let (tid, o) = r.run("what are the costs in finance?");
     assert_eq!(o, AgentTurnOutcome::Answered);
     let seen = outputs_in(&r.chat.body(1)).join("\n");
     assert!(!seen.contains("FINANCE-CANARY"), "{seen}");
@@ -746,9 +750,12 @@ fn a_refused_workspace_is_an_error_result_and_never_reaches_genie() {
         10,
         FakeR8::answering(by_profile),
         Box::new(|body, n| match n {
-            0 => reply_of(vec![ask_item("fc0", "ghost")]),
+            // "ghost" names no catalog workspace, so it cannot use the home-first exception: ask
+            // home first (ADR 0122 amendment), then ask "ghost" once the turn has widened.
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            1 => reply_of(vec![ask_item("fc1", "ghost")]),
             _ => {
-                assert_eq!(outputs_in(body), ["workspace_not_available"]);
+                assert_eq!(outputs_in(body).last().unwrap(), "workspace_not_available");
                 no_source_final()
             }
         }),
@@ -756,7 +763,7 @@ fn a_refused_workspace_is_an_error_result_and_never_reaches_genie() {
     let (tid, o) = r.run("q");
     assert_eq!(o, AgentTurnOutcome::Answered);
     assert_eq!(r.events.refusals(), [AgentRefusal::WorkspaceNotAvailable]);
-    assert_eq!(r.r8.count("genie_ask"), 0);
+    assert_eq!(r.r8.count("genie_ask"), 1);
     assert!(r.host.turn_result(&tid).unwrap().sources.is_empty());
 }
 
@@ -864,7 +871,9 @@ fn a_quarantined_answer_is_withheld_and_is_never_a_source() {
             }
         }),
     );
-    let (tid, o) = r.run("q");
+    // "finance" is named directly, so the home-first rule (ADR 0122 amendment) lets the model
+    // ask it at once, without asking home first.
+    let (tid, o) = r.run("q about finance");
     assert_eq!(o, AgentTurnOutcome::Answered);
     let res = r.host.turn_result(&tid).unwrap();
     assert_eq!(res.answer_kind, AgentAnswerKind::Hidden);
@@ -1888,7 +1897,9 @@ fn a_withheld_answer_leaves_no_history_for_the_follow_up() {
         FakeR8::answering(|_| EVIL),
         ask_once_then_cite("finance"),
     );
-    let (t1, _) = r.run("first");
+    // "finance" is named directly, so the home-first rule (ADR 0122 amendment) lets the model
+    // ask it at once, without asking home first.
+    let (t1, _) = r.run("first, about finance");
     assert_eq!(
         r.host.turn_result(&t1).unwrap().answer_kind,
         AgentAnswerKind::Hidden
@@ -2104,4 +2115,146 @@ fn refused_calls_do_not_shrink_the_cap_of_the_next_step() {
     let (_, o) = r.run("q");
     assert_eq!(o, AgentTurnOutcome::Answered);
     assert_eq!(r.r8.count("genie_ask"), 5);
+}
+
+// ---------- the home-first rule (ADR 0122 amendment) ----------
+
+/// A catalog with no workspace marked home: the home-first rule stays off (item 3 of the
+/// amendment).
+fn catalog_no_home() -> Vec<CatalogEntry> {
+    let e = |alias: &str, profile: &str| CatalogEntry {
+        alias: alias.into(),
+        profile: profile.into(),
+        name: alias.into(),
+        is_home: false,
+        is_agent_workspace: false,
+    };
+    vec![e("sales", "p-sales"), e("finance", "p-fin")]
+}
+
+#[test]
+fn a_broad_question_asks_only_home_in_the_first_step() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let outs = outputs_in(body);
+                assert_eq!(outs.len(), 2);
+                // "sales" (home) ran for real; "finance" got the home-first refusal.
+                assert!(outs[0].contains("<genie_answer"), "{outs:?}");
+                assert_eq!(outs[1], "ask_home_first");
+                no_source_final()
+            }
+        }),
+    );
+    let (_, o) = r.run("what was revenue?");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    // The refusal never reached the guard: no budget spent, no refusal event.
+    assert_eq!(r.r8.count("genie_ask"), 1);
+    assert!(r.events.refusals().is_empty());
+}
+
+#[test]
+fn a_named_workspace_is_asked_directly_in_the_first_step() {
+    let r = rig(
+        false,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "finance")]),
+            _ => {
+                let outs = outputs_in(body);
+                assert_eq!(outs.len(), 1);
+                assert_ne!(outs[0], "ask_home_first");
+                no_source_final()
+            }
+        }),
+    );
+    // "finance" is named in the question, so the model may ask it directly, with no home call.
+    let (_, o) = r.run("what does finance say about costs?");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.r8.count("genie_ask"), 1);
+}
+
+#[test]
+fn the_second_ask_genie_step_may_ask_any_catalog_workspace() {
+    // D1 on: a D1-off session would taint after the home (agent workspace) answer and refuse the
+    // widened call for a different reason (`cross_workspace_off`); that rule is unrelated to
+    // this test.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            // Home answered in step 0 with no hint that it lacks data; Rust does not police
+            // that judgment call. From the turn's second `ask_genie` step, every catalog
+            // workspace is open again.
+            1 => reply_of(vec![ask_item("fc1", "finance")]),
+            _ => {
+                let (w, c) = results_in(body).last().cloned().unwrap();
+                reply_of(vec![final_item(
+                    json!({"answer": "x [1]", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.r8.count("genie_ask"), 2);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.sources[0].workspace_id, "finance");
+}
+
+#[test]
+fn home_first_refusals_do_not_trip_the_three_refusals_stop() {
+    // D1 on: a D1-off session would taint after the home (agent workspace) answer and refuse the
+    // widened call for a different reason (`cross_workspace_off`); that rule is unrelated to
+    // this test.
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![
+                ask_item("fc0", "sales"),
+                ask_item("fc1", "finance"),
+                ask_item("fc2", "finance"),
+                ask_item("fc3", "ghost"),
+            ]),
+            // Three calls were refused in step 0 (finance, finance, ghost); none counted toward
+            // the three-refusals stop, so the turn is still live and may widen.
+            1 => reply_of(vec![ask_item("fc4", "finance")]),
+            _ => {
+                let (w, c) = results_in(body).last().cloned().unwrap();
+                reply_of(vec![final_item(
+                    json!({"answer": "x [1]", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert!(r.events.refusals().is_empty());
+    assert_eq!(r.r8.count("genie_ask"), 2);
+    assert!(r.host.turn_result(&tid).is_some());
+}
+
+#[test]
+fn with_no_home_workspace_in_the_catalog_the_old_parallel_behaviour_stays() {
+    let r = rig(
+        true,
+        10,
+        FakeR8::answering(by_profile),
+        ask_then_cite(&["sales", "finance"]),
+    );
+    r.ws.0.lock().unwrap().catalog = catalog_no_home();
+    let (tid, o) = r.run("compare");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.r8.count("genie_ask"), 2);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
 }

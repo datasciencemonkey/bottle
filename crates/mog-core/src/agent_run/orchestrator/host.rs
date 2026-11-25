@@ -615,6 +615,23 @@ impl Engine {
             cross_workspace: cross,
             agent_alias: agent_alias.as_deref(),
         });
+        // Home first (ADR 0122 amendment): the alias of the home workspace, and the catalog
+        // aliases that the question names directly. With no home in the catalog, both stay
+        // empty and `run_step` skips the rule (today's behaviour, unchanged).
+        let home_alias = catalog.iter().find(|c| c.is_home).map(|c| c.alias.clone());
+        let named_aliases: std::collections::HashSet<String> = if home_alias.is_some() {
+            catalog
+                .iter()
+                .filter(|c| {
+                    names_alias(&question, &c.alias)
+                        || names_alias(&question, &c.name)
+                        || names_alias(&question, &c.profile)
+                })
+                .map(|c| c.alias.clone())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut input: Vec<Value> = Vec::new();
         if let Some(s) = self.session.as_ref() {
             for turn in &s.history {
@@ -649,6 +666,9 @@ impl Engine {
             system,
             input,
             base,
+            home_alias,
+            named_aliases,
+            widened: false,
         };
         let tx = self.tx.clone();
         let tid = turn_id.clone();
@@ -972,6 +992,16 @@ struct LoopCtx {
     input: Vec<Value>,
     /// The index of the question in `input`.
     base: usize,
+    /// The alias of the home workspace, if the catalog has one (ADR 0122, "Home first"). `None`
+    /// keeps the pre-amendment behaviour: every catalog workspace is open from the first step.
+    home_alias: Option<String>,
+    /// The catalog aliases that the user's question names: its alias, its name or its profile,
+    /// word for word and case-insensitive. These may be asked directly on the home-first step,
+    /// like the home workspace.
+    named_aliases: std::collections::HashSet<String>,
+    /// True once a step of this turn has run at least one `ask_genie` call. The home-first rule
+    /// applies only while this is false.
+    widened: bool,
 }
 
 /// The tool that ends a turn: its arguments are the final answer. It has no side effect.
@@ -1125,6 +1155,30 @@ fn run_tool_call(ctx: &LoopCtx, call: &FnCall) -> (Value, bool) {
     (output_item(&call.call_id, &out.text), accepted)
 }
 
+/// Model-facing code: the home-first rule (ADR 0122 amendment) refuses this call of the turn's
+/// first `ask_genie` step. The call never reaches the guard, so it spends no Genie budget and
+/// never counts toward the three-refusals stop. Ask the home workspace, or a workspace the
+/// question names, instead; the rest open from the turn's second `ask_genie` step.
+const HOME_FIRST_REFUSAL: &str = "ask_home_first";
+
+/// Whether `call` may run on the turn's home-first step: it asks the home workspace, or the
+/// question names its workspace (`home_first_allows` reads the `workspace` argument itself, not
+/// the guard's parsed and checked one, since this runs before the guard sees the call). A call
+/// whose arguments do not hold a readable `workspace` string is left to the guard's own checks.
+fn home_first_allows(ctx: &LoopCtx, call: &FnCall) -> bool {
+    let Some(ws) = serde_json::from_str::<Value>(&call.arguments)
+        .ok()
+        .and_then(|v| {
+            v.get("workspace")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+    else {
+        return true;
+    };
+    ctx.home_alias.as_deref() == Some(ws.as_str()) || ctx.named_aliases.contains(&ws)
+}
+
 /// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
 /// others run one at a time on this thread, so the guard still checks them all.
 fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
@@ -1135,9 +1189,22 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     let cap = usize::from(ctx.budget)
         .saturating_sub(ctx.asked)
         .min(MAX_CALLS_PER_STEP);
+    // Home first (ADR 0122 amendment): while no step of this turn has asked `ask_genie` yet, and
+    // the catalog has a home workspace, only a call to home or to a workspace the question names
+    // may run. The rest get `HOME_FIRST_REFUSAL` without ever reaching the guard. After this
+    // step, every catalog workspace is open again, from the turn's next `ask_genie` step on.
+    let home_first = !ctx.widened && ctx.home_alias.is_some();
     let mut go = Vec::new();
+    let mut blocked = Vec::new();
+    let mut any_ask_genie = false;
     for (i, c) in calls.iter().enumerate() {
-        if c.name == guard::TOOL_NAME && go.len() < cap {
+        if c.name != guard::TOOL_NAME {
+            continue;
+        }
+        any_ask_genie = true;
+        if home_first && !home_first_allows(ctx, c) {
+            blocked.push(i);
+        } else if go.len() < cap {
             go.push(i);
         }
     }
@@ -1150,7 +1217,9 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
         let mut accepted = 0;
         for (i, c) in calls.iter().enumerate() {
-            if !go.contains(&i) {
+            if blocked.contains(&i) {
+                out[i] = Some(output_item(&c.call_id, HOME_FIRST_REFUSAL));
+            } else if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
                 let (o, ok) = run_tool_call(done, c);
@@ -1169,6 +1238,9 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     });
     // Only the calls that the guard accepted use up the budget of the cap.
     ctx.asked += accepted;
+    if any_ask_genie {
+        ctx.widened = true;
+    }
     out
 }
 

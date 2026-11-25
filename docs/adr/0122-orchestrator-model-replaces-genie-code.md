@@ -52,6 +52,36 @@ After the 0.1.6 test, the owner found these problems:
    - the Settings row.
    The guard, `agent-run.ts`, AgentTurnCard, the Conversations agent threads, the D1 switch and the wipe fence stay. They now serve the orchestrator loop.
 
+## Amendment: Home first (2026-11-24, owner decision)
+
+A test run showed a problem. One broad ⌥G question sent three parallel calls at once: one call
+to the home workspace, and two calls to other workspaces.
+
+The owner's rule (verbatim):
+
+> WE always start with just the home genie, when it says it doesnt have a response ONLY then
+> will we go to other workspaces. IF the workspace Profile is available, then you can use it
+> directly if the user intent categorically calls out the profile.
+
+6. **Home first.** The orchestrator model must ask the home workspace first. The model must wait
+   for its answer. The model must ask another workspace only after home answers that it has no
+   data, or that it cannot answer. The question may name a workspace by its alias or its name.
+   When it does, the model may ask that workspace at once. The model does not need to ask home
+   first in that case.
+
+   Rust enforces the rule too, because a model can ignore a prompt. On a turn's first step that
+   calls `ask_genie`, the orchestrator host admits two kinds of call only. The first kind asks the
+   home workspace. The second kind asks a workspace that the question names (its alias, its name
+   or its profile, word for word and case-insensitive). The host refuses every other call of that
+   step. The refusal code is `ask_home_first`. The refusal never reaches the guard. It spends no
+   Genie budget. It never counts toward the three-refusals stop.
+
+   From a turn's second step that calls `ask_genie`, every switched-on workspace is open again.
+   The model may ask them together, in one step, as before.
+
+   A catalog with no home workspace keeps the old behaviour. Every call goes through the normal
+   guard checks, from the first step.
+
 ## Consequences
 
 - Bottle owns a tool loop, so its step cap, time cap and tool list are security controls and need tests.
