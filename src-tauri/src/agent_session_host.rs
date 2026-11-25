@@ -14,6 +14,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -32,6 +33,7 @@ use mog_core::model_gateway::client::{CANCELLED, OFFLINE, SIGNED_OUT};
 use mog_core::model_gateway::invoke::{AbandonOnWipe, ModelInvokeComponent};
 use mog_core::model_gateway::models::{orchestrator_status, OrchestratorStatus};
 use mog_core::model_gateway::{ChatClient, ChatRequest};
+use mog_core::profile_login::LOGIN_TIMEOUT;
 use mog_core::types::TokenState;
 use mog_core::wipe::AgentWipeSlot;
 use mog_core::workspaces::SignInSource;
@@ -44,6 +46,58 @@ use crate::workspaces_host::WorkspacesHost;
 /// How long the code of a failed chat call counts for the status. After this, the next ask tries
 /// the model again.
 const ERROR_TTL: Duration = Duration::from_secs(30);
+
+/// How often [`wait_for_running_sign_in`] re-checks a profile's cached sign-in state.
+const SETTINGS_SIGN_IN_POLL: Duration = Duration::from_millis(500);
+
+/// `profile_reauth`, with `profile_exists` read as "Settings already runs its own 'Sign in…' for
+/// this profile right now": wait for it, in the same bound as a sign-in itself, instead of
+/// failing the agent's own attempt (ADR 0122 amendment, owner decision 2026-11-24, round 4). Any
+/// other error of `profile_reauth` is a plain failure, as it always was.
+fn reauth_or_wait_for_settings(
+    login: &dyn GatewayComponents,
+    sign_in: Option<&dyn SignInSource>,
+    profile: &str,
+) -> CoreResult<()> {
+    match login.call("profile_reauth", serde_json::json!({ "profile": profile })) {
+        Ok(_) => Ok(()),
+        Err(e) if e.code() == "profile_exists" => wait_for_running_sign_in(sign_in, profile),
+        Err(e) => Err(e),
+    }
+}
+
+/// Polls `sign_in.state(profile)` every [`SETTINGS_SIGN_IN_POLL`] until it is no longer
+/// `LoginRequired` (Settings' own sign-in ended, one way or another), or [`LOGIN_TIMEOUT`] passes.
+/// `sign_in` is `None` only when the sign-in source is not managed yet; then `profile_exists`
+/// stays a plain failure, since there is nothing here to wait on.
+fn wait_for_running_sign_in(sign_in: Option<&dyn SignInSource>, profile: &str) -> CoreResult<()> {
+    wait_for_running_sign_in_until(sign_in, profile, Instant::now() + LOGIN_TIMEOUT)
+}
+
+/// `wait_for_running_sign_in`, with its deadline passed in (a test's seam: `LOGIN_TIMEOUT` is 5
+/// min, too long to wait out for real).
+fn wait_for_running_sign_in_until(
+    sign_in: Option<&dyn SignInSource>,
+    profile: &str,
+    deadline: Instant,
+) -> CoreResult<()> {
+    let Some(sign_in) = sign_in else {
+        return Err(CoreError::IpcRefused {
+            code: "profile_exists",
+        });
+    };
+    loop {
+        if sign_in.state(profile) != TokenState::LoginRequired {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(CoreError::IpcRefused {
+                code: "profile_exists",
+            });
+        }
+        thread::sleep(SETTINGS_SIGN_IN_POLL);
+    }
+}
 
 /// The managed agent component.
 #[derive(Debug, Default)]
@@ -255,22 +309,35 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
         .map(|t| Arc::clone(t.inner()))
         .unwrap_or_default();
     let sign_in = handle.try_state::<McpHost>().map(|m| m.sign_in_source());
-    // Home first (ADR 0122 amendment, owner decision 2026-11-24): "sign in, then retry" reuses
-    // the exact `profile_reauth` flow (R5's `databricks auth login`, U2M OAuth) that "Sign in…"
-    // in Settings → Workspace already runs; this never writes a new OAuth implementation.
-    // `DedupReauth` adds only the "one sign-in at a time per profile" rule on top. With no
-    // `ProfileLoginHost` managed yet, every sign-in refuses cleanly instead of panicking.
-    let reauth: Arc<dyn ReauthService> =
-        match handle.try_state::<crate::profiles_host::ProfileLoginHost>() {
-            Some(login) => {
-                let login = login.0.clone();
-                Arc::new(DedupReauth::new(move |profile: &str| {
-                    login.call("profile_reauth", serde_json::json!({ "profile": profile }))?;
-                    Ok(())
-                }))
-            }
-            None => Arc::new(NoReauth),
-        };
+    // Home first (ADR 0122 amendment, owner decision 2026-11-24, generalized to every call and
+    // hardened in round 4): "sign in, then retry" reuses the exact `profile_reauth` flow (R5's
+    // `databricks auth login`, U2M OAuth) that "Sign in…" in Settings → Workspace already runs;
+    // this never writes a new OAuth implementation. `DedupReauth` adds only the "one sign-in at a
+    // time per profile" rule on top, and routes a Stop, the turn's hard deadline or a Wipe to the
+    // same `profile_login_cancel` that the Settings "Cancel" button uses, so none of them leaves
+    // the CLI child running or Settings' own "Sign in…" refused `profile_exists` afterwards. With
+    // no `ProfileLoginHost` managed yet, every sign-in refuses cleanly instead of panicking.
+    let reauth: Arc<dyn ReauthService> = match handle
+        .try_state::<crate::profiles_host::ProfileLoginHost>()
+    {
+        Some(login) => {
+            let run_login = login.0.clone();
+            let run_sign_in = sign_in.clone();
+            let cancel_login = login.0.clone();
+            Arc::new(DedupReauth::new(
+                move |profile: &str| {
+                    reauth_or_wait_for_settings(run_login.as_ref(), run_sign_in.as_deref(), profile)
+                },
+                move |profile: &str| {
+                    let _ = cancel_login.call(
+                        "profile_login_cancel",
+                        serde_json::json!({ "profile": profile }),
+                    );
+                },
+            ))
+        }
+        None => Arc::new(NoReauth),
+    };
     let deps = OrchDeps {
         guard: Arc::clone(guard.inner()),
         chat,
@@ -356,6 +423,91 @@ mod tests {
             component: "t",
             reason: code,
         })
+    }
+
+    /// A `SignInSource` whose `state` answers `LoginRequired` for its first `flips_after` calls,
+    /// then `Valid`: a Settings "Sign in…" that is still running, then ends.
+    #[derive(Default)]
+    struct FlippingTokens {
+        calls: std::sync::atomic::AtomicUsize,
+        flips_after: usize,
+    }
+
+    impl SignInSource for FlippingTokens {
+        fn state(&self, _: &str) -> TokenState {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < self.flips_after {
+                TokenState::LoginRequired
+            } else {
+                TokenState::Valid
+            }
+        }
+        fn probe(&self, _: &str, _: &str) -> CoreResult<()> {
+            Ok(())
+        }
+    }
+
+    /// A `GatewayComponents` of one closure, for `reauth_or_wait_for_settings`'s `login`.
+    struct FakeLogin<F>(F);
+
+    impl<F: Fn(Value) -> CoreResult<Value> + Send + Sync> GatewayComponents for FakeLogin<F> {
+        fn call(&self, _command: &'static str, args: Value) -> CoreResult<Value> {
+            (self.0)(args)
+        }
+    }
+
+    #[test]
+    fn reauth_or_wait_passes_through_a_successful_reauth() {
+        let login = FakeLogin(|_| Ok(Value::Null));
+        assert!(reauth_or_wait_for_settings(&login, None, "p-sales").is_ok());
+    }
+
+    #[test]
+    fn reauth_or_wait_passes_through_a_plain_failure_unchanged() {
+        let login = FakeLogin(|_| fail("profile_invalid"));
+        assert_eq!(
+            reauth_or_wait_for_settings(&login, None, "p-sales")
+                .unwrap_err()
+                .code(),
+            "profile_invalid"
+        );
+    }
+
+    #[test]
+    fn reauth_or_wait_waits_for_a_running_settings_sign_in_then_succeeds() {
+        // `profile_exists`: Settings already runs "Sign in…" for this profile. Round 4: wait
+        // for it (polling the cached state, not a new network probe) instead of failing.
+        let login = FakeLogin(|_| fail("profile_exists"));
+        let tokens = FlippingTokens {
+            calls: 0.into(),
+            flips_after: 2,
+        };
+        assert!(reauth_or_wait_for_settings(&login, Some(&tokens), "p-sales").is_ok());
+    }
+
+    #[test]
+    fn reauth_or_wait_fails_on_profile_exists_with_no_sign_in_source_to_wait_on() {
+        let login = FakeLogin(|_| fail("profile_exists"));
+        assert_eq!(
+            reauth_or_wait_for_settings(&login, None, "p-sales")
+                .unwrap_err()
+                .code(),
+            "profile_exists"
+        );
+    }
+
+    #[test]
+    fn wait_for_running_sign_in_times_out_if_it_never_ends() {
+        let tokens = FlippingTokens {
+            calls: 0.into(),
+            flips_after: usize::MAX,
+        };
+        // A deadline already past: the timeout path runs at once, not after a real wait.
+        assert_eq!(
+            wait_for_running_sign_in_until(Some(&tokens), "p-sales", Instant::now())
+                .unwrap_err()
+                .code(),
+            "profile_exists"
+        );
     }
 
     #[test]

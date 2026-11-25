@@ -95,38 +95,62 @@ The owner's rule (verbatim):
    A catalog with no home workspace keeps the old behaviour. Every call goes through the normal
    guard checks, from the first step.
 
-## Amendment: Home sign-in, then retry (2026-11-24, owner decision)
+## Amendment: Sign in, then retry (2026-11-24, owner decision; generalized and hardened in round 4)
 
-A `signed_out` home call is neither an answer nor "no data": home's token merely expired. The
+A `signed_out` call is neither an answer nor "no data": the workspace's token merely expired. The
 owner's rule (verbatim): "In the absence of a sign-in, or if the sign-in had expired, refresh the
 sign-in. The user is always going to be watching it, so it doesn't matter. You can just open up
 the browser to refresh the sign-in using the U2M OAuth."
 
-8. **A signed-out call to home never widens the turn on its own.** Instead the orchestrator host
-   starts home's browser sign-in and retries the call once:
+8. **A signed-out call never widens the turn on its own.** This applies to every `ask_genie` call,
+   not home alone: a workspace the question names directly on the home-first step, and any
+   workspace once the turn has widened, get the same rule. Instead the orchestrator host starts
+   that workspace's browser sign-in and retries the call once:
    - The sign-in is the existing `profile_reauth` flow (R5's `databricks auth login`, U2M OAuth):
      the same one "Sign in…" in Settings → Workspace already runs. There is no new OAuth
      implementation, and Rust still never keeps a token outside `TokenBroker`'s memory.
+   - It is keyed on the call's own catalog profile, not on home's: two workspaces that both go
+     signed out in the same turn each get their own sign-in.
    - One sign-in at a time per profile: a second trigger for a profile already signing in waits
      for that attempt's result, rather than opening a second browser window
      (`agent_run::reauth::DedupReauth`).
+   - At most one sign-in attempt per profile per turn: once a profile's sign-in fails, is
+     cancelled or times out, a later call to that same profile this turn returns `signed_out` at
+     once, with no further sign-in and no new browser window. A Stop is checked first, before any
+     of this: a stopped turn never starts, or waits on, a sign-in.
    - Before a turn starts, if the cached sign-in state (Settings → Workspace's own status; no new
      network probe) already shows home signed out, the first live attempt is skipped too: Bottle
-     signs in first, so it never spends a Genie call on a token it already knows is dead.
+     signs in first, so it never spends a Genie call on a token it already knows is dead. This
+     pre-seeding is home-only (the only profile the catalog snapshot carries ahead of a call).
    - The card shows a plain status while the sign-in runs ("Signing in to `<workspace>`… finish
      in your browser"), through the existing one-line pop-up, not a new UI element.
-   - A sign-in that fails, is cancelled or times out (the existing flow's own bound) leaves the
-     call signed out for good: home-first stays the rule, and the turn does not widen.
+   - A sign-in that fails, is cancelled or times out leaves the call `signed_out` for good: home-
+     first (for home) stays the rule, and the turn does not widen.
    - A withheld (quarantined) or stopped call still does not widen either, as before; neither is
      a sign-in problem.
+   - A signed-out first attempt and its one retry are both real guard admissions: the orchestrator
+     counts both against its own copy of the turn's budget, so it never believes more is left than
+     the guard's own ledger has.
+   - If Settings already runs its own "Sign in…" for the same profile, `profile_reauth` answers
+     `profile_exists`: Bottle treats that as "wait for it" (polling the cached sign-in state
+     within the sign-in's own bound), not a failure, then does the one retry.
+   - Stop, the turn's hard deadline (`HARD_AFTER`) and a Wipe all cancel an in-flight sign-in:
+     each ends a turn through the same `ctx.cancel` flag, which a watcher reacts to by calling
+     `ReauthService::cancel`, routed to the existing `profile_login_cancel` on the same
+     `ProfileLoginHost` that kills the running `databricks auth login` child. Settings' own
+     "Sign in…" is not left refused `profile_exists` afterwards.
 
-   **Contract change** (owner sign-off covers it, as part of this amendment): a new
+   **Contract change** (owner sign-off covers it, as part of this amendment; round 3): a new
    `AgentTurnEvent` variant, `signing_in { turnId, workspaceId }`, added to both
    `crates/mog-core/src/types.rs` and `src/shared/ipc.ts`, with its own fixture
-   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed.
+   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed. Round 4 added no
+   further contract change: `ReauthService::cancel` and the Settings `profile_exists` wait are
+   both internal to Rust.
 
-   **Known limit.** The sign-in blocks the turn's worker thread for its own bound (R5's existing
-   `databricks auth login` timeout); a Stop during that wait does not cut it short today.
+   **Known limit** (narrowed in round 4; the blocking-worker-thread limit it replaced is fixed).
+   The sign-in's own bound, and the poll for a running Settings sign-in, still run on the turn's
+   worker thread; a cancel now ends that wait promptly, but it does not force-close a browser tab
+   the OAuth flow already opened, only the local CLI child waiting on it.
 
 ## Amendment: D1 removed (2026-11-24, owner decision)
 

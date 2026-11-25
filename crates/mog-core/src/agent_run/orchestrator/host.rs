@@ -609,6 +609,17 @@ impl Engine {
         // aliases that the question names directly. With no home in the catalog, both stay
         // empty and `run_step` skips the rule (today's behaviour, unchanged).
         let home_alias = catalog.iter().find(|c| c.is_home).map(|c| c.alias.clone());
+        // The "sign in, then retry" rule (ADR 0122 amendment, round 4) keys its per-profile state
+        // on the catalog profile of a call's workspace alias, not on home's own profile: resolve
+        // every alias once, here, so the worker thread never needs the catalog again.
+        let profiles: HashMap<String, String> = catalog
+            .iter()
+            .map(|c| (c.alias.clone(), c.profile.clone()))
+            .collect();
+        let mut auth = HashMap::new();
+        if snap.home_signed_out {
+            auth.insert(profile.clone(), Auth::Dead);
+        }
         let named_aliases: std::collections::HashSet<String> = if home_alias.is_some() {
             catalog
                 .iter()
@@ -661,7 +672,8 @@ impl Engine {
             home_alias,
             named_aliases,
             widened: false,
-            home_signed_out: AtomicBool::new(snap.home_signed_out),
+            profiles,
+            auth: Mutex::new(auth),
         };
         let tx = self.tx.clone();
         let tid = turn_id.clone();
@@ -991,10 +1003,24 @@ struct LoopCtx {
     /// True once a step of this turn has run at least one `ask_genie` call. The home-first rule
     /// applies only while this is false.
     widened: bool,
-    /// Home's sign-in is known dead: the next call to home must sign in first, before it tries
-    /// to ask Genie at all (ADR 0122 amendment, owner decision 2026-11-24). Seeded from the
-    /// cached sign-in state at turn start; set and cleared again as calls to home end.
-    home_signed_out: AtomicBool,
+    /// The catalog profile of every alias, resolved once at turn start (ADR 0122 amendment,
+    /// round 4): the "sign in, then retry" rule keys its state on a call's own profile, not on
+    /// home's.
+    profiles: HashMap<String, String>,
+    /// The "sign in, then retry" rule's state of each profile that needed it this turn, by
+    /// profile (not alias): `Dead` (known signed out, no sign-in tried yet this turn) or
+    /// `Exhausted` (a sign-in was tried this turn and failed, timed out or was cancelled; no
+    /// retry and no new browser window for that profile for the rest of the turn). A profile with
+    /// no entry has never been seen signed out this turn. Home's entry is seeded `Dead` from the
+    /// cached sign-in state at turn start, if that already shows it signed out.
+    auth: Mutex<HashMap<String, Auth>>,
+}
+
+/// The "sign in, then retry" rule's state of one profile within a turn (see [`LoopCtx::auth`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Auth {
+    Dead,
+    Exhausted,
 }
 
 /// The tool that ends a turn: its arguments are the final answer. It has no side effect.
@@ -1209,37 +1235,157 @@ fn signed_out_output(call: &FnCall) -> String {
     json!({ "callId": call.call_id, "workspace": ws, "status": "signed_out" }).to_string()
 }
 
-/// Runs one call to the home workspace, with the owner's "sign in, then retry" rule (ADR 0122
-/// amendment, owner decision 2026-11-24): a `signed_out` result never widens home-first on its
-/// own. Instead Bottle starts home's browser sign-in (deduped: `ReauthService` waits for one
-/// already running) and retries the call once; the retry's own outcome is the one that counts.
-///
-/// When home's sign-in is already known dead (`ctx.home_signed_out`, seeded from the cached
-/// workspace-list status at turn start, or set by an earlier signed-out call this turn), the
-/// live attempt is skipped the first time too: Bottle signs in first, so it never spends a
-/// Genie call on a token it already knows is dead.
-///
-/// A sign-in that fails, is cancelled or times out leaves the call `signed_out` for good: home-
-/// first stays the rule, so the turn does not widen.
-fn run_home_call(ctx: &LoopCtx, call: &FnCall) -> (String, bool) {
-    if !ctx.home_signed_out.load(Ordering::SeqCst) {
-        let (text, ok) = run_tool_call(ctx, call);
-        if !(ok && status_of(&text).as_deref() == Some("signed_out")) {
-            return (text, ok);
+/// What running one call used: its output text, whether the guard accepted that final attempt
+/// (it used a budget slot: the widening check and the refusal counting both key off this, not
+/// the sign-in's own fate), and the total count of real guard admissions it spent (round 4: 1
+/// normally, 2 when a signed-out first attempt was followed by the one retry, 0 when the guard
+/// was never asked at all because the turn was stopped or the profile's one sign-in attempt for
+/// this turn was already spent).
+struct CallResult {
+    text: String,
+    accepted: bool,
+    used: usize,
+}
+
+impl CallResult {
+    fn stopped() -> Self {
+        Self {
+            text: guard::RUN_STOPPED.to_owned(),
+            accepted: false,
+            used: 0,
         }
+    }
+
+    fn signed_out(call: &FnCall) -> Self {
+        Self {
+            text: signed_out_output(call),
+            accepted: false,
+            used: 0,
+        }
+    }
+}
+
+/// The catalog profile that a call's `workspace` argument names, from `ctx.profiles` (resolved
+/// once at turn start). Falls back to home's own profile for a call whose workspace argument is
+/// missing or unrecognized, matching `home_first_allows`'s own leniency: such a call is left to
+/// the guard's own checks either way, and the sign-in rule needs some profile to key on.
+fn profile_for(ctx: &LoopCtx, call: &FnCall) -> String {
+    call_workspace(call)
+        .and_then(|ws| ctx.profiles.get(&ws).cloned())
+        .unwrap_or_else(|| ctx.profile.clone())
+}
+
+/// How often the sign-in watcher below checks for a Stop, the turn's hard deadline or a Wipe
+/// (every one of the three ends a turn the same way: `ctx.cancel` turns true), so an in-flight
+/// sign-in cannot block a worker thread well past any of them (ADR 0122 amendment, round 4).
+const REAUTH_CANCEL_POLL: Duration = Duration::from_millis(100);
+
+/// Runs `ctx.reauth.reauth(profile)`, with a watcher that calls `ctx.reauth.cancel(profile)` the
+/// moment `ctx.cancel` turns true while it is still blocked. `reauth` itself has no cancel token
+/// of its own to poll (it is whatever bound the real sign-in flow has), so the watcher is the
+/// seam: Stop, the hard deadline and a Wipe all set `ctx.cancel`, and nothing else does.
+fn reauth_watching_cancel(ctx: &LoopCtx, profile: &str) -> CoreResult<()> {
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let done = Arc::clone(&done);
+        let cancel = Arc::clone(&ctx.cancel);
+        let reauth = Arc::clone(&ctx.reauth);
+        let profile = profile.to_owned();
+        thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                if cancel.load(Ordering::SeqCst) {
+                    reauth.cancel(&profile);
+                    return;
+                }
+                thread::sleep(REAUTH_CANCEL_POLL);
+            }
+        })
+    };
+    let result = ctx.reauth.reauth(profile);
+    done.store(true, Ordering::SeqCst);
+    let _ = watcher.join();
+    result
+}
+
+/// Starts `profile`'s browser sign-in (deduped: `ReauthService` waits for one already running)
+/// and retries `call` once if it succeeds. `used` is how many real guard admissions `call` has
+/// already spent before this (0 when the profile was already known dead and the live attempt was
+/// skipped; 1 when a live attempt just came back `signed_out`).
+///
+/// A sign-in that fails, is cancelled or times out leaves the call `signed_out`, and marks the
+/// profile `Exhausted`: home-first (for home) stays the rule, and no later call to the same
+/// profile this turn tries to sign in again (owner decision 2026-11-24, round 4: at most one
+/// sign-in attempt per profile per turn).
+fn sign_in_and_retry(ctx: &LoopCtx, call: &FnCall, profile: &str, used: usize) -> CallResult {
+    if ctx.cancel.load(Ordering::SeqCst) {
+        return CallResult {
+            used,
+            ..CallResult::stopped()
+        };
     }
     ctx.events.emit(AgentEvent::Turn(AgentTurnEvent::SigningIn {
         turn_id: ctx.turn_id.clone(),
         workspace_id: call_workspace(call).unwrap_or_default(),
     }));
-    match ctx.reauth.reauth(&ctx.profile) {
+    match reauth_watching_cancel(ctx, profile) {
         Ok(()) => {
-            ctx.home_signed_out.store(false, Ordering::SeqCst);
-            run_tool_call(ctx, call)
+            lock(&ctx.auth).remove(profile);
+            let (text, ok) = run_tool_call(ctx, call);
+            CallResult {
+                text,
+                accepted: ok,
+                used: used + usize::from(ok),
+            }
         }
         Err(_) => {
-            ctx.home_signed_out.store(true, Ordering::SeqCst);
-            (signed_out_output(call), false)
+            lock(&ctx.auth).insert(profile.to_owned(), Auth::Exhausted);
+            CallResult {
+                used,
+                ..CallResult::signed_out(call)
+            }
+        }
+    }
+}
+
+/// Runs one `ask_genie` call, with the owner's "sign in, then retry" rule (ADR 0122 amendment,
+/// owner decision 2026-11-24, generalized to every call in round 4: a named foreign workspace on
+/// the home-first step, and any widened workspace, not home alone). A `signed_out` result never
+/// counts on its own: see [`sign_in_and_retry`]. The widening rule itself stays tied to the home
+/// workspace alone; `run_step` decides that, from this call's own output.
+fn run_call(ctx: &LoopCtx, call: &FnCall) -> CallResult {
+    if ctx.cancel.load(Ordering::SeqCst) {
+        return CallResult::stopped();
+    }
+    if call.name != guard::TOOL_NAME {
+        // Not `ask_genie`: no profile of its own, so the sign-in rule does not apply. Unchanged
+        // from before round 4, it always reaches the guard, which refuses it.
+        let (text, ok) = run_tool_call(ctx, call);
+        return CallResult {
+            text,
+            accepted: ok,
+            used: usize::from(ok),
+        };
+    }
+    let profile = profile_for(ctx, call);
+    // Read the state and drop the lock before an arm below locks `ctx.auth` again (`sign_in_and_
+    // retry` does, on both of its outcomes): a `match` on the lock call itself would otherwise
+    // hold the guard for every arm, not just the read, and self-deadlock on the second lock.
+    let state = lock(&ctx.auth).get(&profile).copied();
+    match state {
+        Some(Auth::Exhausted) => CallResult::signed_out(call),
+        Some(Auth::Dead) => sign_in_and_retry(ctx, call, &profile, 0),
+        None => {
+            let (text, ok) = run_tool_call(ctx, call);
+            let used = usize::from(ok);
+            if ok && status_of(&text).as_deref() == Some("signed_out") {
+                sign_in_and_retry(ctx, call, &profile, used)
+            } else {
+                CallResult {
+                    text,
+                    accepted: ok,
+                    used,
+                }
+            }
         }
     }
 }
@@ -1260,9 +1406,9 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     // workspace opens, from the next `ask_genie` step on) only once a call to home itself is
     // accepted by the guard and ends answered, failed, timeout or no-answer (see
     // `ends_for_widening`): a blocked call, an unparsable one, or a call to a workspace the
-    // question merely names, must not widen it. A signed-out call to home never widens on its
-    // own either: `run_home_call` signs it in and retries once first (owner decision
-    // 2026-11-24), and it is that retry's own outcome which decides.
+    // question merely names, must not widen it. A signed-out call to home never widens on its own
+    // either: `run_call` signs it in and retries once first (owner decision 2026-11-24), and it
+    // is that retry's own outcome which decides.
     let home_first = !ctx.widened && ctx.home_alias.is_some();
     let mut go = Vec::new();
     let mut blocked = Vec::new();
@@ -1277,21 +1423,13 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
         }
     }
     let done: &LoopCtx = ctx;
-    // Home's own call goes through the sign-in-and-retry rule; every other call runs plainly.
-    let call_fn = |c: &FnCall| -> (String, bool) {
-        if is_home_call(done, c) {
-            run_home_call(done, c)
-        } else {
-            run_tool_call(done, c)
-        }
-    };
-    let (out, accepted, home_ended) = thread::scope(|sc| {
+    let (out, asked, home_ended) = thread::scope(|sc| {
         let hs: Vec<(usize, _)> = go
             .iter()
-            .map(|&i| (i, sc.spawn(move || call_fn(&calls[i]))))
+            .map(|&i| (i, sc.spawn(move || run_call(done, &calls[i]))))
             .collect();
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
-        let mut accepted = 0;
+        let mut asked = 0;
         let mut home_ended = false;
         for (i, c) in calls.iter().enumerate() {
             if blocked.contains(&i) {
@@ -1299,33 +1437,31 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
             } else if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
-                let (text, ok) = call_fn(c);
-                let is_ask = c.name == guard::TOOL_NAME;
-                accepted += usize::from(ok && is_ask);
-                if ok && is_ask && is_home_call(done, c) && ends_for_widening(&text) {
+                let r = run_call(done, c);
+                asked += r.used;
+                if r.accepted && is_home_call(done, c) && ends_for_widening(&r.text) {
                     home_ended = true;
                 }
-                out[i] = Some(output_item(&c.call_id, &text));
+                out[i] = Some(output_item(&c.call_id, &r.text));
             }
         }
         for (i, h) in hs {
-            let (text, ok) = h
-                .join()
-                .unwrap_or_else(|_| (guard::RUN_STOPPED.to_owned(), false));
-            accepted += usize::from(ok);
-            if ok && is_home_call(done, &calls[i]) && ends_for_widening(&text) {
+            let r = h.join().unwrap_or_else(|_| CallResult::stopped());
+            asked += r.used;
+            if r.accepted && is_home_call(done, &calls[i]) && ends_for_widening(&r.text) {
                 home_ended = true;
             }
-            out[i] = Some(output_item(&calls[i].call_id, &text));
+            out[i] = Some(output_item(&calls[i].call_id, &r.text));
         }
         (
             out.into_iter().flatten().collect::<Vec<_>>(),
-            accepted,
+            asked,
             home_ended,
         )
     });
-    // Only the calls that the guard accepted use up the budget of the cap.
-    ctx.asked += accepted;
+    // Every real guard admission counts, including a signed-out first attempt that a retry
+    // followed: one model-facing `ask_genie` call can spend up to two (round 4).
+    ctx.asked += asked;
     if home_ended {
         ctx.widened = true;
     }
