@@ -70,7 +70,8 @@ Windows and Linux are work in progress. Ignore any Windows installer on this pag
 
 ## Known issues
 
-- If you change your audio output device during a call, system audio can go quiet for the rest of
-  that call. Stop and start the recording again.
+- Bottle restarts system audio capture when you change your audio output device during a call.
+  With AirPods or a USB headset this is new and less tested. If the other side goes quiet, stop
+  and start the recording again.
 - The app is not notarized. macOS shows a warning on first launch.
 - Windows and Linux builds are not ready.
