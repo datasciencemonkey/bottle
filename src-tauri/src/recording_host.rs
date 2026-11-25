@@ -139,9 +139,12 @@ pub const CAPTURE_CHECK_FILE: &str = "last-capture.json";
 
 /// Write the content-free check of `rec` to `<root>/last-capture.json` (user-only): the
 /// counts of what reached the writer, the part count, the length, the stop cause, the system
-/// audio state and its open diagnostics (CAP-10c: how long the system audio tap took to
-/// resolve, and whether that took longer than its timeout). No samples, levels, names, paths,
-/// profile or text.
+/// audio state, its open diagnostics (CAP-10c: how long the system audio tap took to resolve,
+/// and whether that took longer than its timeout), its real sample rate and the transport kind
+/// of the device that lent its clock (owner review 2026-11-26, "9" and "11"), how many times
+/// it was rebuilt after a device-change fault ("2"), and the per-step stop timings ("7"). No
+/// samples, levels, names, paths, profile or text, and never a device name (`systemDeviceKind`
+/// is one of the fixed, content-free codes in [`mog_core::audio_device::DeviceKind`]).
 pub fn write_capture_check(root: &std::path::Path, rec: &FinishedRecording) -> std::io::Result<()> {
     let v = serde_json::json!({
         "capture": rec.capture,
@@ -151,6 +154,10 @@ pub fn write_capture_check(root: &std::path::Path, rec: &FinishedRecording) -> s
         "systemAudio": rec.system_audio.code(),
         "systemOpenMs": rec.system_open_ms,
         "systemOpenTimedOut": rec.system_open_timed_out,
+        "systemSampleRateHz": rec.system_sample_rate_hz,
+        "systemDeviceKind": rec.system_device_kind,
+        "systemRebuilds": rec.system_rebuilds,
+        "stopTimings": rec.stop_timings,
     });
     let path = root.join(CAPTURE_CHECK_FILE);
     let mut o = std::fs::OpenOptions::new();
@@ -190,20 +197,35 @@ impl PartsHandoff for HandoffSlot {
     }
 
     fn finished(&self, rec: FinishedRecording) {
-        if let Some(root) = rec.dir.parent() {
-            let _ = write_capture_check(root, &rec);
-        }
         let to = {
             let mut st = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             match &st.to {
                 Some(to) => Arc::clone(to),
                 None => {
+                    // Not yet connected: nothing is dispatched, so `handoff_ms` stays the 0
+                    // the session already set.
+                    if let Some(root) = rec.dir.parent() {
+                        let _ = write_capture_check(root, &rec);
+                    }
                     st.pending.push(rec);
                     return;
                 }
             }
         };
+        // `stop_timings.handoff_ms` (owner review 2026-11-26, "7"): the session cannot time
+        // its own call into this hand-off, so this is the one place that can, and the one
+        // implementation that writes `last-capture.json` is the one that fills it in before
+        // writing. Normally quick (a spawn, not the upload itself, which runs afterward on its
+        // own thread).
+        let root = rec.dir.parent().map(std::path::Path::to_path_buf);
+        let mut check = rec.clone();
+        let started = std::time::Instant::now();
         to.finished(rec);
+        check.stop_timings.handoff_ms =
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(root) = root {
+            let _ = write_capture_check(&root, &check);
+        }
     }
 }
 

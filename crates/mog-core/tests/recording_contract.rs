@@ -135,6 +135,40 @@ fn sec_02b_a_bad_settings_patch_is_invalid_args() {
     );
 }
 
+/// ADR 0123, the general rule ("E"/"10", owner review 2026-11-26): Bottle calls only
+/// `system.ai.*` ids. A write that would set either endpoint outside that namespace is
+/// refused outright (the same `invalid_args` code a malformed request already uses — no new
+/// contract error code), and the store is left untouched, rather than silently accepted and
+/// only corrected on the next load.
+#[test]
+fn rec_settings_write_refuses_a_non_system_ai_endpoint() {
+    let (c, store) = component(RecordingSettings::default());
+    for patch in [
+        json!({"transcribeEndpoint": "my-own-model"}),
+        json!({"notesEndpoint": "databricks-claude-sonnet-5-5"}),
+    ] {
+        assert_eq!(
+            code(c.call("recording_settings_write", json!({ "patch": patch }))),
+            "invalid_args",
+            "{patch}"
+        );
+    }
+    // Refused, so the store still has the system.ai defaults, not a half-applied patch.
+    let s = store.load().unwrap();
+    assert_eq!(s.transcribe_endpoint.as_str(), "system.ai.gemini-3-8-flash");
+    assert_eq!(s.notes_endpoint.as_str(), "system.ai.claude-sonnet-5-5");
+    // A `system.ai.*` id, even one other than the default, is accepted.
+    c.call(
+        "recording_settings_write",
+        json!({"patch": {"notesEndpoint": "system.ai.gpt-oss-20b"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        store.load().unwrap().notes_endpoint.as_str(),
+        "system.ai.gpt-oss-20b"
+    );
+}
+
 #[test]
 fn cap_06_every_other_recording_command_is_a_typed_stub() {
     let (c, _) = component(RecordingSettings::default());

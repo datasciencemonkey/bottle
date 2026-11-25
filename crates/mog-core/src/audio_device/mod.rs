@@ -104,6 +104,58 @@ pub type DataFn = Box<dyn FnMut(Interleaved<'_>) + Send + 'static>;
 /// The error callback of one stream. It may run on any host thread.
 pub type FaultFn = Box<dyn FnMut(StreamFault) + Send + 'static>;
 
+/// A device's transport, classified content-free (owner review 2026-11-26, "9"): never a
+/// device name, never a string that could hold one. [`DeviceKind::None`] is a build that found
+/// no device at all (for the system audio tap: no default output device).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DeviceKind {
+    /// Not read, or the transport did not map to a known kind.
+    #[default]
+    Unknown,
+    /// Built into the Mac (speakers, the internal mic).
+    BuiltIn,
+    /// USB.
+    Usb,
+    /// Bluetooth or Bluetooth LE (for example AirPods).
+    Bluetooth,
+    /// A virtual or aggregate device.
+    Virtual,
+    /// A transport this app does not classify further (PCI, FireWire, HDMI, Thunderbolt, ...).
+    Other,
+    /// No device was found at all (not a classification of a real device).
+    None,
+}
+
+impl DeviceKind {
+    /// The stable, content-free wire code (`last-capture.json`).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::BuiltIn => "built_in",
+            Self::Usb => "usb",
+            Self::Bluetooth => "bluetooth",
+            Self::Virtual => "virtual",
+            Self::Other => "other",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Content-free diagnostics of a backend's last build (CAP-10c and owner review 2026-11-26,
+/// "9" and "11"): never a device name, a path or audio. The default is what a backend that
+/// does not implement this yet reports (today, Windows).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StreamDiagnostics {
+    /// The real sample rate of the last built stream, read after the stream (or, for a tap,
+    /// its aggregate) exists, not assumed. 0 when never built.
+    pub sample_rate_hz: u32,
+    /// The transport of the device the clock (or the one input device) came from.
+    pub device_kind: DeviceKind,
+    /// How many times the current stream has been rebuilt after a device-change fault, within
+    /// the open that is live now.
+    pub rebuilds: u32,
+}
+
 /// The seam between [`MicDevice`] and an audio API. Only the audio thread calls it, so neither
 /// the host nor its stream needs to be `Send`.
 pub trait MicHost: 'static {
@@ -116,6 +168,13 @@ pub trait MicHost: 'static {
 
     /// Start a built stream. The OS mic indicator comes on here.
     fn play(&mut self, stream: &Self::Stream) -> Result<(), DeviceError>;
+
+    /// Content-free diagnostics of the last [`MicHost::build`] (success or failure): the real
+    /// sample rate and the device's transport kind, for `last-capture.json`. The default has
+    /// nothing to report.
+    fn diagnostics(&self) -> StreamDiagnostics {
+        StreamDiagnostics::default()
+    }
 
     /// The device preference for the next [`MicHost::build`] (CAP-22). The audio thread calls
     /// it just before each build, never at launch. The default ignores it.

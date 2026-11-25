@@ -396,6 +396,14 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
     toHub(HUB_RECORDING_EVENT, m);
   };
 
+  /**
+   * Set only while the most recent list read itself failed (review "3" of the 2026-11-26
+   * round): `publishList` still shows the last rows it has, not an emptied list, with this
+   * added so the hub can say the read failed without losing what was already known.
+   */
+  let listUnavailable = false;
+  let listErrorNotice: RecordingNotice | undefined;
+
   const publishList = () => {
     if (gone) return;
     const sorted = [...rows].sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? 1 : -1));
@@ -417,6 +425,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       }),
     };
     if (problem) out.storageProblem = problem;
+    if (listUnavailable) out.unavailable = true;
+    if (listErrorNotice) out.error = listErrorNotice;
     if (batch) {
       const states = [...batch.state.values()];
       out.uploadAll = {
@@ -443,27 +453,45 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   let catchUpTimer: (() => void) | undefined;
   /**
    * How long to wait before re-reading the list while a take is still uploading,
-   * transcribing or writing notes ("A" review 2026-11-25/26): `recording.job` is not sticky
-   * and nothing else polls, so a missed or dropped event must not leave the row stale for
-   * good. Short on purpose: a take usually moves on in seconds, and this only ever fires
-   * while something is still in flight.
+   * transcribing or writing notes, or the list itself just failed to read ("A" review
+   * 2026-11-25/26, then "6" of the 2026-11-26 round): `recording.job` is not sticky and
+   * nothing else polls, so a missed or dropped event (or a transient list failure) must not
+   * leave things stale for good. Doubles each time this poll itself has to fire again (3, 6,
+   * 12, … up to `CATCH_UP_MAX_MS`), and resets to the base the moment a real `recording.job`
+   * event arrives — a sign that updates are flowing normally again.
    */
-  const CATCH_UP_MS = 3_000;
+  const CATCH_UP_BASE_MS = 3_000;
+  const CATCH_UP_MAX_MS = 60_000;
+  let catchUpDelayMs = CATCH_UP_BASE_MS;
+  const resetCatchUpBackoff = () => {
+    catchUpDelayMs = CATCH_UP_BASE_MS;
+  };
   const IN_FLIGHT_STATUSES: ReadonlySet<RecordingStatus> = new Set([
     'recording',
     'uploading',
     'transcribing',
     'writing_notes',
   ]);
-  /** Re-read the list shortly, only while a row is still in flight, so a missed job event
-   * (or a slow first read right after launch) still catches up on its own. One timer at a
-   * time: each call replaces the one before it. */
-  const scheduleCatchUp = () => {
+  /**
+   * Re-read the list shortly, so a missed job event (or a slow or failed first read) still
+   * catches up on its own. `force` arms it even with nothing in flight (review "6": the
+   * list-failure path, which has no row statuses to check at all). The live take itself
+   * (`currentName`) never alone justifies a poll: it is expected to stay `recording` for the
+   * whole call, that is not something stalled. One timer at a time: each call replaces the
+   * one before it.
+   */
+  const scheduleCatchUp = (force = false) => {
     catchUpTimer?.();
     catchUpTimer = undefined;
-    if (gone || !rows.some((r) => IN_FLIGHT_STATUSES.has(r.status))) return;
-    catchUpTimer = schedule(clock.now() + CATCH_UP_MS, () => {
+    const inFlight = rows.some((r) => r.id !== currentName && IN_FLIGHT_STATUSES.has(r.status));
+    if (gone || !(force || inFlight)) {
+      if (!force) resetCatchUpBackoff();
+      return;
+    }
+    const delay = catchUpDelayMs;
+    catchUpTimer = schedule(clock.now() + delay, () => {
       catchUpTimer = undefined;
+      catchUpDelayMs = Math.min(catchUpDelayMs * 2, CATCH_UP_MAX_MS);
       void refreshList();
     });
   };
@@ -507,20 +535,33 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       recOn = on;
       deps.mood?.callRecording(on);
       if (on) {
-        // "D" review 2026-11-25/26: a new take becomes the selected row the moment it starts,
-        // not only once it stops, so the detail pane never keeps showing an old recording
-        // while this one runs.
+        // "D" review 2026-11-25/26, then "4" and "5" of the 2026-11-26 round: a new take
+        // becomes the selected row the moment it starts, not only once it stops, so the
+        // detail pane never keeps showing an old recording while this one runs. `currentName`
+        // is set unconditionally, even with no name (nothing to track then either way).
+        currentName = s.name;
         if (s.name) {
-          currentName = s.name;
-          void showDetail(s.name);
+          detailId = s.name;
+          // Select it, but do not fetch `detail` yet ("4"): there is nothing to show for a
+          // still-recording take (no transcript, no notes) and the call would just fail or
+          // run long. The detail pane follows this id for real once it is worth fetching:
+          // the first `recording.job` event (`onJob`, below), or the stop case below.
+          if (!gone)
+            toHub(HUB_RECORDING_DETAIL_EVENT, { id: s.name, status: 'recording', turns: [] });
         }
+        void refreshList();
         void warnIfLocalOnly();
       } else {
         // The call ended (Stop, ⌥R or the length): read the list now, so its row shows at
         // once and goes on to uploading, transcribing and notes, also with no job event yet.
-        // Re-select the same take (its own id does not change at the stop) so Stop does not
-        // leave an older recording's detail showing.
-        if (currentName) void showDetail(currentName);
+        // Re-select the same take ("5"), but only if the user has not picked a different row
+        // to look at during the call: `detailId` still being `currentName` (the auto-select
+        // above, untouched since) or unset either way means nothing of the user's own choice
+        // would be lost. A deliberate pick survives the stop.
+        if (currentName && (detailId === currentName || detailId === undefined)) {
+          void showDetail(currentName);
+        }
+        currentName = undefined;
         void refreshList();
       }
     }
@@ -616,16 +657,21 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       if (mine !== listSeq) return;
       rows = read;
       listed = true;
+      listUnavailable = false;
+      listErrorNotice = undefined;
     } catch (e) {
       if (mine !== listSeq) return;
+      // Review "3" of the 2026-11-26 round: a failed read keeps the last rows this brain
+      // already has (never blanks the list to `[]`) and only adds the notice on top, since
+      // every recording exists locally first and this is the one call that could not run,
+      // not proof that nothing exists.
       const code = codeOf(e);
-      if (!gone)
-        toHub(
-          HUB_RECORDINGS_EVENT,
-          PROFILE_CODES.has(code)
-            ? { rows: [], unavailable: true, error: recordingNotice(code) }
-            : { rows: [], unavailable: true },
-        );
+      listUnavailable = true;
+      listErrorNotice = PROFILE_CODES.has(code) ? recordingNotice(code) : undefined;
+      publishList();
+      // "6": arm one retry on this path too, through the same bounded, backing-off timer the
+      // in-flight catch-up uses.
+      scheduleCatchUp(true);
       return;
     }
     for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r.status);
@@ -729,7 +775,10 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       publishList();
       // `recording.job` is not sticky and nothing else polls ("A" review 2026-11-25/26): keep
       // a bounded catch-up armed in case the next event is missed, until the row reaches a
-      // terminal status.
+      // terminal status. A real event arriving is evidence updates are flowing normally
+      // again, so the backoff resets to its base ("6" of the 2026-11-26 round) rather than
+      // keeping whatever it had climbed to.
+      resetCatchUpBackoff();
       scheduleCatchUp();
     } else void refreshList();
     if (j.status === 'done' && before !== 'done') {

@@ -441,6 +441,18 @@ impl GatewayComponents for RecordingComponent {
                 let a: RecordingSettingsWriteArgs =
                     serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
                 let next = self.settings.load()?.apply(a.patch);
+                // ADR 0123, the general rule ("E"/"10", owner review 2026-11-26): Bottle calls
+                // only `system.ai.*` ids. A write that would leave either endpoint outside
+                // that namespace is refused outright, with the same `invalid_args` code a
+                // malformed request already uses above (no new contract error code), rather
+                // than silently accepted and only corrected on the next load.
+                if !crate::recording_cloud::settings_store::is_system_ai_endpoint(
+                    next.transcribe_endpoint.as_str(),
+                ) || !crate::recording_cloud::settings_store::is_system_ai_endpoint(
+                    next.notes_endpoint.as_str(),
+                ) {
+                    return Err(refused("invalid_args"));
+                }
                 self.settings.save(&next)?;
                 if let Some(link) = self.link() {
                     (link.on_knob)(next.enabled);

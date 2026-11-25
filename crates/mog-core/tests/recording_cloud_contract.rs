@@ -19,20 +19,34 @@ use mog_core::recording_cloud::contract::{
 use mog_core::recording_cloud::errors::ErrorKind;
 use mog_core::recording_cloud::http::ScriptedHttp;
 use mog_core::recording_cloud::job::{iso_utc, parse_iso_utc_ms, JobManifest, PartEntry};
+use mog_core::recording_cloud::sidecar::Sidecar;
 use mog_core::types::{RecordingErrorKind, RecordingSettings, RecordingSummary};
 use serde_json::{json, Value};
 
-/// A fixed set of names with temp audio on the device (ADR 0103 decision 7), and a fixed set
-/// of names that are active (capture still owns them, or they are not yet handed off; review
-/// of #592, BLOCKING B3).
-struct FakeLocal(Vec<(String, u64)>, HashSet<String>);
+/// A fixed set of names with temp audio on the device (ADR 0103 decision 7), a fixed set of
+/// names that are active (capture still owns them, or they are not yet handed off; review of
+/// #592, BLOCKING B3), and a fixed set of names that have a local sidecar (review of
+/// 2026-11-26, "3": a sidecar is evidence a run began, read while the volume itself could not
+/// be checked at all).
+struct FakeLocal(Vec<(String, u64)>, HashSet<String>, HashSet<String>);
 
 impl FakeLocal {
     fn new(names: Vec<(String, u64)>) -> Self {
-        Self(names, HashSet::new())
+        Self(names, HashSet::new(), HashSet::new())
     }
     fn with_active(names: Vec<(String, u64)>, active: &[&str]) -> Self {
-        Self(names, active.iter().map(|s| (*s).to_owned()).collect())
+        Self(
+            names,
+            active.iter().map(|s| (*s).to_owned()).collect(),
+            HashSet::new(),
+        )
+    }
+    fn with_sidecars(names: Vec<(String, u64)>, sidecars: &[&str]) -> Self {
+        Self(
+            names,
+            HashSet::new(),
+            sidecars.iter().map(|s| (*s).to_owned()).collect(),
+        )
     }
 }
 
@@ -45,6 +59,11 @@ impl LocalAudio for FakeLocal {
     }
     fn active(&self) -> HashSet<String> {
         self.1.clone()
+    }
+    fn sidecar(&self, name: &str) -> Option<Sidecar> {
+        self.2
+            .contains(name)
+            .then(|| Sidecar::new(name, name, 0, "fake-home", None))
     }
 }
 
@@ -406,15 +425,48 @@ fn rec_component_list_leaves_out_the_recording_running_now() {
     assert!(rows[0].get("errorKind").is_none(), "{v}");
 }
 
-/// Regression ("A", owner review 2026-11-25/26): a transport fault on the volume listing
-/// itself (offline, a token hiccup, a slow network right after launch) must never blank the
-/// whole list. Every recording exists locally first, whether or not it ever reaches the
-/// volume, so `recording_list` must still show the local and live rows even when the one
-/// network call that lists the volume's own job.json files fails outright.
+/// Regression ("A", owner review 2026-11-25/26, then "3" of the 2026-11-26 round): a
+/// transport-class fault on the volume listing itself (offline, a token hiccup not yet
+/// refreshed, a 5xx) must never blank the whole list, and must never claim a local recording
+/// "failed" either — this app genuinely does not know whether it already reached the volume.
+/// A name with a local sidecar (evidence a run began) shows as still in progress ("uploading"),
+/// never `failed` and never `onDeviceOnly`.
 #[test]
-fn rec_component_list_shows_local_rows_even_when_the_volume_listing_itself_fails() {
+fn rec_component_list_shows_a_sidecar_as_uploading_when_the_volume_listing_itself_fails() {
     let http = Arc::new(ScriptedHttp::new());
-    // Not a 404 (an empty volume, already handled): a genuine transport fault.
+    // Not a 404 (an empty volume, already handled): a genuine transport-class fault.
+    http.on(
+        "files.list_directory",
+        Err(mog_core::error::CoreError::Unavailable {
+            component: "R7",
+            reason: "offline",
+        }),
+    );
+    let local: Arc<dyn LocalAudio> = Arc::new(FakeLocal::with_sidecars(
+        vec![(NAME.to_owned(), 1_795_097_100_000)],
+        &[NAME],
+    ));
+    let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
+    let v = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "the local recording must still show: {v}");
+    assert_eq!(rows[0]["id"], NAME);
+    assert_eq!(rows[0]["status"], "uploading", "never a false 'failed'");
+    assert_eq!(
+        rows[0]["onDeviceOnly"],
+        Value::Null,
+        "never a false 'on device only'"
+    );
+}
+
+/// Same fault, but with no local sidecar at all (never started through `LiveHandoff`, or an
+/// older build): with nothing to go on, the row is left out rather than guessed at either way.
+/// The very next successful list corrects this regardless.
+#[test]
+fn rec_component_list_leaves_out_a_name_with_no_sidecar_when_the_volume_listing_itself_fails() {
+    let http = Arc::new(ScriptedHttp::new());
     http.on(
         "files.list_directory",
         Err(mog_core::error::CoreError::Unavailable {
@@ -428,11 +480,25 @@ fn rec_component_list_shows_local_rows_even_when_the_volume_listing_itself_fails
     let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
         .unwrap();
-    let rows = v.as_array().unwrap();
-    assert_eq!(rows.len(), 1, "the local recording must still show: {v}");
-    assert_eq!(rows[0]["id"], NAME);
-    assert_eq!(rows[0]["status"], "failed");
-    assert_eq!(rows[0]["onDeviceOnly"], true);
+    assert_eq!(v.as_array().unwrap().len(), 0, "{v}");
+}
+
+/// A real, actionable fault on the volume listing (signed out, no permission, a bad root)
+/// still propagates as before: the user needs to see and fix it, it is never silently hidden
+/// behind a seemingly-empty list (review "3").
+#[test]
+fn rec_component_list_still_propagates_a_real_fault_on_the_volume_listing() {
+    let http = Arc::new(ScriptedHttp::new());
+    http.json(
+        "files.list_directory",
+        403,
+        json!({"error_code":"PERMISSION_DENIED"}),
+    );
+    let (c, _, _) = component(&http, vol());
+    let e = c
+        .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap_err();
+    assert_eq!(e.code(), "volume_permission");
 }
 
 #[test]

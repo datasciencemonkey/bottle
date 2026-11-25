@@ -52,7 +52,15 @@ use std::time::{Duration, Instant};
 
 use crate::capture::{AudioDevice, AudioSource, DeviceError};
 
-use super::{codes, mix_to_mono, DataFn, FaultFn, FrameSink, MicFrame, MicHost, StreamFault};
+use super::{
+    codes, mix_to_mono, DataFn, FaultFn, FrameSink, MicFrame, MicHost, StreamDiagnostics,
+    StreamFault,
+};
+
+/// How many times one open rebuilds its stream after a device-change fault before it gives up
+/// and goes mic-only (owner review 2026-11-26, "2"): a device that keeps flapping (a failing
+/// Bluetooth link, a USB hub resetting) must not retry forever on the `bottle-sysaudio` thread.
+const MAX_REBUILDS_PER_OPEN: u32 = 5;
 
 /// How long `open` waits for the system audio stream (CAP-10c). Short on purpose:
 /// `capture.rs`'s `open_needed` holds the device mutex for this whole wait, so a long one
@@ -119,6 +127,9 @@ pub struct SystemAudioStatus(Arc<Shared>);
 struct Shared {
     availability: AtomicU8,
     resolution: Mutex<Resolution>,
+    /// The last build's diagnostics (owner review 2026-11-26, "9" and "11"): content-free,
+    /// for `last-capture.json`. Overwritten on every build attempt, success or failure.
+    diagnostics: Mutex<StreamDiagnostics>,
 }
 
 impl SystemAudioStatus {
@@ -141,6 +152,17 @@ impl SystemAudioStatus {
     /// finished after that same wait.
     pub fn timed_out(&self) -> bool {
         lock(&self.0.resolution).timed_out
+    }
+
+    /// Content-free diagnostics of the last build attempt (owner review 2026-11-26, "9" and
+    /// "11"): the real sample rate, the device's transport kind, and how many times the
+    /// current stream has been rebuilt within this open. Never a device name.
+    pub fn diagnostics(&self) -> StreamDiagnostics {
+        *lock(&self.0.diagnostics)
+    }
+
+    fn set_diagnostics(&self, d: StreamDiagnostics) {
+        *lock(&self.0.diagnostics) = d;
     }
 
     /// `open` is about to wait for `generation`: clear any diagnostics an older, unresolved
@@ -409,7 +431,10 @@ struct Worker {
 
 impl Worker {
     fn run<H: MicHost>(self, mut host: H, rx: Receiver<Msg>) {
-        let mut current: Option<(u64, H::Stream)> = None;
+        // The middle `u32` is how many times this generation's stream has been rebuilt after
+        // a device-change fault (owner review 2026-11-26, "2"): `MAX_REBUILDS_PER_OPEN` caps
+        // it, so a flapping device cannot retry forever.
+        let mut current: Option<(u64, u32, H::Stream)> = None;
         for msg in rx {
             match msg {
                 Msg::Open {
@@ -420,6 +445,7 @@ impl Worker {
                 } => {
                     self.drop_stream(&mut current);
                     let result = self.build(&mut host, generation);
+                    self.status.set_diagnostics(host.diagnostics());
                     // CAP-10c: this is the one place that sets `status` for an open, whether
                     // it answers in time or late (the `open` call may already have given up
                     // and gone on mic-only; this corrects it either way through `resolve`,
@@ -428,7 +454,7 @@ impl Worker {
                     let timed_out = started.elapsed() > timeout;
                     let answer = match result {
                         Ok(stream) => {
-                            current = Some((generation, stream));
+                            current = Some((generation, 0, stream));
                             self.status.resolve(
                                 generation,
                                 SystemAudioAvailability::Live,
@@ -466,13 +492,28 @@ impl Worker {
                     match fault {
                         StreamFault::Transient | StreamFault::Rerouted => {}
                         StreamFault::Invalidated => {
-                            // One new build on the new default output, under the same open.
+                            let rebuilds = current.as_ref().map_or(0, |c| c.1);
                             self.drop_stream(&mut current);
+                            if rebuilds >= MAX_REBUILDS_PER_OPEN {
+                                // The device keeps flapping: stop retrying on this open and go
+                                // mic-only. A fresh `recording_start` still gets a clean slate
+                                // (a new generation, `rebuilds` starts over at 0).
+                                self.status.set(SystemAudioAvailability::Unavailable);
+                                continue;
+                            }
+                            // Another build, under the same open, with its own fresh fault
+                            // listeners on the new aggregate and sub-device IDs.
                             match self.build(&mut host, generation) {
-                                Ok(stream) => current = Some((generation, stream)),
+                                Ok(stream) => {
+                                    let mut diag = host.diagnostics();
+                                    diag.rebuilds = rebuilds + 1;
+                                    self.status.set_diagnostics(diag);
+                                    current = Some((generation, rebuilds + 1, stream));
+                                }
                                 // `open_cancelled`: a `close` or a newer `open` ran meanwhile
                                 // and owns `status` now; any other error is a genuine loss.
                                 Err(e) if e != codes::OPEN_CANCELLED => {
+                                    self.status.set_diagnostics(host.diagnostics());
                                     self.status.set(SystemAudioAvailability::Unavailable);
                                 }
                                 Err(_) => {}
@@ -539,7 +580,15 @@ impl Worker {
         })
     }
 
-    fn drop_stream<S>(&self, current: &mut Option<(u64, S)>) {
+    /// Take `current` and drop its stream. Owner review 2026-11-26, "7": a real stream's own
+    /// `Drop` can itself take far longer than any bound this worker enforces on itself
+    /// (`close`'s own `close_wait` bounds only how long the *caller* waits, not this thread).
+    /// The macOS tap backend (the one real-world case this matters for: `AudioDeviceStop` on a
+    /// tap whose IO proc never ran) moves its own slow teardown to a detached thread inside
+    /// its own `Drop`, so it returns here quickly without this generic code needing every
+    /// backend's stream to be `Send` (a `cpal::Stream`, the Windows backend's, is not on every
+    /// platform).
+    fn drop_stream<S>(&self, current: &mut Option<(u64, u32, S)>) {
         // Stop the frames first, then drop the stream outside the sink lock (a host may wait
         // for a running data callback when its stream drops).
         lock(&self.sink).live = None;

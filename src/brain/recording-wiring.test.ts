@@ -379,12 +379,18 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(rows.map((r) => r.id)).toEqual(['new']);
   });
 
-  it('[REC-H9] the end of a call reads the list at once, so the new row shows with no job event', async () => {
+  it('[REC-H9] start and stop each read the list at once, so the new row shows with no job event', async () => {
     const t = setup({ enabled: true, consentAck: true });
     // The record key starts it (no hub click): only recording.state reaches the brain.
-    t.fake.pushState({ phase: 'recording', startedAtMs: 100, endsAtMs: 3_600_100 });
+    // "4" of the 2026-11-26 round: the start itself now reads the list too, not only the stop.
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-24_1741',
+    });
     await flush();
-    expect(t.fake.api.list).not.toHaveBeenCalled();
+    expect(t.fake.api.list).toHaveBeenCalledTimes(1);
     t.fake.rows.push({
       id: '2026-11-24_1741',
       name: '2026-11-24_1741',
@@ -394,7 +400,7 @@ describe('recording wiring (brain, ADR 0103)', () => {
     });
     t.fake.pushState({ phase: 'idle' });
     await flush();
-    expect(t.fake.api.list).toHaveBeenCalledTimes(1);
+    expect(t.fake.api.list).toHaveBeenCalledTimes(2);
     const rows = t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows ?? [];
     expect(rows[0]).toMatchObject({ id: '2026-11-24_1741', status: 'uploading' });
   });
@@ -466,6 +472,124 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.fake.api.list.mock.calls.length).toBe(reads);
   });
 
+  it('[REC-H9] the live take alone never arms the catch-up poll ("6")', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.fake.rows.length = 0;
+    t.fake.rows.push({
+      id: '2026-11-25_0628',
+      name: '2026-11-25_0628',
+      startedAt: 100,
+      durationS: 0,
+      status: 'recording',
+    });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    const reads = t.fake.api.list.mock.calls.length;
+    await s.runUntil(60_000, { settle: true });
+    await flush();
+    // The take still recording is expected to stay `recording` for the whole call: that
+    // alone is not something stalled, so it must never by itself arm a poll.
+    expect(t.fake.api.list.mock.calls.length).toBe(reads);
+  });
+
+  it('[REC-H9] a list that rejects is retried, with the backoff resetting once it recovers ("6")', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    // A first, successful read, so there is something to keep when the next one fails.
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows).toHaveLength(3);
+    t.fake.api.list.mockRejectedValueOnce({ error: 'offline' });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.unavailable).toBe(true);
+    // The last known rows (the fixture's three) are kept, never blanked to `[]` ("3").
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.rows).toHaveLength(3);
+    const readsAfterFailure = t.fake.api.list.mock.calls.length;
+    // The one retry ("6") fires on its own, with no further click.
+    await s.runUntil(10_000, { settle: true });
+    await flush();
+    expect(t.fake.api.list.mock.calls.length).toBeGreaterThan(readsAfterFailure);
+    expect(t.last<HubRecordings>(HUB_RECORDINGS_EVENT)?.unavailable).toBeUndefined();
+  });
+
+  it('[REC-H9] repeated list failures back off up to the cap ("6")', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.fake.api.list.mockRejectedValue({ error: 'offline' });
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const firstRetryAt = s.clock.now();
+    await s.runUntil(4_000, { settle: true });
+    await flush();
+    const afterFirstRetry = t.fake.api.list.mock.calls.length;
+    expect(afterFirstRetry).toBeGreaterThan(1);
+    // The next retry does not fire again within the base delay: it backed off past it.
+    await s.runUntil(firstRetryAt + 4_000, { settle: true });
+    await flush();
+    expect(t.fake.api.list.mock.calls.length).toBe(afterFirstRetry);
+  });
+
+  it('[REC-D] a failed detail fetch for a live take still shows a plain fallback ("4")', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    // The first `recording.job` event is when `detail` is finally fetched for this id ("4");
+    // make that one fetch reject, as it genuinely can for a take whose files are not all in
+    // the volume yet.
+    t.fake.api.detail.mockRejectedValueOnce(new Error('not found'));
+    t.fake.rows.push({
+      id: '2026-11-25_0628',
+      name: '2026-11-25_0628',
+      startedAt: 100,
+      durationS: 0,
+      status: 'uploading',
+    });
+    t.fake.pushJob({ id: '2026-11-25_0628', status: 'uploading' });
+    await flush();
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)).toMatchObject({
+      id: '2026-11-25_0628',
+      status: 'uploading',
+      turns: [],
+      unavailable: true,
+    });
+  });
+
+  it('[REC-D] a detail row picked by the user during the call survives the stop ("5")', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.pushState({
+      phase: 'recording',
+      startedAtMs: 100,
+      endsAtMs: 3_600_100,
+      name: '2026-11-25_0628',
+    });
+    await flush();
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.id).toBe('2026-11-25_0628');
+    // The user looks at a different, unrelated recording while the call still runs.
+    t.click({ action: 'recordings.detail', id: 'r1' });
+    await flush();
+    expect(t.fake.api.detail).toHaveBeenLastCalledWith('r1');
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.id).toBe('r1');
+    const detailCallsBeforeStop = t.fake.api.detail.mock.calls.length;
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    // The stop must not pull the user back to the take that just finished: their own pick
+    // stands, and no extra `detail` fetch runs for the recording either.
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.id).toBe('r1');
+    expect(t.fake.api.detail.mock.calls.length).toBe(detailCallsBeforeStop);
+  });
+
   it('[REC-D] a new take becomes the selected row when it starts, and stays selected when it stops', async () => {
     const t = setup({ enabled: true, consentAck: true });
     t.fake.pushState({
@@ -475,10 +599,17 @@ describe('recording wiring (brain, ADR 0103)', () => {
       name: '2026-11-25_0628',
     });
     await flush();
-    expect(t.fake.api.detail).toHaveBeenLastCalledWith('2026-11-25_0628');
-    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)?.id).toBe('2026-11-25_0628');
+    // "4" of the 2026-11-26 round: selected at once, but no `detail` call yet for a take
+    // that is still recording (nothing to show: no transcript, no notes).
+    expect(t.fake.api.detail).not.toHaveBeenCalled();
+    expect(t.last<HubRecordingDetail>(HUB_RECORDING_DETAIL_EVENT)).toMatchObject({
+      id: '2026-11-25_0628',
+      status: 'recording',
+      turns: [],
+    });
     t.fake.pushState({ phase: 'idle' });
     await flush();
+    // At the stop, `detail` is finally fetched for real.
     expect(t.fake.api.detail).toHaveBeenLastCalledWith('2026-11-25_0628');
   });
 

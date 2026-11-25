@@ -1128,7 +1128,12 @@ impl RecordingCloudService {
 
     // ---------- list, detail, link ----------
 
-    /// The recordings in `<root>/Bottle/Recordings/`, newest first (from each job.json).
+    /// The recordings in `<root>/Bottle/Recordings/`, newest first (from each job.json). A
+    /// transport-class fault (offline, a token not yet refreshed, a 5xx) reads as
+    /// [`ErrorKind::Offline`], not [`ErrorKind::VolumeNotFound`] (owner review 2026-11-26,
+    /// "3"): the volume may well exist, this call just could not read it this time, and the
+    /// contract seam (`CloudAdapter::list`) treats that as degradable, never as "no volume".
+    /// `403` and a genuine transport sign-in fault still map to their own real kinds.
     pub fn list(&self, p: &str, root: &str) -> Result<Vec<JobManifest>, RecordingError> {
         let e = RecordingError::new;
         let root = VolumeRoot::parse(root).map_err(e)?;
@@ -1141,12 +1146,12 @@ impl RecordingCloudService {
             }
             let r = self
                 .send(p, "files.list_directory", params, ReqBody::None)
-                .map_err(|x| e(from_core(&x, ErrorKind::VolumeNotFound)))?;
+                .map_err(|x| e(from_core(&x, ErrorKind::Offline)))?;
             if r.status == 404 {
                 return Ok(Vec::new());
             }
             if !r.ok() {
-                return Err(e(from_files_status(r.status, ErrorKind::VolumeNotFound)));
+                return Err(e(from_files_status(r.status, ErrorKind::Offline)));
             }
             for c in r
                 .json()

@@ -51,6 +51,10 @@ fn rec(dir: &std::path::Path, id: &str, profile: Option<&str>, parts: usize) -> 
         system_audio: SystemAudioState::Ok,
         system_open_ms: 0,
         system_open_timed_out: false,
+        system_sample_rate_hz: 0,
+        system_device_kind: "unknown",
+        system_rebuilds: 0,
+        stop_timings: Default::default(),
         profile: profile.map(str::to_owned),
         instructions: Some("Only action items.".into()),
         capture: Default::default(),
@@ -687,6 +691,18 @@ fn rec_capture_check_file_holds_counts_only() {
     done.capture.first_system_ms = Some(42);
     done.system_open_ms = 8_600;
     done.system_open_timed_out = true;
+    // Owner review 2026-11-26, "9" and "11": the real sample rate and the device kind.
+    done.system_sample_rate_hz = 48_000;
+    done.system_device_kind = "bluetooth";
+    // "2": how many times this open's stream was rebuilt after a device-change fault.
+    done.system_rebuilds = 2;
+    // "7": per-step stop timings.
+    done.stop_timings = mog_core::recording_capture::session::StopTimings {
+        capture_stop_ms: 11,
+        disarm_ms: 1,
+        writer_join_ms: 3,
+        handoff_ms: 0,
+    };
     bottle_lib::recording_host::write_capture_check(&root, &done).unwrap();
     let text = std::fs::read_to_string(root.join("last-capture.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -695,6 +711,12 @@ fn rec_capture_check_file_holds_counts_only() {
     assert_eq!(v["capture"]["firstSystemMs"], 42);
     assert_eq!(v["systemOpenMs"], 8_600);
     assert_eq!(v["systemOpenTimedOut"], true);
+    assert_eq!(v["systemSampleRateHz"], 48_000);
+    assert_eq!(v["systemDeviceKind"], "bluetooth");
+    assert_eq!(v["systemRebuilds"], 2);
+    assert_eq!(v["stopTimings"]["captureStopMs"], 11);
+    assert_eq!(v["stopTimings"]["disarmMs"], 1);
+    assert_eq!(v["stopTimings"]["writerJoinMs"], 3);
     assert_eq!(v["parts"], 0);
     assert_eq!(v["cause"], "user");
     for secret in [

@@ -34,3 +34,10 @@ pub const AUDIO_THREAD_GONE: DeviceError = DeviceError {
 pub const SYSTEM_AUDIO_UNSUPPORTED: DeviceError = DeviceError {
     code: "system_audio_unsupported",
 };
+/// The macOS process tap needs a real device to lend the aggregate a clock, and the system
+/// has no default output device at all (owner review 2026-11-26, "9"): distinct from
+/// [`DEVICE_FAILED`] so this specific, recoverable-by-plugging-something-in case is not lost
+/// in the generic code.
+pub const NO_OUTPUT_DEVICE: DeviceError = DeviceError {
+    code: "no_output_device",
+};

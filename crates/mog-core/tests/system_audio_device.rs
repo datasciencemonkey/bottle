@@ -227,3 +227,120 @@ fn rec_open_close_open_while_the_first_play_is_still_blocked() {
     wait_for(|| status.get() == SystemAudioAvailability::Live);
     dev.close(AudioSource::SystemAudio);
 }
+
+/// A host whose `build` is instant and keeps the `on_fault` callback of its most recent build
+/// reachable from the test (review of 2026-11-26, "2"): a device-change listener on the real
+/// macOS tap calls this same callback; here the test calls it directly, to drive the worker's
+/// rebuild logic with no Core Audio involved at all.
+#[derive(Clone, Default)]
+struct FaultableHost {
+    builds: Arc<AtomicUsize>,
+    dropped: Arc<AtomicUsize>,
+    fault: Arc<Mutex<Option<FaultFn>>>,
+}
+
+struct FaultableStream(Arc<AtomicUsize>);
+impl Drop for FaultableStream {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl MicHost for FaultableHost {
+    type Stream = FaultableStream;
+
+    fn build(
+        &mut self,
+        _on_data: DataFn,
+        on_fault: FaultFn,
+    ) -> Result<FaultableStream, DeviceError> {
+        self.builds.fetch_add(1, Ordering::SeqCst);
+        *self.fault.lock().unwrap() = Some(on_fault);
+        Ok(FaultableStream(Arc::clone(&self.dropped)))
+    }
+
+    fn play(&mut self, _stream: &FaultableStream) -> Result<(), DeviceError> {
+        Ok(())
+    }
+}
+
+impl FaultableHost {
+    /// Call the live stream's own `on_fault` with `fault`, the same as a property listener on
+    /// the real tap would.
+    fn trigger(&self, fault: mog_core::audio_device::StreamFault) {
+        (self.fault.lock().unwrap().as_mut().unwrap())(fault);
+    }
+}
+
+/// Review of 2026-11-26, "2": a device that keeps sending `Invalidated` (a flapping Bluetooth
+/// link, a USB hub resetting) must not rebuild forever on the `bottle-sysaudio` thread. After
+/// the worker's cap of rebuilds within one open, it gives up and goes mic-only instead of
+/// trying again, and a later, unrelated fault is simply ignored (nothing left to rebuild).
+#[test]
+fn rec_repeated_invalidated_faults_rebuild_up_to_a_cap_then_give_up() {
+    let host = FaultableHost::default();
+    let got = Arc::new(AtomicUsize::new(0));
+    let sink = CountSink(Arc::clone(&got));
+    let h = host.clone();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(sink), Duration::from_secs(5)).unwrap();
+
+    dev.open(AudioSource::SystemAudio).unwrap();
+    assert_eq!(status.get(), SystemAudioAvailability::Live);
+    assert_eq!(
+        host.builds.load(Ordering::SeqCst),
+        1,
+        "the first, normal build"
+    );
+
+    // The cap (`MAX_REBUILDS_PER_OPEN` in `system.rs`) is 5: this device keeps flapping well
+    // past it.
+    for _ in 0..8 {
+        host.trigger(mog_core::audio_device::StreamFault::Invalidated);
+        // Each rebuild is a fresh `build()` on the worker thread; give it a moment, since the
+        // trigger above itself runs synchronously on the test thread, not the worker's.
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    wait_for(|| host.builds.load(Ordering::SeqCst) >= 6);
+    // Exactly 1 (the open) + 5 (the cap) builds: the 6th, 7th and 8th `Invalidated` never
+    // rebuild again once the cap is spent.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        host.builds.load(Ordering::SeqCst),
+        6,
+        "one open build, then exactly the capped number of rebuilds, never more"
+    );
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Unavailable,
+        "a device that keeps flapping ends mic-only, not stuck retrying forever"
+    );
+
+    dev.close(AudioSource::SystemAudio);
+}
+
+/// A fault other than `Invalidated` never rebuilds (review of 2026-11-26, "2" only covers
+/// device-change faults): `Transient` and `Rerouted` are no-ops, `Fatal` drops the stream and
+/// goes mic-only at once, with no rebuild attempt at all.
+#[test]
+fn rec_a_fatal_fault_drops_the_stream_with_no_rebuild_attempt() {
+    let host = FaultableHost::default();
+    let got = Arc::new(AtomicUsize::new(0));
+    let sink = CountSink(Arc::clone(&got));
+    let h = host.clone();
+    let (dev, status) =
+        SystemAudioDevice::spawn(move || h, Box::new(sink), Duration::from_secs(5)).unwrap();
+
+    dev.open(AudioSource::SystemAudio).unwrap();
+    assert_eq!(status.get(), SystemAudioAvailability::Live);
+    host.trigger(mog_core::audio_device::StreamFault::Fatal);
+    wait_for(|| status.get() == SystemAudioAvailability::Unavailable);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        host.builds.load(Ordering::SeqCst),
+        1,
+        "a fatal fault never rebuilds"
+    );
+
+    dev.close(AudioSource::SystemAudio);
+}

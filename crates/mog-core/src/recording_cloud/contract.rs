@@ -409,6 +409,25 @@ impl CloudAdapter {
         })
     }
 
+    /// The row of a recording with a local sidecar while the volume itself could not be read
+    /// at all (owner review 2026-11-26, "3"): never `Failed` (this app does not know that it
+    /// failed) and never `on_device_only` (it may already be in the volume); `Uploading` is
+    /// the honest "still in progress, as far as this app can tell right now".
+    fn uncertain_row(name: &str, started_at_ms: u64) -> Option<RecordingSummary> {
+        Some(RecordingSummary {
+            id: RecordingId::try_from(name.to_owned()).ok()?,
+            name: name.to_owned(),
+            started_at_ms,
+            duration_s: 0,
+            status: RecordingStatus::Uploading,
+            error_kind: None,
+            error_stage: None,
+            parts_uploaded: None,
+            parts_total: None,
+            on_device_only: false,
+        })
+    }
+
     /// May Retry start a run on `m`? Only a failed run, or one whose job.json went stale.
     fn retry_allowed(&self, m: &JobManifest) -> bool {
         match m.status {
@@ -946,16 +965,20 @@ impl RecordingCloud for CloudAdapter {
         profile: &ProfileName,
         storage: &RecordingStorage,
     ) -> RecordingResult<Vec<RecordingSummary>> {
-        // A transport fault on the volume listing itself (offline, a token hiccup, a slow
-        // network right after launch) must never blank the whole list (review of #592, "A",
-        // 2026-11-25/26): every recording exists locally first, whether or not it has ever
-        // reached the volume, so the local and live rows below still have to show. A 404
-        // (nothing in the volume yet) already reads as zero rows here (`cloud::list`); a
-        // genuine fault now reads the same way instead of refusing the whole call.
-        let rows = self
-            .service
-            .list(profile.as_str(), Self::root(storage))
-            .unwrap_or_default();
+        // A transport-class fault on the volume listing itself (offline, a token hiccup not
+        // yet refreshed, a 5xx) must never blank the whole list (review of #592, "A",
+        // 2026-11-25/26, then "3" of 2026-11-26's round): every recording exists locally
+        // first, whether or not it has ever reached the volume, so the local and live rows
+        // below still have to show. A 404 (nothing in the volume yet) already reads as zero
+        // rows here (`cloud::list`); a transport-class fault now reads the same way. A real,
+        // actionable fault (signed out, no volume permission, a bad root) still propagates:
+        // the user needs to see and fix that, it is never silently hidden.
+        let (rows, volume_unreadable) =
+            match self.service.list(profile.as_str(), Self::root(storage)) {
+                Ok(rows) => (rows, false),
+                Err(e) if is_transient(e.kind) => (Vec::new(), true),
+                Err(e) => return Err(err(e)),
+            };
         let active = self.local.active();
         let now = (self.now_ms)();
         // A job.json that is neither done nor failed and stopped changing belongs to a run that
@@ -1039,6 +1062,17 @@ impl RecordingCloud for CloudAdapter {
             }
             if active.contains(name) {
                 out.extend(Self::recording_row(name, *started));
+            } else if volume_unreadable {
+                // The volume itself could not be read at all this time (review "3", round 2
+                // of 2026-11-26): this app genuinely does not know whether this local audio
+                // ever reached it, is mid-upload, or is already done, so it must never claim
+                // "failed". A sidecar (`LiveHandoff` wrote it at the start) is some evidence a
+                // run began: show it as still in progress. With no sidecar either, leave it
+                // out rather than guess wrong; the next successful list corrects this either
+                // way.
+                if self.local.sidecar(name).is_some() {
+                    out.extend(Self::uncertain_row(name, *started));
+                }
             } else if let Some(s) = Self::local_only_summary(name, *started) {
                 out.push(s);
             }

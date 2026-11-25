@@ -201,6 +201,24 @@ pub enum Snapshot {
     Recording(ActiveInfo),
 }
 
+/// Per-step stop timings (owner review 2026-11-26, "7"), content-free, ms each. `capture_stop_ms`
+/// is `capture.stop` as a whole: it closes the system audio device, then the mic, in that
+/// order (R2 does not expose a per-device split yet, so this is one bucket, not two).
+/// `handoff_ms` is the hand-off call into the cloud side's own dispatch (normally a quick
+/// spawn, not the upload itself, which runs on its own thread afterward).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopTimings {
+    /// `capture.stop`: releases the R2 lease, which closes the system audio device and the mic.
+    pub capture_stop_ms: u64,
+    /// [`RecordingTap::disarm`].
+    pub disarm_ms: u64,
+    /// The writer thread's `join`: flushes and closes the open part.
+    pub writer_join_ms: u64,
+    /// The hand-off's own dispatch call (not the upload it starts).
+    pub handoff_ms: u64,
+}
+
 /// A finished recording, handed to the cloud side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinishedRecording {
@@ -225,6 +243,17 @@ pub struct FinishedRecording {
     pub system_open_ms: u64,
     /// CAP-10c diagnostic: that resolution took longer than the timeout in force for it.
     pub system_open_timed_out: bool,
+    /// The real sample rate of the system audio device's last build (owner review 2026-11-26,
+    /// "11"), 0 if none ever built.
+    pub system_sample_rate_hz: u32,
+    /// The transport kind of the device that lent the system audio clock, classified
+    /// content-free (owner review 2026-11-26, "9"): never a device name.
+    pub system_device_kind: &'static str,
+    /// How many times the system audio stream was rebuilt after a device-change fault within
+    /// this recording's one open (owner review 2026-11-26, "2").
+    pub system_rebuilds: u32,
+    /// Per-step stop timings (owner review 2026-11-26, "7").
+    pub stop_timings: StopTimings,
     /// The home profile that `recording_start` named (`None` for a start without one).
     pub profile: Option<String>,
     /// The per-recording instructions of `recording_start` (`None`: use the preset).
@@ -401,6 +430,11 @@ pub struct RecordingSession {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Ms since `started` (owner review 2026-11-26, "7"): content-free, for [`StopTimings`].
+fn ms_since(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn random_id() -> String {
@@ -666,26 +700,35 @@ impl RecordingSession {
         } else {
             self.system_state()
         };
+        // Per-step stop timings (owner review 2026-11-26, "7"): `last-capture.json` shows
+        // where the time actually went, instead of one opaque `capture.stop` call.
+        let t_capture_stop = std::time::Instant::now();
         // The lease is gone already after a mic loss or a panic stop. The stop event of our
         // own stop finds no active recording, so it does nothing.
         if !matches!(cause, StopCause::MicLost | StopCause::Panic) {
             let _ = self.capture.stop(active.info.lease);
         }
+        let capture_stop_ms = ms_since(t_capture_stop);
+        let t_disarm = std::time::Instant::now();
         self.tap.disarm();
+        let disarm_ms = ms_since(t_disarm);
         self.active(false);
         lock(&self.state).stopping = false;
         let duration_ms = self.now_ms().saturating_sub(active.started_mono);
+        let t_writer_join = std::time::Instant::now();
         let (parts, held) = match active.writer.join() {
             Ok(Ok(done)) => done,
             // A write error: hand off what was finished (the open part may be cut short).
             Ok(Err(_)) | Err(_) => (existing_parts(&active.dir), Vec::new()),
         };
+        let writer_join_ms = ms_since(t_writer_join);
         let mut parts = parts;
         let per_part = split_ranges(&parts, &held);
         for (part, ranges) in parts.iter_mut().zip(per_part) {
             part.held = ranges;
         }
         let job = lock(&self.jobs).remove(&active.info.id).unwrap_or_default();
+        let diagnostics = self.system.diagnostics();
         let rec = FinishedRecording {
             profile: job.profile,
             instructions: job.instructions,
@@ -699,9 +742,24 @@ impl RecordingSession {
             system_audio,
             system_open_ms: self.system.open_ms(),
             system_open_timed_out: self.system.timed_out(),
+            system_sample_rate_hz: diagnostics.sample_rate_hz,
+            system_device_kind: diagnostics.device_kind.code(),
+            system_rebuilds: diagnostics.rebuilds,
+            // `handoff_ms` is filled in by the caller, once the hand-off call below actually
+            // returns: this struct does not know its own hand-off latency yet.
+            stop_timings: StopTimings {
+                capture_stop_ms,
+                disarm_ms,
+                writer_join_ms,
+                handoff_ms: 0,
+            },
             capture: self.tap.counts(),
         };
         self.notify(&Snapshot::Idle);
+        // `stop_timings.handoff_ms` is 0 here on purpose: this call is a hand-off to another
+        // component (`PartsHandoff::finished`), which is the one place that can honestly time
+        // its own dispatch and, for the one implementation that writes `last-capture.json`
+        // (`HandoffSlot`, in `src-tauri`), fill that field in before writing.
         self.handoff.finished(rec.clone());
         Ok(rec)
     }
