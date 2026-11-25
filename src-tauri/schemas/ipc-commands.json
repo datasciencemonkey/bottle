@@ -1471,10 +1471,14 @@
     "recording_list": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.",
+      "description": "`recording_list` (ADR 0103): the local recording index (migration 0005), merged with\nthe live, active and in-flight overlays; no network call. `reconcile`: owner\nauthorization 2026-11-25, the brain sets this at most once per hub open or launch, plus\nafter a recording reaches `done` or `failed`, to read the volume once and refresh the\nindex. Absent or `false`: the fast path only.",
       "properties": {
         "profile": {
           "type": "string"
+        },
+        "reconcile": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [

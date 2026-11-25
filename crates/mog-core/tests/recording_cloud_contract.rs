@@ -20,8 +20,67 @@ use mog_core::recording_cloud::errors::ErrorKind;
 use mog_core::recording_cloud::http::ScriptedHttp;
 use mog_core::recording_cloud::job::{iso_utc, parse_iso_utc_ms, JobManifest, PartEntry};
 use mog_core::recording_cloud::sidecar::Sidecar;
+use mog_core::recording_index::{RecordingIndexRow, RecordingIndexStore};
 use mog_core::types::{RecordingErrorKind, RecordingSettings, RecordingSummary};
 use serde_json::{json, Value};
+
+/// An in-memory [`RecordingIndexStore`] (no SQLite), so these contract tests can exercise the
+/// fast list path and `recording_delete`'s hidden flag without a real local store. `hidden` is
+/// not a field of [`RecordingIndexRow`] (callers never read or write it directly, the same way
+/// the real SQL column is internal to the catalog statements), so it is tracked alongside the
+/// row here instead.
+#[derive(Default)]
+struct MemRecordingIndex(Mutex<std::collections::HashMap<String, (RecordingIndexRow, bool)>>);
+
+impl RecordingIndexStore for MemRecordingIndex {
+    fn upsert(&self, row: &RecordingIndexRow) -> CoreResult<()> {
+        let mut g = self.0.lock().unwrap();
+        let hidden = g.get(&row.name).is_some_and(|(_, h)| *h);
+        g.insert(row.name.clone(), (row.clone(), hidden));
+        Ok(())
+    }
+    fn hide(&self, name: &str, now_ms: i64) -> CoreResult<()> {
+        if let Some((r, h)) = self.0.lock().unwrap().get_mut(name) {
+            *h = true;
+            r.updated_at_ms = now_ms;
+        }
+        Ok(())
+    }
+    fn list(&self, profile: &str) -> CoreResult<Vec<RecordingIndexRow>> {
+        let mut out: Vec<RecordingIndexRow> = self
+            .0
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(r, h)| r.profile == profile && !h)
+            .map(|(r, _)| r.clone())
+            .collect();
+        out.sort_by(|a, b| {
+            b.started_at_ms
+                .cmp(&a.started_at_ms)
+                .then(b.name.cmp(&a.name))
+        });
+        Ok(out)
+    }
+    fn wipe_everything(&self) -> CoreResult<u64> {
+        let mut g = self.0.lock().unwrap();
+        let n = g.len() as u64;
+        g.clear();
+        Ok(n)
+    }
+    fn wipe_before(&self, before_ms: i64) -> CoreResult<u64> {
+        let mut g = self.0.lock().unwrap();
+        let before: Vec<String> = g
+            .values()
+            .filter(|(r, _)| (r.started_at_ms as i64) < before_ms)
+            .map(|(r, _)| r.name.clone())
+            .collect();
+        for n in &before {
+            g.remove(n);
+        }
+        Ok(before.len() as u64)
+    }
+}
 
 /// A fixed set of names with temp audio on the device (ADR 0103 decision 7), a fixed set of
 /// names that are active (capture still owns them, or they are not yet handed off; review of
@@ -126,13 +185,16 @@ fn component_with(
     }));
     let jobs = Arc::new(Mutex::new(Vec::new()));
     let j = jobs.clone();
-    let adapter = Arc::new(CloudAdapter::new(
-        service,
-        store.clone(),
-        local,
-        Arc::new(move |s: &RecordingSummary| j.lock().unwrap().push(s.clone())),
-        now_ms,
-    ));
+    let adapter = Arc::new(
+        CloudAdapter::new(
+            service,
+            store.clone(),
+            local,
+            Arc::new(move |s: &RecordingSummary| j.lock().unwrap().push(s.clone())),
+            now_ms,
+        )
+        .with_index(Arc::new(MemRecordingIndex::default())),
+    );
     let opened: Opened = Arc::new(Mutex::new(Vec::new()));
     let o = opened.clone();
     let c = RecordingComponent::new(store);
@@ -185,8 +247,13 @@ fn rec_component_list_needs_storage_and_the_profile() {
         &serde_json::to_vec(&manifest("failed")).unwrap(),
     );
     let (c, _, _) = component(&http, vol());
+    // `reconcile`: this exercises the volume-backed path (the fast, index-only default is
+    // covered by the other list tests below).
     let v = c
-        .call("recording_list", json!({"profile":"fake-home"}))
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap();
     assert_eq!(v[0]["id"], NAME);
     assert_eq!(v[0]["status"], "failed");
@@ -388,7 +455,10 @@ fn rec_component_list_does_not_duplicate_audio_already_in_a_job() {
         Arc::new(FakeLocal::new(vec![(NAME.to_owned(), 1_795_097_100_000)]));
     let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
     let v = c
-        .call("recording_list", json!({"profile":"fake-home"}))
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap();
     assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
     assert_eq!(v[0]["status"], "failed");
@@ -448,7 +518,10 @@ fn rec_component_list_shows_a_sidecar_as_uploading_when_the_volume_listing_itsel
     ));
     let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
     let v = c
-        .call("recording_list", json!({"profile":"fake-home"}))
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap();
     let rows = v.as_array().unwrap();
     assert_eq!(rows.len(), 1, "the local recording must still show: {v}");
@@ -478,7 +551,10 @@ fn rec_component_list_leaves_out_a_name_with_no_sidecar_when_the_volume_listing_
         Arc::new(FakeLocal::new(vec![(NAME.to_owned(), 1_795_097_100_000)]));
     let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
     let v = c
-        .call("recording_list", json!({"profile":"fake-home"}))
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap();
     assert_eq!(v.as_array().unwrap().len(), 0, "{v}");
 }
@@ -496,7 +572,10 @@ fn rec_component_list_still_propagates_a_real_fault_on_the_volume_listing() {
     );
     let (c, _, _) = component(&http, vol());
     let e = c
-        .call("recording_list", json!({"profile":"fake-home"}))
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap_err();
     assert_eq!(e.code(), "volume_permission");
 }
@@ -708,8 +787,9 @@ fn failed_upload_manifest(uploaded: bool) -> Value {
 
 #[test]
 fn rec_component_delete_removes_a_device_only_recording() {
+    // Owner authorization 2026-11-25: delete is local and instant, with no network call at
+    // all (not even a read), so a copy already in the volume is untouched and stays there.
     let http = Arc::new(ScriptedHttp::new());
-    http.json("files.download", 404, json!({"error_code":"NOT_FOUND"}));
     let local = DelLocal::new(&[NAME], &[]);
     let (c, _, _) = component_with(
         &http,
@@ -722,11 +802,7 @@ fn rec_component_delete_removes_a_device_only_recording() {
         .unwrap();
     assert_eq!(v, json!({}));
     assert_eq!(*local.deleted.lock().unwrap(), vec![NAME.to_owned()]);
-    assert_eq!(
-        http.seen().len(),
-        1,
-        "the volume is read once and never written"
-    );
+    assert!(http.seen().is_empty(), "delete makes no network call");
 }
 
 #[test]
@@ -749,22 +825,25 @@ fn rec_component_delete_works_with_no_storage_and_leaves_the_list_empty() {
 }
 
 #[test]
-fn rec_component_delete_hides_a_failed_upload_row_once_its_audio_is_gone() {
+fn rec_component_delete_hides_a_failed_upload_row_and_a_later_reconcile_does_not_undo_it() {
+    // Owner authorization 2026-11-25: once removed, a row stays gone even after the volume is
+    // read again (the volume still has the same failed job.json: a reconcile's upsert must
+    // never un-hide a row the user removed).
     let http = Arc::new(ScriptedHttp::new());
-    // The delete reads the job; the list then reads the directory and the job again.
-    http.bytes(
-        "files.download",
-        &serde_json::to_vec(&failed_upload_manifest(false)).unwrap(),
-    );
-    http.json(
-        "files.list_directory",
-        200,
-        json!({"contents":[{"path":"x","is_directory":true,"name":NAME}]}),
-    );
-    http.bytes(
-        "files.download",
-        &serde_json::to_vec(&failed_upload_manifest(false)).unwrap(),
-    );
+    for _ in 0..2 {
+        http.json(
+            "files.list_directory",
+            200,
+            json!({"contents":[{"path":"x","is_directory":true,"name":NAME}]}),
+        );
+        // Not a "dead" upload failure (parts uploaded, failed at notes instead): this row
+        // would stay shown on its own, so the empty list below is `hidden`'s doing, not the
+        // unrelated dead-upload-with-no-audio filter.
+        http.bytes(
+            "files.download",
+            &serde_json::to_vec(&manifest("failed")).unwrap(),
+        );
+    }
     let local = DelLocal::new(&[NAME], &[]);
     let (c, _, _) = component_with(
         &http,
@@ -772,16 +851,36 @@ fn rec_component_delete_hides_a_failed_upload_row_once_its_audio_is_gone() {
         local.clone(),
         Arc::new(|| 1_795_100_700_000i64),
     );
+    // Seed the index from the volume (a reconcile, as the hub does on open).
+    let seeded = c
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
+        .unwrap();
+    assert_eq!(seeded.as_array().unwrap().len(), 1, "{seeded}");
     c.call("recording_delete", json!({"profile":"fake-home","id":NAME}))
         .unwrap();
+    // The fast path (no network) already leaves it out.
     let v = c
         .call("recording_list", json!({"profile":"fake-home"}))
+        .unwrap();
+    assert!(v.as_array().unwrap().is_empty(), "{v}");
+    // A second reconcile sees the very same row on the volume again, and still leaves it out.
+    let v = c
+        .call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
         .unwrap();
     assert!(v.as_array().unwrap().is_empty(), "{v}");
 }
 
 #[test]
-fn rec_component_delete_refuses_an_uploaded_recording() {
+fn rec_component_delete_succeeds_for_an_uploaded_or_done_recording() {
+    // Owner authorization 2026-11-25 ("make delete work"): delete is no longer refused once
+    // any part reached the volume. A copy there is untouched (no network call); the confirm
+    // copy says as much to the user.
     for m in [manifest("done"), failed_upload_manifest(true)] {
         let http = Arc::new(ScriptedHttp::new());
         http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
@@ -792,16 +891,21 @@ fn rec_component_delete_refuses_an_uploaded_recording() {
             local.clone(),
             Arc::new(|| 1_795_100_700_000i64),
         );
-        let e = c
+        let v = c
             .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
-            .unwrap_err();
-        assert_eq!(e.code(), "recording_busy");
-        assert!(local.deleted.lock().unwrap().is_empty());
+            .unwrap();
+        assert_eq!(v, json!({}));
+        assert_eq!(*local.deleted.lock().unwrap(), vec![NAME.to_owned()]);
+        assert!(http.seen().is_empty(), "delete makes no network call");
     }
 }
 
 #[test]
-fn rec_component_delete_refuses_a_running_or_uploading_recording() {
+fn rec_component_delete_refuses_a_recording_that_captures_right_now() {
+    // Refuses only when the take is recording right now (owner authorization 2026-11-25);
+    // "a worker is uploading it right now" is the live-worker case, unit-tested directly at
+    // `contract::tests::delete_is_busy_while_a_run_holds_the_slot_or_a_live_worker_owns_the_name`
+    // (no public seam here to put a live worker on a name without truly running the pipeline).
     let http = Arc::new(ScriptedHttp::new());
     let local = DelLocal::new(&[NAME], &[NAME]);
     let (c, _, _) = component_with(
@@ -814,28 +918,15 @@ fn rec_component_delete_refuses_a_running_or_uploading_recording() {
         .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
         .unwrap_err();
     assert_eq!(e.code(), "recording_busy");
-    // A job.json that says uploading and changed a minute ago belongs to a live run.
-    let http = Arc::new(ScriptedHttp::new());
-    let mut m = failed_upload_manifest(false);
-    m["status"] = json!("uploading");
-    m["updated_at"] = json!("2026-11-19T14:07:00Z");
-    http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
-    let local = DelLocal::new(&[NAME], &[]);
-    let (c, _, _) = component_with(
-        &http,
-        vol(),
-        local.clone(),
-        Arc::new(|| 1_763_561_300_000i64),
-    );
-    let e = c
-        .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
-        .unwrap_err();
-    assert_eq!(e.code(), "recording_busy");
     assert!(local.deleted.lock().unwrap().is_empty());
+    assert!(http.seen().is_empty(), "delete makes no network call");
 }
 
 #[test]
-fn rec_component_delete_refuses_an_id_that_is_not_in_the_store() {
+fn rec_component_delete_succeeds_for_an_id_with_no_local_audio() {
+    // Owner authorization 2026-11-25 ("the Failed row... couldn't be deleted"): a row the hub
+    // shows but that has no local audio (a crash, or an old build) is still removable. No
+    // network call either: Settings has a volume, but delete never reads or writes it.
     let http = Arc::new(ScriptedHttp::new());
     let local = DelLocal::new(&[], &[]);
     let (c, _, _) = component_with(
@@ -844,18 +935,20 @@ fn rec_component_delete_refuses_an_id_that_is_not_in_the_store() {
         local.clone(),
         Arc::new(|| 1_795_100_700_000i64),
     );
-    let e = c
+    let v = c
         .call(
             "recording_delete",
             json!({"profile":"fake-home","id":"2026-01-01_0101"}),
         )
-        .unwrap_err();
-    assert_eq!(e.code(), "invalid_args");
+        .unwrap();
+    assert_eq!(v, json!({}));
     assert!(http.seen().is_empty());
 }
 
 #[test]
-fn rec_component_delete_with_no_storage_needs_proof_that_nothing_uploaded() {
+fn rec_component_delete_succeeds_with_no_storage_and_no_proof_needed() {
+    // Owner authorization 2026-11-25: no network call means no way (and no need) to prove a
+    // part was never uploaded; the no-storage case succeeds exactly like the one with storage.
     let http = Arc::new(ScriptedHttp::new());
     let local = DelLocal::with(&[NAME], false, false);
     let (c, _, _) = component_with(
@@ -864,15 +957,17 @@ fn rec_component_delete_with_no_storage_needs_proof_that_nothing_uploaded() {
         local.clone(),
         Arc::new(|| 1_795_100_700_000i64),
     );
-    let e = c
+    let v = c
         .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
-        .unwrap_err();
-    assert_eq!(e.code(), "recording_busy");
-    assert!(local.deleted.lock().unwrap().is_empty());
+        .unwrap();
+    assert_eq!(v, json!({}));
+    assert_eq!(*local.deleted.lock().unwrap(), vec![NAME.to_owned()]);
 }
 
 #[test]
-fn rec_component_delete_refuses_when_the_job_cannot_be_read() {
+fn rec_component_delete_makes_no_network_call_even_when_the_volume_is_unreachable() {
+    // A scripted failure on `files.download` would end the call with `host_failed` under the
+    // old (network-reading) delete; it must never be consulted at all now.
     let http = Arc::new(ScriptedHttp::new());
     http.json(
         "files.download",
@@ -886,21 +981,26 @@ fn rec_component_delete_refuses_when_the_job_cannot_be_read() {
         local.clone(),
         Arc::new(|| 1_795_100_700_000i64),
     );
-    assert!(c
+    let v = c
         .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
-        .is_err());
-    assert!(local.deleted.lock().unwrap().is_empty());
+        .unwrap();
+    assert_eq!(v, json!({}));
+    assert!(local.deleted.lock().unwrap().contains(&NAME.to_owned()));
+    assert!(http.seen().is_empty(), "delete makes no network call");
 }
 
 #[test]
-fn rec_component_delete_that_leaves_files_is_an_error() {
+fn rec_component_delete_succeeds_even_when_local_files_remain() {
+    // Owner authorization 2026-11-25: removing the local audio is best effort. Files that
+    // remain (a locked file, a permissions quirk) no longer turn the user's Remove into an
+    // error; the row still leaves the list because of `hidden`, not because the files went.
     let http = Arc::new(ScriptedHttp::new());
     let local = DelLocal::with(&[NAME], true, true);
     let (c, _, _) = component_with(&http, None, local, Arc::new(|| 1_795_100_700_000i64));
-    let e = c
+    let v = c
         .call("recording_delete", json!({"profile":"fake-home","id":NAME}))
-        .unwrap_err();
-    assert_eq!(e.code(), "host_failed");
+        .unwrap();
+    assert_eq!(v, json!({}));
 }
 
 #[test]
@@ -914,8 +1014,11 @@ fn rec_component_list_keeps_rows_that_are_not_dead_failed_uploads() {
         );
         http.bytes("files.download", &serde_json::to_vec(&m).unwrap());
         let (c, _, _) = component_with(&http, vol(), local, Arc::new(|| 1_795_100_700_000i64));
-        c.call("recording_list", json!({"profile":"fake-home"}))
-            .unwrap()
+        c.call(
+            "recording_list",
+            json!({"profile":"fake-home","reconcile":true}),
+        )
+        .unwrap()
     };
     // Failed upload, audio still here: shown (Retry works).
     let v = list(failed_upload_manifest(false), DelLocal::new(&[NAME], &[]));

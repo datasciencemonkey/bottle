@@ -145,7 +145,13 @@ export interface RecordingApi {
   start(instructions?: string): Promise<RecState>;
   stop(): Promise<RecState>;
   state(): Promise<RecState>;
-  list(): Promise<RecSummary[]>;
+  /**
+   * `reconcile`: owner authorization 2026-11-25. Default (`false` or absent): the local index,
+   * merged with the live overlays, with no network call. `true`: also read the volume once and
+   * refresh the index, for the hub's first open and after a recording reaches `done` or
+   * `failed`. Every other call omits it, so most reads make no network call at all.
+   */
+  list(reconcile?: boolean): Promise<RecSummary[]>;
   detail(id: string): Promise<RecDetail>;
   retry(id: string): Promise<unknown>;
   /** Delete a recording that is only on this Mac. */
@@ -648,12 +654,18 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
 
   /** Each list read takes a number; only the newest read's reply is kept (no stale overwrite). */
   let listSeq = 0;
-  async function refreshList(): Promise<void> {
+  /**
+   * `reconcile`: owner authorization 2026-11-25, forwarded to `api.list`. The default read is
+   * the fast, index-only path; `recordings.ready` (the hub's first open) and a recording
+   * reaching `done` or `failed` (`onJob`, below) pass `true` so the index catches up with the
+   * volume and first-run users see their existing recordings (part G).
+   */
+  async function refreshList(reconcile = false): Promise<void> {
     const mine = ++listSeq;
     if (!settings) settings = await api.readSettings().catch(() => undefined);
     if (myFiles === undefined && !batch?.running) await probe();
     try {
-      const read = await api.list();
+      const read = await api.list(reconcile);
       if (mine !== listSeq) return;
       rows = read;
       listed = true;
@@ -781,6 +793,11 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       resetCatchUpBackoff();
       scheduleCatchUp();
     } else void refreshList();
+    // A recording reaching a terminal status reconciles the index in the background (owner
+    // authorization 2026-11-25, part C): the row itself already updated above, so this does
+    // not block that; it just catches up the index and any other row the volume knows about.
+    if ((j.status === 'done' || j.status === 'failed') && before !== j.status)
+      void refreshList(true);
     if (j.status === 'done' && before !== 'done') {
       deps.notify?.(NOTES_READY_TEXT);
       deps.mood?.ready();
@@ -903,7 +920,10 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         });
         break;
       case 'recordings.ready':
-        void refreshList();
+        // The hub's first open (part G): reconcile once, so a first-run user (an empty index)
+        // sees the volume's existing recordings at once, and the index is written for the
+        // next open to read instantly.
+        void refreshList(true);
         break;
       case 'recordings.detail':
         void showDetail(a.id);
@@ -1047,7 +1067,13 @@ export function ipcRecordingApi(bus: BrainBus, profile: () => Promise<ProfileNam
     },
     stop: async () => recStateOf(await call('recording_stop', {})),
     state: async () => recStateOf(await call('recording_state', {})),
-    list: async () => (await call('recording_list', { profile: await home() })).map(summaryOf),
+    list: async (reconcile) =>
+      (
+        await call(
+          'recording_list',
+          reconcile ? { profile: await home(), reconcile: true } : { profile: await home() },
+        )
+      ).map(summaryOf),
     detail: async (id) => {
       const d = await call('recording_detail', { profile: await home(), id });
       const r: RecDetail = {

@@ -50,6 +50,7 @@ pub mod profile_service;
 pub mod recording;
 pub mod recording_capture;
 pub mod recording_cloud;
+pub mod recording_index;
 pub mod request_identity;
 pub mod resource_budget;
 pub mod session_guard;

@@ -316,7 +316,7 @@ function Detail({
           )}
           {canDelete && !confirming && (
             <button type="button" data-recording-delete onClick={() => setConfirming(true)}>
-              Delete
+              Remove
             </button>
           )}
           {row.canOpen && status !== 'done' && (
@@ -330,10 +330,10 @@ function Detail({
         <div
           className="rec-confirm"
           role="group"
-          aria-label="Delete this recording?"
+          aria-label="Remove this recording?"
           data-recording-confirm
         >
-          <p>Delete this recording? It is only on this Mac and cannot be recovered.</p>
+          <p>Removes it from this Mac and from this list. A copy already in Databricks stays.</p>
           <button
             type="button"
             className="rec-confirm-delete"
@@ -341,7 +341,7 @@ function Detail({
             onClick={remove}
             autoFocus
           >
-            Delete
+            Remove
           </button>
           <button type="button" data-recording-delete-no onClick={() => setConfirming(false)}>
             Cancel

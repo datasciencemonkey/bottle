@@ -862,6 +862,13 @@ fn mem_08e_schema_has_vec0_tables() {
     assert!(knn().is_empty());
 }
 
+/// Migration 0005 (owner authorization 2026-11-25): `recording` is not a MEM-01 memory table.
+/// It holds the local recording index, scoped by `profile` (a Databricks workspace), not by
+/// MOG; see the migration's own header for the full reasoning. It is the one named exemption
+/// of this test, the same way `consent_record` is the one named exemption of the per-statement
+/// `mog_guard` filter.
+const NOT_MOG_SCOPED: &[&str] = &["recording"];
+
 #[test]
 fn mem_01_every_table_has_mog_id() {
     let t = TempDir::new("01-tables");
@@ -869,6 +876,9 @@ fn mem_01_every_table_has_mog_id() {
     let tables = user_tables(&s);
     assert!(tables.len() >= MIRROR_TABLES.len() + 2, "{tables:?}");
     for t in tables {
+        if NOT_MOG_SCOPED.contains(&t.as_str()) {
+            continue;
+        }
         assert!(
             columns(&s, &t).iter().any(|(n, _)| n == "mog_id"),
             "table {t} has no mog_id"
@@ -891,6 +901,10 @@ fn mem_01_every_index_has_mog_id() {
         "explicit indexes exist"
     );
     for (name, tbl, sql) in indexes {
+        if NOT_MOG_SCOPED.contains(&tbl.as_str()) {
+            // Migration 0005: `recording_profile_started` starts with `profile`, by design.
+            continue;
+        }
         let cols: Vec<String> = s
             .with_conn(|c| {
                 let mut st = c.prepare(&format!("PRAGMA index_info(\"{name}\")"))?;

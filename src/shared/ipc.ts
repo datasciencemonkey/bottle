@@ -452,7 +452,12 @@ export interface CommandArgs {
   recording_start: { profile: ProfileName; instructions?: string };
   recording_stop: NoArgs;
   recording_state: NoArgs;
-  recording_list: { profile: ProfileName };
+  /**
+   * `reconcile`: owner authorization 2026-11-25. Absent or `false`: the local recording index,
+   * merged with the live overlays, with no network call. `true`: also read the volume once and
+   * refresh the index (the hub's first open, or after a recording reaches `done` or `failed`).
+   */
+  recording_list: { profile: ProfileName; reconcile?: boolean };
   recording_detail: { profile: ProfileName; id: RecordingId };
   recording_retry: { profile: ProfileName; id: RecordingId };
   recording_delete: { profile: ProfileName; id: RecordingId };

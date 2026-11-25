@@ -187,8 +187,27 @@ pub trait RecordingCloud: Send + Sync {
         status: crate::types::RecordingStatus,
         detail: Option<&RecordingDetail>,
     ) -> RecordingResult<RecordingSummary>;
-    /// The recordings in the volume, newest first, from each `<name>.job.json`.
+    /// The recordings in the volume, newest first, from each `<name>.job.json`. One network
+    /// call per recording still in the volume (`cloud::list`'s directory listing, then a job
+    /// read per name): slow with many recordings, so `recording_list`'s hot path uses
+    /// [`Self::list_fast`] instead and calls this only through [`Self::reconcile`].
     fn list(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>>;
+    /// `recording_list`'s fast path (migration 0005; owner authorization 2026-11-25): the local
+    /// recording index, merged with the same live, active and in-flight overlays as
+    /// [`Self::list`]. No network call.
+    fn list_fast(
+        &self,
+        profile: &ProfileName,
+        storage: &RecordingStorage,
+    ) -> RecordingResult<Vec<RecordingSummary>>;
+    /// Reconcile the index with one authoritative [`Self::list`] (at most once per hub open or
+    /// launch, plus after a recording reaches `done` or `failed`; owner authorization
+    /// 2026-11-25), then answer the merged rows like [`Self::list_fast`] does.
+    fn reconcile(
         &self,
         profile: &ProfileName,
         storage: &RecordingStorage,
@@ -227,12 +246,11 @@ pub trait RecordingCloud: Send + Sync {
     /// The recordings that are only on this device, newest first. They need no storage: this
     /// is what the list shows while Settings has no usable storage.
     fn list_local(&self) -> RecordingResult<Vec<RecordingSummary>>;
-    /// Delete a recording that never reached the volume: its audio files, temp files and
-    /// sidecar on this device. `Ok(false)`: no such recording on this device. A recording that
-    /// captures, runs, or has parts in the volume gives `recording_busy`. It never writes to
-    /// the volume. `storage` is `None` when Settings has none: the volume cannot be read then,
-    /// so the device must prove that no part was ever uploaded, or the call is `recording_busy`.
-    /// Files that remain after the delete give an error.
+    /// Local and instant, for every row the user sees (migration 0005; owner authorization
+    /// 2026-11-25): removes the local audio and sidecar if they exist, and marks the row
+    /// `hidden` in the local index. No network call: a recording already in the volume keeps
+    /// its copy there. `Ok(true)` unless the take is recording right now or a worker is
+    /// uploading it right now (`recording_busy`).
     fn delete(
         &self,
         profile: &ProfileName,
@@ -497,7 +515,12 @@ impl GatewayComponents for RecordingComponent {
                 // No storage yet: the list is the audio that waits on this device, so the user
                 // sees what Upload will send once Settings has a volume.
                 match self.storage() {
-                    Ok(storage) => reply(&cloud.list(&a.profile, &storage)?),
+                    // The hot path reads the local index with no network call (migration 0005,
+                    // owner authorization 2026-11-25); `reconcile` reads the volume once and
+                    // refreshes the index (the brain sets it at most once per hub open or
+                    // launch, plus after a recording reaches `done` or `failed`).
+                    Ok(storage) if a.reconcile => reply(&cloud.reconcile(&a.profile, &storage)?),
+                    Ok(storage) => reply(&cloud.list_fast(&a.profile, &storage)?),
                     Err(CoreError::IpcRefused { code: "no_storage" }) => {
                         reply(&cloud.list_local()?)
                     }

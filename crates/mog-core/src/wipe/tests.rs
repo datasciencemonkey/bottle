@@ -1168,3 +1168,72 @@ fn adr_0121_wipe_still_returns_the_conversation_of_a_locally_deleted_thread() {
         "Wipe hard-deletes the tombstone"
     );
 }
+
+/// Migration 0005 (owner authorization 2026-11-25): the local recording index carries no
+/// `mog_id`, so it is not touched by the MOG-scoped steps above; `with_recording_index` wires
+/// it in and `wipe` clears it too, the same way it clears every other table's rows.
+#[test]
+fn mem_33a_0005_wipe_everything_clears_the_recording_index_too() {
+    use crate::recording_index::{RecordingIndexRow, RecordingIndexStore, SqlRecordingIndex};
+    use crate::types::RecordingStatus;
+
+    let (_t, s) = seeded("0005-recording");
+    let index = Arc::new(SqlRecordingIndex::new(Arc::clone(&s)));
+    index
+        .upsert(&RecordingIndexRow {
+            name: "2026-11-19_0905".to_owned(),
+            profile: "fake-home".to_owned(),
+            started_at_ms: 1,
+            duration_s: 12,
+            status: RecordingStatus::Done,
+            error_kind: None,
+            error_stage: None,
+            on_device_only: false,
+            updated_at_ms: 1,
+        })
+        .unwrap();
+    assert_eq!(index.list("fake-home").unwrap().len(), 1);
+    let svc =
+        service(&s, &clock()).with_recording_index(index.clone() as Arc<dyn RecordingIndexStore>);
+    let report = svc.wipe(WipeScope::Everything).expect("wipe");
+    assert!(index.list("fake-home").unwrap().is_empty());
+    assert!(
+        report.local > 0,
+        "the recording row counts toward the report too"
+    );
+}
+
+/// As above, for the age-scoped Wipe: only the rows strictly older than the cutoff go.
+#[test]
+fn mem_33a_0005_wipe_before_clears_only_older_recording_rows() {
+    use crate::recording_index::{RecordingIndexRow, RecordingIndexStore, SqlRecordingIndex};
+    use crate::types::RecordingStatus;
+
+    let (_t, s) = seeded("0005-recording-before");
+    let index = Arc::new(SqlRecordingIndex::new(Arc::clone(&s)));
+    let row = |name: &str, started_at_ms: u64| RecordingIndexRow {
+        name: name.to_owned(),
+        profile: "fake-home".to_owned(),
+        started_at_ms,
+        duration_s: 1,
+        status: RecordingStatus::Done,
+        error_kind: None,
+        error_stage: None,
+        on_device_only: false,
+        updated_at_ms: 1,
+    };
+    index
+        .upsert(&row("old", (NOW - 200 * DAY).max(0) as u64))
+        .unwrap();
+    index.upsert(&row("new", NOW.max(0) as u64)).unwrap();
+    let svc =
+        service(&s, &clock()).with_recording_index(index.clone() as Arc<dyn RecordingIndexStore>);
+    svc.wipe(WipeScope::OlderThan90Days).expect("wipe");
+    let names: Vec<String> = index
+        .list("fake-home")
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, vec!["new".to_owned()]);
+}

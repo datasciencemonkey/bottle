@@ -1448,9 +1448,15 @@ args!(
     }
 );
 args!(
-    /// `recording_list` (ADR 0103): lists `<root>/Bottle/Recordings/` on the home profile host.
+    /// `recording_list` (ADR 0103): the local recording index (migration 0005), merged with
+    /// the live, active and in-flight overlays; no network call. `reconcile`: owner
+    /// authorization 2026-11-25, the brain sets this at most once per hub open or launch, plus
+    /// after a recording reaches `done` or `failed`, to read the volume once and refresh the
+    /// index. Absent or `false`: the fast path only.
     RecordingListArgs {
         profile: ProfileName,
+        #[serde(default)]
+        reconcile: bool,
     }
 );
 args!(

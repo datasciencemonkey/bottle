@@ -200,6 +200,62 @@ pub fn temp_names_in(roots: &[std::path::PathBuf]) -> Vec<(String, u64)> {
     names.into_iter().collect()
 }
 
+/// How long an empty-of-audio temp dir with only a sidecar waits before launch cleanup takes
+/// it, so a recording that just started (its sidecar written, its first part not flushed yet)
+/// is never touched (owner authorization 2026-11-25, part E).
+const STALE_SIDECAR_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Launch cleanup (owner authorization 2026-11-25, part E): remove a `rec-*` temp dir that
+/// holds no audio parts and no sidecar (a stale, empty container: nothing ever moved it or
+/// cleaned it up after an upload or a delete). Also remove one that holds only a sidecar, no
+/// audio, is older than [`STALE_SIDECAR_AFTER_MS`], and names a recording with no row in
+/// `index` for its profile (so a take that just started, or one `resume_left` is already
+/// working on, is never touched: either has a part on disk, or very soon has an index row).
+/// Best effort: every error is swallowed, this never blocks or fails the app start.
+pub fn cleanup_stale_temp_dirs(
+    roots: &[std::path::PathBuf],
+    index: &dyn mog_core::recording_index::RecordingIndexStore,
+    now_ms: u64,
+) {
+    for root in roots {
+        for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            let dir = entry.path();
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let files: Vec<_> = std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .collect();
+            let has_audio = files.iter().any(|f| {
+                f.file_name()
+                    .to_str()
+                    .is_some_and(|n| recording_name_of_file(n).is_some())
+            });
+            if has_audio {
+                continue;
+            }
+            let sidecar = sidecar::read(&dir);
+            let stale_sidecar = sidecar.as_ref().is_some_and(|s| {
+                let age = now_ms.saturating_sub(modified_ms(&dir.join(sidecar::SIDECAR_FILE)));
+                age >= STALE_SIDECAR_AFTER_MS
+                    && !index
+                        .list(&s.profile)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|r| r.name == s.name)
+            });
+            if sidecar.is_none() || stale_sidecar {
+                if stale_sidecar {
+                    sidecar::remove(&dir);
+                }
+                let _ = std::fs::remove_dir(&dir);
+            }
+        }
+    }
+}
+
 /// The temp dirs of `roots` that hold a sidecar, with the audio parts in each: the recordings
 /// that a crash left and that can resume with no click.
 pub fn resumable(
@@ -865,7 +921,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
             ch.send(events::RECORDING_JOB, v);
         }
     });
-    let adapter = Arc::new(CloudAdapter::new(
+    let mut adapter = CloudAdapter::new(
         service.clone(),
         store.clone(),
         local,
@@ -874,7 +930,33 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) -> CoreResult<()> {
             use mog_core::clock::WallClock;
             mog_core::clock::SystemWallClock.now_ms()
         }),
-    ));
+    );
+    // The local recording index (migration 0005; owner authorization 2026-11-25):
+    // `consent_host::install_with` manages it on the same store and key as Conversations
+    // (ADR 0105). Absent (consent host not installed, e.g. a test build): `recording_list`
+    // still works, just with no fast path, through `CloudAdapter`'s `NoRecordingIndex` default,
+    // and launch cleanup's stale-sidecar rule is skipped (rule a still runs: it needs no index).
+    let recording_index =
+        handle.try_state::<Arc<dyn mog_core::recording_index::RecordingIndexStore>>();
+    if let Some(index) = &recording_index {
+        adapter = adapter.with_index(index.inner().clone());
+    }
+    let adapter = Arc::new(adapter);
+    // Launch cleanup (part E), synchronously and before the resume scan below starts: a stale
+    // empty or sidecar-only dir goes first, so the resume scan never races a cleanup pass over
+    // the same files.
+    {
+        use mog_core::clock::WallClock;
+        let now_ms = mog_core::clock::SystemWallClock.now_ms().max(0) as u64;
+        match &recording_index {
+            Some(index) => cleanup_stale_temp_dirs(&temp_roots, index.inner().as_ref(), now_ms),
+            None => cleanup_stale_temp_dirs(
+                &temp_roots,
+                &mog_core::recording_index::NoRecordingIndex,
+                now_ms,
+            ),
+        }
+    }
     // PR B's finished recordings run the pipeline once each (waiting ones go out now).
     if let Some(slot) = handle.try_state::<Arc<HandoffSlot>>() {
         let a = adapter.clone();
@@ -959,6 +1041,137 @@ pub fn install_open_url(handle: &tauri::AppHandle<tauri::Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mog_core::error::CoreResult;
+    use mog_core::recording_cloud::sidecar::Sidecar;
+    use mog_core::recording_index::{RecordingIndexRow, RecordingIndexStore};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A unique temp folder removed on drop (no extra crate).
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "bottle-rec-cleanup-{tag}-{}-{n}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A fixed set of index rows, by profile (test double for [`RecordingIndexStore`]).
+    #[derive(Default)]
+    struct FakeIndex(Vec<RecordingIndexRow>);
+    impl RecordingIndexStore for FakeIndex {
+        fn upsert(&self, _row: &RecordingIndexRow) -> CoreResult<()> {
+            Ok(())
+        }
+        fn hide(&self, _name: &str, _now_ms: i64) -> CoreResult<()> {
+            Ok(())
+        }
+        fn list(&self, profile: &str) -> CoreResult<Vec<RecordingIndexRow>> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|r| r.profile == profile)
+                .cloned()
+                .collect())
+        }
+        fn wipe_everything(&self) -> CoreResult<u64> {
+            Ok(0)
+        }
+        fn wipe_before(&self, _before_ms: i64) -> CoreResult<u64> {
+            Ok(0)
+        }
+    }
+
+    fn write_sidecar(dir: &std::path::Path, name: &str, profile: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        mog_core::recording_cloud::sidecar::write(
+            dir,
+            &Sidecar::new("rec-aaaa", name, 1, profile, None),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cleanup_removes_an_empty_dir_with_no_parts_and_no_sidecar() {
+        let t = TempDir::new("empty");
+        let dir = t.path().join("rec-0001");
+        std::fs::create_dir_all(&dir).unwrap();
+        cleanup_stale_temp_dirs(&[t.path().to_path_buf()], &FakeIndex::default(), 0);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_a_dir_that_has_audio() {
+        let t = TempDir::new("audio");
+        let dir = t.path().join("rec-0002");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("2026-11-19_0905.opus"), b"x").unwrap();
+        cleanup_stale_temp_dirs(&[t.path().to_path_buf()], &FakeIndex::default(), 0);
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_a_fresh_sidecar_only_dir() {
+        let t = TempDir::new("fresh-sidecar");
+        let dir = t.path().join("rec-0003");
+        write_sidecar(&dir, "2026-11-19_0905", "fake-home");
+        // `now_ms` right at the sidecar's write time: well under the 24 h gate.
+        let now = modified_ms(&dir.join(mog_core::recording_cloud::sidecar::SIDECAR_FILE));
+        cleanup_stale_temp_dirs(&[t.path().to_path_buf()], &FakeIndex::default(), now);
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn cleanup_removes_a_stale_sidecar_only_dir_with_no_index_row() {
+        let t = TempDir::new("stale-sidecar");
+        let dir = t.path().join("rec-0004");
+        write_sidecar(&dir, "2026-11-19_0905", "fake-home");
+        let now = modified_ms(&dir.join(mog_core::recording_cloud::sidecar::SIDECAR_FILE))
+            + STALE_SIDECAR_AFTER_MS
+            + 1;
+        cleanup_stale_temp_dirs(&[t.path().to_path_buf()], &FakeIndex::default(), now);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_a_stale_sidecar_only_dir_that_has_an_index_row() {
+        let t = TempDir::new("stale-sidecar-tracked");
+        let dir = t.path().join("rec-0005");
+        write_sidecar(&dir, "2026-11-19_0905", "fake-home");
+        let now = modified_ms(&dir.join(mog_core::recording_cloud::sidecar::SIDECAR_FILE))
+            + STALE_SIDECAR_AFTER_MS
+            + 1;
+        let index = FakeIndex(vec![RecordingIndexRow {
+            name: "2026-11-19_0905".to_owned(),
+            profile: "fake-home".to_owned(),
+            started_at_ms: 1,
+            duration_s: 0,
+            status: mog_core::types::RecordingStatus::Transcribing,
+            error_kind: None,
+            error_stage: None,
+            on_device_only: false,
+            updated_at_ms: 1,
+        }]);
+        cleanup_stale_temp_dirs(&[t.path().to_path_buf()], &index, now);
+        assert!(
+            dir.exists(),
+            "a row still tracking it: never delete it from under it"
+        );
+    }
 
     #[test]
     fn merge_busy_names_unions_every_source() {

@@ -593,12 +593,11 @@ export function rowActionOf(row: {
 }
 
 /**
- * May the row be deleted from this Mac? Only a recording that never reached the volume: on this
- * device only, or failed with no part uploaded. Rust checks again and refuses the rest.
+ * May the row show Remove (owner authorization 2026-11-25)? Every row the user sees, except
+ * one that is recording right now or a worker is uploading right now: Rust refuses those with
+ * `recording_busy`, and the row would just error back at once. A copy already in Databricks is
+ * never touched; Remove only clears this Mac and this list.
  */
-export function rowCanDeleteOf(
-  row: Pick<RecordingRow, 'status' | 'partsUploaded' | 'onDeviceOnly' | 'waitingNetwork'>,
-): boolean {
-  if (row.onDeviceOnly) return true;
-  return row.status === 'failed' && !row.waitingNetwork && (row.partsUploaded ?? 0) === 0;
+export function rowCanDeleteOf(row: Pick<RecordingRow, 'status'>): boolean {
+  return row.status !== 'recording' && row.status !== 'uploading';
 }

@@ -934,6 +934,38 @@ describe('recording wiring (brain, ADR 0103)', () => {
     );
   });
 
+  it("[REC-G1] the hub's first open reconciles the index; every other refresh is the fast path (owner authorization 2026-11-25)", async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    expect(t.fake.api.list).toHaveBeenLastCalledWith(true);
+    // Retry's refresh, and every other read after it, is the fast path: no reconcile.
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    await flush();
+    expect(t.fake.api.list).toHaveBeenLastCalledWith(false);
+  });
+
+  it('[REC-G2] a recording reaching done or failed reconciles the index in the background', async () => {
+    const t = setup();
+    t.click({ action: 'recordings.ready' });
+    await flush();
+    const callsAfterReady = t.fake.api.list.mock.calls.length;
+    expect(t.fake.api.list).toHaveBeenLastCalledWith(true);
+    t.fake.pushJob({ id: 'r3', status: 'uploading', partsUploaded: 1, partsTotal: 4 });
+    await flush();
+    // An in-flight status update (a known row) makes no new list call at all.
+    expect(t.fake.api.list.mock.calls.length).toBe(callsAfterReady);
+    t.fake.pushJob({ id: 'r3', status: 'done' });
+    await flush();
+    expect(t.fake.api.list.mock.calls.length).toBe(callsAfterReady + 1);
+    expect(t.fake.api.list).toHaveBeenLastCalledWith(true);
+    // A second `done` event for the same row (not a new transition) reconciles no further.
+    const calls = t.fake.api.list.mock.calls.length;
+    t.fake.pushJob({ id: 'r3', status: 'done' });
+    await flush();
+    expect(t.fake.api.list.mock.calls.length).toBe(calls);
+  });
+
   it('[REC-P7] each job event updates the open list: part counts, the network mark and its end, and a device-only row', async () => {
     const t = setup();
     t.click({ action: 'recordings.ready' });
