@@ -190,6 +190,11 @@ Rules of the boundary:
   note that shows only context changed.
 - **Merging:** only the orchestrator merges. Agents never merge. The merge gate requires an approval on the head,
   green Windows and Linux CI, a passing local macOS squash suite, and no file overlap with recent main changes.
+- **Remove hanging worktrees after a merge.** When a PR merges, the orchestrator removes the worktree of every
+  branch in that PR, including lane worktrees whose commits were cherry-picked into it and build worktrees made
+  from it. Keep the branch. Run `cargo clean` first, then `git worktree remove <path>` (no `--force`). If a
+  worktree has uncommitted changes, do not remove it: commit the changes to its branch or report them to the
+  owner. Before a session ends, run `git worktree list` and remove each worktree whose work is merged.
 - **Contract files** (owned by the contract lead; change them only in a PR that the lead authorizes):
   `src/shared/ipc.ts`, `src/shared/interfaces.ts`, `crates/mog-core/src/types.rs`, `crates/mog-core/src/ipc.rs`,
   `src-tauri/src/ipc.rs`, `src-tauri/schemas/`, and migrations.
