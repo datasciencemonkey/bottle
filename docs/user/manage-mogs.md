@@ -6,8 +6,8 @@ You see every workspace in **Settings → Workspace**, and you turn each one on 
 ## Settings → Workspace
 
 The list shows your home workspace first, then every other workspace: a colour swatch, a name,
-a muted host, and a sign-in status (Signed in, Expired, Not checked yet, Not supported, or Not in
-your CLI config).
+the workspace address, and a sign-in status (Signed in, Expired, Not checked yet, Not supported,
+or Not in your CLI config).
 
 The home row has a **Home** badge and no switch; it says **Always on**.
 Every other row has a **Make home** button and a switch, **Available to your MOG**.
@@ -19,8 +19,8 @@ workspace when a question needs more than your home workspace. Off keeps it out.
 
 A new connection starts off. Turn it on to let your MOG use it.
 
-Some rows have no switch to turn on and no **Make home** button, for example a profile type
-Bottle does not support, or a profile missing from your `~/.databrickscfg`. The row says why.
+Some rows can't be turned on or made home, for example a profile type Bottle does not support, or
+a profile missing from your `~/.databrickscfg`. Their controls are greyed out, and the row says why.
 
 ## Make home
 
@@ -55,14 +55,6 @@ This opens the same "Connect a workspace" flow as first run: paste your workspac
 
 ## Memories and forgetting
 
-Your MOG's memories live on the **Memory** page in the hub. Select **Forget memory…** there, then
-confirm with **Forget** in the dialog, to delete them.
-
-## Could not verify
-
-The following claims from the stale version of this page could not be verified against the
-int-0110 screen text and are dropped rather than guessed:
-
-- Exact keyboard navigation behaviour (Tab order) across the Workspace list.
-- Whether a screen reader announces a running count, since that applied to the old multi-MOG hub
-  and has no equivalent in the one-MOG Settings → Workspace view.
+Your MOG's memories are on the **Memory** page in the hub. To delete them, select **Forget memory…**,
+then **Forget** in the dialog. This deletes all sessions, transcripts, notes and Genie history of
+your MOG on this Mac. You cannot undo this.
