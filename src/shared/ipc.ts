@@ -610,12 +610,7 @@ export interface AgentTurnResult {
 }
 
 export type AgentSessionEndReason =
-  | 'new_session'
-  | 'quit'
-  | 'wipe'
-  | 'profile_changed'
-  | 'catalog_changed'
-  | 'idle';
+  'new_session' | 'quit' | 'wipe' | 'profile_changed' | 'catalog_changed' | 'idle';
 export interface AgentSessionState {
   state: 'none' | 'idle' | 'busy';
   sessionId?: string;
