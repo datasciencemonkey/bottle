@@ -153,7 +153,7 @@ Check **System Settings → Privacy & Security → Accessibility** and **Input M
 to be on for Bottle. If you just granted Input Monitoring, reopen Bottle.
 
 **Recording shows "No sound from other apps yet."**
-Bottle shows this after 5 seconds of silence from other apps. If you are on a call and it stays,
+Bottle shows this after 20 seconds of silence from other apps. If you are on a call and it stays,
 click **Open System Settings** on the notice, or open **System Settings → Privacy & Security →
 Screen & System Audio Recording** and turn Bottle on under System Audio Recording Only.
 
