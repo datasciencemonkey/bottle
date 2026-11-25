@@ -95,7 +95,7 @@ The owner's rule (verbatim):
    A catalog with no home workspace keeps the old behaviour. Every call goes through the normal
    guard checks, from the first step.
 
-## Amendment: Sign in, then retry (2026-11-24, owner decision; generalized and hardened in round 4)
+## Amendment: Sign in, then retry (2026-11-24, owner decision; generalized and hardened in rounds 4 and 5)
 
 A `signed_out` call is neither an answer nor "no data": the workspace's token merely expired. The
 owner's rule (verbatim): "In the absence of a sign-in, or if the sign-in had expired, refresh the
@@ -125,7 +125,11 @@ the browser to refresh the sign-in using the U2M OAuth."
    - The card shows a plain status while the sign-in runs ("Signing in to `<workspace>`… finish
      in your browser"), through the existing one-line pop-up, not a new UI element.
    - A sign-in that fails, is cancelled or times out leaves the call `signed_out` for good: home-
-     first (for home) stays the rule, and the turn does not widen.
+     first (for home) stays the rule, and the turn does not widen. A sign-in that *succeeds*
+     marks the profile `Tried`, not a clean slate (round 5): a later call to it this turn still
+     gets a genuine live attempt, but a fresh `signed_out` from that attempt goes straight to the
+     no-more-tries state, not back through a second sign-in. Either way, one browser window per
+     profile per turn is the most there ever is.
    - A withheld (quarantined) or stopped call still does not widen either, as before; neither is
      a sign-in problem.
    - A signed-out first attempt and its one retry are both real guard admissions: the orchestrator
@@ -133,24 +137,33 @@ the browser to refresh the sign-in using the U2M OAuth."
      the guard's own ledger has.
    - If Settings already runs its own "Sign in…" for the same profile, `profile_reauth` answers
      `profile_exists`: Bottle treats that as "wait for it" (polling the cached sign-in state
-     within the sign-in's own bound), not a failure, then does the one retry.
+     within the sign-in's own bound), not a failure, then does the one retry. That sign-in belongs
+     to Settings, not to this process: a cancel of the wait (round 5) only abandons the wait
+     itself; it never calls `profile_login_cancel` on a sign-in this process did not start.
+     `agent_session_host::build_reauth` tracks, per profile, which of the two is true (this
+     process's own `profile_reauth` running, or only watching Settings') so `cancel` acts on the
+     right one.
    - Stop, the turn's hard deadline (`HARD_AFTER`) and a Wipe all cancel an in-flight sign-in:
      each ends a turn through the same `ctx.cancel` flag, which a watcher reacts to by calling
-     `ReauthService::cancel`, routed to the existing `profile_login_cancel` on the same
-     `ProfileLoginHost` that kills the running `databricks auth login` child. Settings' own
-     "Sign in…" is not left refused `profile_exists` afterwards.
+     `ReauthService::cancel`. When this process owns the running sign-in, that routes to the real
+     `profile_login_cancel` on the same `ProfileLoginHost` that kills the running `databricks auth
+     login` child; the watcher rechecks that the sign-in has not already ended, right before that
+     call (round 5), so a sign-in that finishes in the instant before a Stop lands never gets a
+     stray cancel that would leave Settings' own next "Sign in…" of that profile briefly refused
+     `login_cancelled` for no reason.
 
    **Contract change** (owner sign-off covers it, as part of this amendment; round 3): a new
    `AgentTurnEvent` variant, `signing_in { turnId, workspaceId }`, added to both
    `crates/mog-core/src/types.rs` and `src/shared/ipc.ts`, with its own fixture
-   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed. Round 4 added no
-   further contract change: `ReauthService::cancel` and the Settings `profile_exists` wait are
-   both internal to Rust.
+   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed. Rounds 4 and 5 added
+   no further contract change: `ReauthService::cancel`, the Settings `profile_exists` wait and its
+   ownership tracking are all internal to Rust.
 
    **Known limit** (narrowed in round 4; the blocking-worker-thread limit it replaced is fixed).
    The sign-in's own bound, and the poll for a running Settings sign-in, still run on the turn's
    worker thread; a cancel now ends that wait promptly, but it does not force-close a browser tab
-   the OAuth flow already opened, only the local CLI child waiting on it.
+   the OAuth flow already opened, only the local CLI child waiting on it (and only when this
+   process owns that child; watching Settings' own sign-in never touches it at all).
 
 ## Amendment: D1 removed (2026-11-24, owner decision)
 

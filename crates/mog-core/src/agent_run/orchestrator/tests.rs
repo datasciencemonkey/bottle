@@ -2487,6 +2487,62 @@ fn a_home_workspace_known_signed_out_before_the_turn_signs_in_first() {
 
 // ---------- round 4: every call, not home alone; at most once per profile; Stop cancels it ----
 
+/// A `FakeR8` whose `genie_ask` fails with `login_required` for `p-sales` on its 0-indexed call
+/// `n` and `n + 2` (round 5: a profile that goes signed out again after a sign-in already ran
+/// for it this turn), and answers normally on every other call.
+fn r8_signed_out_twice(n: usize, attempts: Arc<AtomicUsize>) -> Arc<FakeR8> {
+    Arc::new(FakeR8 {
+        calls: Mutex::default(),
+        handler: Box::new(move |profile, tool| {
+            if profile == "p-sales" && tool == "genie_ask" {
+                let i = attempts.fetch_add(1, Ordering::SeqCst);
+                if i == n || i == n + 2 {
+                    return Err(CoreError::Unavailable {
+                        component: "R8",
+                        reason: "login_required",
+                    });
+                }
+            }
+            Ok(match tool {
+                "genie_ask" => r8_reply(json!({
+                    "status": "in_progress", "conversation_id": format!("conv-{profile}"),
+                    "response_id": "r-1"})),
+                "genie_poll_response" => r8_reply(json!({
+                    "status": "completed", "final_answer": by_profile(profile),
+                    "total_row_count": 3, "deep_link": "https://h/x"})),
+                _ => r8_reply(json!({"status": "cancellation_requested"})),
+            })
+        }),
+    })
+}
+
+#[test]
+fn a_profile_that_goes_signed_out_again_after_a_tried_sign_in_gets_no_second_browser() {
+    // Round 5: a successful sign-in marks a profile `Tried`, not a clean slate. A later call to
+    // it this turn still gets a genuine live attempt, but if that one also comes back signed
+    // out, it goes straight to `Exhausted`: one browser window per profile per turn, even when
+    // the first one's result does not last.
+    let r = rig(
+        10,
+        r8_signed_out_twice(0, Arc::new(AtomicUsize::new(0))),
+        Box::new(|_, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            1 => reply_of(vec![ask_item("fc1", "sales")]),
+            _ => no_source_final(),
+        }),
+    );
+    let (_, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(
+        r.reauth.count(),
+        1,
+        "the second signed-out does not start a second sign-in"
+    );
+    // The first failed attempt, its one retry (succeeds), and the second ask's failed attempt:
+    // three real calls, no fourth (no second retry).
+    assert_eq!(r.r8.count("genie_ask"), 3);
+}
+
 #[test]
 fn a_named_foreign_workspace_that_is_signed_out_signs_in_and_retries_once() {
     // The owner's rule is general (round 4): a workspace the question names directly, asked on
@@ -2606,12 +2662,18 @@ fn stopping_a_turn_cancels_an_in_flight_sign_in() {
 }
 
 #[test]
-fn a_signed_out_retry_counts_both_attempts_against_the_budget() {
+fn the_budget_still_holds_through_a_signed_out_retry_sequence() {
     // Budget 5: the signed-out first attempt and its one retry spend two of the five slots
     // before the model asks anything else, even though the model only ever made one `ask_genie`
     // call of its own for home. Three more calls use the rest; a fifth is refused on the real
-    // guard ledger (owner decision 2026-11-24, round 4: the orchestrator's own bookkeeping must
-    // agree with it, so it never thinks more budget is left than truly is).
+    // guard ledger, which is authoritative regardless of `ctx.asked`.
+    //
+    // This shows only that budget enforcement holds end to end through a retry sequence. It does
+    // not, by itself, distinguish `ctx.asked` counting both attempts (round 4's fix) from
+    // counting only one of them: `ctx.asked` sizes `run_step`'s own thread cap, not which calls
+    // reach the guard, so either way the fifth call above is refused the same way. The fix is
+    // still correct (verified by reading `run_step` and `run_call`); this test guards the
+    // budget's own, externally visible, end-to-end behaviour alongside it.
     let r = rig(
         5,
         r8_signed_out_once(Arc::new(AtomicUsize::new(0))),

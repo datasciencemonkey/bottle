@@ -1008,11 +1008,13 @@ struct LoopCtx {
     /// home's.
     profiles: HashMap<String, String>,
     /// The "sign in, then retry" rule's state of each profile that needed it this turn, by
-    /// profile (not alias): `Dead` (known signed out, no sign-in tried yet this turn) or
-    /// `Exhausted` (a sign-in was tried this turn and failed, timed out or was cancelled; no
-    /// retry and no new browser window for that profile for the rest of the turn). A profile with
-    /// no entry has never been seen signed out this turn. Home's entry is seeded `Dead` from the
-    /// cached sign-in state at turn start, if that already shows it signed out.
+    /// profile (not alias): `Dead` (known signed out, no sign-in tried yet this turn), `Tried`
+    /// (a sign-in for this profile already ran this turn, and succeeded), or `Exhausted` (a
+    /// sign-in was tried this turn and failed, timed out or was cancelled; or a `Tried` profile
+    /// went signed out again). Either `Tried` or `Exhausted` means: no retry and no new browser
+    /// window for that profile for the rest of the turn. A profile with no entry has never been
+    /// seen signed out this turn. Home's entry is seeded `Dead` from the cached sign-in state at
+    /// turn start, if that already shows it signed out.
     auth: Mutex<HashMap<String, Auth>>,
 }
 
@@ -1020,6 +1022,7 @@ struct LoopCtx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Auth {
     Dead,
+    Tried,
     Exhausted,
 }
 
@@ -1284,6 +1287,13 @@ const REAUTH_CANCEL_POLL: Duration = Duration::from_millis(100);
 /// moment `ctx.cancel` turns true while it is still blocked. `reauth` itself has no cancel token
 /// of its own to poll (it is whatever bound the real sign-in flow has), so the watcher is the
 /// seam: Stop, the hard deadline and a Wipe all set `ctx.cancel`, and nothing else does.
+///
+/// `done` is checked a second time right before the cancel call (round 5): `reauth` can return
+/// (successfully, even) in the instant between the watcher's first check of `done` and its check
+/// of `cancel`, and a cancel of a sign-in that already ended can still cost something real (a
+/// stray `profile_login_cancel` leaves a few seconds of "pending cancel" that would wrongly
+/// refuse the user's very next Settings "Sign in…" of that profile). The gap this leaves is only
+/// the two loads themselves, not a whole `REAUTH_CANCEL_POLL` tick.
 fn reauth_watching_cancel(ctx: &LoopCtx, profile: &str) -> CoreResult<()> {
     let done = Arc::new(AtomicBool::new(false));
     let watcher = {
@@ -1294,7 +1304,9 @@ fn reauth_watching_cancel(ctx: &LoopCtx, profile: &str) -> CoreResult<()> {
         thread::spawn(move || {
             while !done.load(Ordering::SeqCst) {
                 if cancel.load(Ordering::SeqCst) {
-                    reauth.cancel(&profile);
+                    if !done.load(Ordering::SeqCst) {
+                        reauth.cancel(&profile);
+                    }
                     return;
                 }
                 thread::sleep(REAUTH_CANCEL_POLL);
@@ -1315,7 +1327,10 @@ fn reauth_watching_cancel(ctx: &LoopCtx, profile: &str) -> CoreResult<()> {
 /// A sign-in that fails, is cancelled or times out leaves the call `signed_out`, and marks the
 /// profile `Exhausted`: home-first (for home) stays the rule, and no later call to the same
 /// profile this turn tries to sign in again (owner decision 2026-11-24, round 4: at most one
-/// sign-in attempt per profile per turn).
+/// sign-in attempt per profile per turn). A sign-in that succeeds marks the profile `Tried`, not
+/// a clean slate (round 5): a later call to it this turn may still go signed out again (a real
+/// live attempt, not a guess), but if it does, `run_call` sends it straight to `Exhausted`
+/// instead of back here, so one browser window per profile per turn is still the most there is.
 fn sign_in_and_retry(ctx: &LoopCtx, call: &FnCall, profile: &str, used: usize) -> CallResult {
     if ctx.cancel.load(Ordering::SeqCst) {
         return CallResult {
@@ -1329,7 +1344,7 @@ fn sign_in_and_retry(ctx: &LoopCtx, call: &FnCall, profile: &str, used: usize) -
     }));
     match reauth_watching_cancel(ctx, profile) {
         Ok(()) => {
-            lock(&ctx.auth).remove(profile);
+            lock(&ctx.auth).insert(profile.to_owned(), Auth::Tried);
             let (text, ok) = run_tool_call(ctx, call);
             CallResult {
                 text,
@@ -1368,17 +1383,32 @@ fn run_call(ctx: &LoopCtx, call: &FnCall) -> CallResult {
     }
     let profile = profile_for(ctx, call);
     // Read the state and drop the lock before an arm below locks `ctx.auth` again (`sign_in_and_
-    // retry` does, on both of its outcomes): a `match` on the lock call itself would otherwise
-    // hold the guard for every arm, not just the read, and self-deadlock on the second lock.
+    // retry` does, on every outcome): a `match` on the lock call itself would otherwise hold the
+    // guard for every arm, not just the read, and self-deadlock on the second lock.
     let state = lock(&ctx.auth).get(&profile).copied();
     match state {
         Some(Auth::Exhausted) => CallResult::signed_out(call),
         Some(Auth::Dead) => sign_in_and_retry(ctx, call, &profile, 0),
-        None => {
+        // `Tried` still gets a genuine live attempt, the same as a profile never seen signed out
+        // this turn (below): the one sign-in already run for it may still be good. The two part
+        // only on what a fresh `signed_out` from that attempt does next.
+        Some(Auth::Tried) | None => {
             let (text, ok) = run_tool_call(ctx, call);
             let used = usize::from(ok);
             if ok && status_of(&text).as_deref() == Some("signed_out") {
-                sign_in_and_retry(ctx, call, &profile, used)
+                if state == Some(Auth::Tried) {
+                    // This profile's one sign-in attempt for the turn already ran (and
+                    // succeeded, even): a second `signed_out` does not get a second browser
+                    // window (round 5), so this goes to `Exhausted` directly, not back through
+                    // `sign_in_and_retry`.
+                    lock(&ctx.auth).insert(profile, Auth::Exhausted);
+                    CallResult {
+                        used,
+                        ..CallResult::signed_out(call)
+                    }
+                } else {
+                    sign_in_and_retry(ctx, call, &profile, used)
+                }
             } else {
                 CallResult {
                     text,

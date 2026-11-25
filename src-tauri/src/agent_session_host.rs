@@ -12,7 +12,8 @@
 //! Rust yet, so the network watch is always online; a real offline shows as the `offline` error
 //! of the chat client.
 
-use std::sync::atomic::Ordering;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,8 +48,17 @@ use crate::workspaces_host::WorkspacesHost;
 /// the model again.
 const ERROR_TTL: Duration = Duration::from_secs(30);
 
-/// How often [`wait_for_running_sign_in`] re-checks a profile's cached sign-in state.
+/// How often [`wait_for_running_sign_in_until`] re-checks a profile's cached sign-in state and
+/// its own abandon flag.
 const SETTINGS_SIGN_IN_POLL: Duration = Duration::from_millis(500);
+
+/// The profiles whose current `reauth` is only watching a sign-in that belongs to Settings'
+/// own "Sign in…" (round 5), by profile, with the abandon flag each one's wait listens to. An
+/// entry here means this process did not start that sign-in and must never cancel it: Settings
+/// already owns the running CLI child, and the one `profile_reauth` found running, when it
+/// answered `profile_exists`. `DedupReauth`'s own "one caller at a time per profile" rule means
+/// at most one entry per profile ever needs writing at once.
+type Waiting = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
 /// `profile_reauth`, with `profile_exists` read as "Settings already runs its own 'Sign in…' for
 /// this profile right now": wait for it, in the same bound as a sign-in itself, instead of
@@ -58,20 +68,30 @@ fn reauth_or_wait_for_settings(
     login: &dyn GatewayComponents,
     sign_in: Option<&dyn SignInSource>,
     profile: &str,
+    waiting: &Waiting,
 ) -> CoreResult<()> {
     match login.call("profile_reauth", serde_json::json!({ "profile": profile })) {
         Ok(_) => Ok(()),
-        Err(e) if e.code() == "profile_exists" => wait_for_running_sign_in(sign_in, profile),
+        Err(e) if e.code() == "profile_exists" => {
+            wait_for_running_sign_in(sign_in, profile, waiting)
+        }
         Err(e) => Err(e),
     }
 }
 
 /// Polls `sign_in.state(profile)` every [`SETTINGS_SIGN_IN_POLL`] until it is no longer
-/// `LoginRequired` (Settings' own sign-in ended, one way or another), or [`LOGIN_TIMEOUT`] passes.
-/// `sign_in` is `None` only when the sign-in source is not managed yet; then `profile_exists`
-/// stays a plain failure, since there is nothing here to wait on.
-fn wait_for_running_sign_in(sign_in: Option<&dyn SignInSource>, profile: &str) -> CoreResult<()> {
-    wait_for_running_sign_in_until(sign_in, profile, Instant::now() + LOGIN_TIMEOUT)
+/// `LoginRequired` (Settings' own sign-in ended, one way or another), [`LOGIN_TIMEOUT`] passes,
+/// or a cancel of this profile sets the abandon flag this registers in `waiting` for its own
+/// run (round 5: a Stop, the turn's hard deadline or a Wipe must not block on Settings' own
+/// sign-in for up to five minutes, and must never cancel it — only this wait). `sign_in` is
+/// `None` only when the sign-in source is not managed yet; then `profile_exists` stays a plain
+/// failure, since there is nothing here to wait on.
+fn wait_for_running_sign_in(
+    sign_in: Option<&dyn SignInSource>,
+    profile: &str,
+    waiting: &Waiting,
+) -> CoreResult<()> {
+    wait_for_running_sign_in_until(sign_in, profile, Instant::now() + LOGIN_TIMEOUT, waiting)
 }
 
 /// `wait_for_running_sign_in`, with its deadline passed in (a test's seam: `LOGIN_TIMEOUT` is 5
@@ -80,23 +100,77 @@ fn wait_for_running_sign_in_until(
     sign_in: Option<&dyn SignInSource>,
     profile: &str,
     deadline: Instant,
+    waiting: &Waiting,
 ) -> CoreResult<()> {
     let Some(sign_in) = sign_in else {
         return Err(CoreError::IpcRefused {
             code: "profile_exists",
         });
     };
-    loop {
+    let abandon = Arc::new(AtomicBool::new(false));
+    lock(waiting).insert(profile.to_owned(), Arc::clone(&abandon));
+    let result = loop {
+        if abandon.load(Ordering::SeqCst) {
+            break Err(CoreError::IpcRefused {
+                code: "login_cancelled",
+            });
+        }
         if sign_in.state(profile) != TokenState::LoginRequired {
-            return Ok(());
+            break Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(CoreError::IpcRefused {
+            break Err(CoreError::IpcRefused {
                 code: "profile_exists",
             });
         }
         thread::sleep(SETTINGS_SIGN_IN_POLL);
-    }
+    };
+    lock(waiting).remove(profile);
+    result
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Builds the "sign in, then retry" rule's `ReauthService` on `login` (R5's `profile_login` and
+/// `profile_login_cancel`) and `sign_in` (R6's cached state, for the Settings-sign-in wait).
+/// Standalone and unit-testable, so [`install`] stays a thin assembly of managed state.
+///
+/// `cancel`'s ownership rule (round 5): if this profile is only being watched (`waiting` has an
+/// entry for it: `profile_reauth` found Settings' own "Sign in…" already running), abandon the
+/// wait and nothing else — the running CLI child belongs to Settings, not this call, and
+/// `profile_login_cancel` must never touch it. Only when this profile is not being watched (this
+/// process's own `profile_reauth` is the one blocked in `databricks auth login`) does `cancel`
+/// call `profile_login_cancel`, to kill that child.
+fn build_reauth(
+    login: Arc<dyn GatewayComponents>,
+    sign_in: Option<Arc<dyn SignInSource>>,
+) -> Arc<dyn ReauthService> {
+    let waiting: Waiting = Arc::default();
+    let run_login = Arc::clone(&login);
+    let run_sign_in = sign_in.clone();
+    let run_waiting = Arc::clone(&waiting);
+    Arc::new(DedupReauth::new(
+        move |profile: &str| {
+            reauth_or_wait_for_settings(
+                run_login.as_ref(),
+                run_sign_in.as_deref(),
+                profile,
+                &run_waiting,
+            )
+        },
+        move |profile: &str| {
+            if let Some(abandon) = lock(&waiting).get(profile).cloned() {
+                abandon.store(true, Ordering::SeqCst);
+                return;
+            }
+            let _ = login.call(
+                "profile_login_cancel",
+                serde_json::json!({ "profile": profile }),
+            );
+        },
+    ))
 }
 
 /// The managed agent component.
@@ -317,27 +391,14 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
     // same `profile_login_cancel` that the Settings "Cancel" button uses, so none of them leaves
     // the CLI child running or Settings' own "Sign in…" refused `profile_exists` afterwards. With
     // no `ProfileLoginHost` managed yet, every sign-in refuses cleanly instead of panicking.
-    let reauth: Arc<dyn ReauthService> = match handle
-        .try_state::<crate::profiles_host::ProfileLoginHost>()
-    {
-        Some(login) => {
-            let run_login = login.0.clone();
-            let run_sign_in = sign_in.clone();
-            let cancel_login = login.0.clone();
-            Arc::new(DedupReauth::new(
-                move |profile: &str| {
-                    reauth_or_wait_for_settings(run_login.as_ref(), run_sign_in.as_deref(), profile)
-                },
-                move |profile: &str| {
-                    let _ = cancel_login.call(
-                        "profile_login_cancel",
-                        serde_json::json!({ "profile": profile }),
-                    );
-                },
-            ))
-        }
-        None => Arc::new(NoReauth),
-    };
+    let reauth: Arc<dyn ReauthService> =
+        match handle.try_state::<crate::profiles_host::ProfileLoginHost>() {
+            Some(login) => build_reauth(
+                login.0.clone() as Arc<dyn GatewayComponents>,
+                sign_in.clone(),
+            ),
+            None => Arc::new(NoReauth),
+        };
     let deps = OrchDeps {
         guard: Arc::clone(guard.inner()),
         chat,
@@ -455,17 +516,46 @@ mod tests {
         }
     }
 
+    /// A `GatewayComponents` that records how many times each command of `build_reauth`'s own
+    /// `login` ran: `profile_reauth` always answers `profile_exists` (round 5's own scenario,
+    /// where the wait is for Settings' own sign-in, not this process's).
+    #[derive(Default)]
+    struct RecordingLogin {
+        reauth_calls: Mutex<usize>,
+        cancel_calls: Mutex<usize>,
+    }
+
+    impl GatewayComponents for RecordingLogin {
+        fn call(&self, command: &'static str, _args: Value) -> CoreResult<Value> {
+            match command {
+                "profile_reauth" => {
+                    *self.reauth_calls.lock().unwrap() += 1;
+                    fail("profile_exists")
+                }
+                "profile_login_cancel" => {
+                    *self.cancel_calls.lock().unwrap() += 1;
+                    Ok(Value::Null)
+                }
+                _ => Ok(Value::Null),
+            }
+        }
+    }
+
+    fn no_waiting() -> Waiting {
+        Arc::default()
+    }
+
     #[test]
     fn reauth_or_wait_passes_through_a_successful_reauth() {
         let login = FakeLogin(|_| Ok(Value::Null));
-        assert!(reauth_or_wait_for_settings(&login, None, "p-sales").is_ok());
+        assert!(reauth_or_wait_for_settings(&login, None, "p-sales", &no_waiting()).is_ok());
     }
 
     #[test]
     fn reauth_or_wait_passes_through_a_plain_failure_unchanged() {
         let login = FakeLogin(|_| fail("profile_invalid"));
         assert_eq!(
-            reauth_or_wait_for_settings(&login, None, "p-sales")
+            reauth_or_wait_for_settings(&login, None, "p-sales", &no_waiting())
                 .unwrap_err()
                 .code(),
             "profile_invalid"
@@ -481,14 +571,16 @@ mod tests {
             calls: 0.into(),
             flips_after: 2,
         };
-        assert!(reauth_or_wait_for_settings(&login, Some(&tokens), "p-sales").is_ok());
+        assert!(
+            reauth_or_wait_for_settings(&login, Some(&tokens), "p-sales", &no_waiting()).is_ok()
+        );
     }
 
     #[test]
     fn reauth_or_wait_fails_on_profile_exists_with_no_sign_in_source_to_wait_on() {
         let login = FakeLogin(|_| fail("profile_exists"));
         assert_eq!(
-            reauth_or_wait_for_settings(&login, None, "p-sales")
+            reauth_or_wait_for_settings(&login, None, "p-sales", &no_waiting())
                 .unwrap_err()
                 .code(),
             "profile_exists"
@@ -503,10 +595,38 @@ mod tests {
         };
         // A deadline already past: the timeout path runs at once, not after a real wait.
         assert_eq!(
-            wait_for_running_sign_in_until(Some(&tokens), "p-sales", Instant::now())
+            wait_for_running_sign_in_until(Some(&tokens), "p-sales", Instant::now(), &no_waiting())
                 .unwrap_err()
                 .code(),
             "profile_exists"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_wait_for_settings_own_sign_in_never_touches_it() {
+        // Round 5: when `profile_reauth` answers `profile_exists`, the running sign-in belongs
+        // to Settings, not this process. A cancel of it (Stop, the turn's hard deadline or a
+        // Wipe) must abandon the wait at once, and must never call `profile_login_cancel` on a
+        // sign-in it does not own.
+        let login = Arc::new(RecordingLogin::default());
+        let tokens: Arc<dyn SignInSource> = Arc::new(Tokens(TokenState::LoginRequired));
+        let reauth = build_reauth(login.clone() as Arc<dyn GatewayComponents>, Some(tokens));
+        let r2 = Arc::clone(&reauth);
+        let waiter = thread::spawn(move || r2.reauth("p-sales"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while *login.reauth_calls.lock().unwrap() == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*login.reauth_calls.lock().unwrap(), 1, "reauth never ran");
+        // A moment for the wait loop to register itself before the cancel below.
+        thread::sleep(Duration::from_millis(20));
+        reauth.cancel("p-sales");
+        let result = waiter.join().unwrap();
+        assert_eq!(result.unwrap_err().code(), "login_cancelled");
+        assert_eq!(
+            *login.cancel_calls.lock().unwrap(),
+            0,
+            "Settings' own sign-in must never be cancelled"
         );
     }
 
