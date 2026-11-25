@@ -85,6 +85,9 @@ export interface ConversationsWireDeps extends ConversationsReadDeps {
   /** The owner's "little button on the Conversations copy" request: `clipboard_write_text`
    * with `text` only (no `html`), for the row the brain resolved from its own last list read. */
   copyMarkdown?(text: string): Promise<unknown>;
+  /** The owner's "Copy" button request (ADR 0124 amendment): formatted (html plus text), for
+   * the row's answer and its workspace host, both resolved from the brain's own last list read. */
+  copyFormatted?(md: string, host: string): void;
 }
 
 export interface HubConversationsWiring {
@@ -590,6 +593,11 @@ export function wireHubConversations(
       // names the row by id.
       const row = last?.list.rows.find((r) => r.requestId === action.requestId);
       if (row && row.answerMd !== '') void deps.copyMarkdown?.(row.answerMd);
+      return;
+    }
+    if (action.action === 'conversations.copy') {
+      const row = last?.list.rows.find((r) => r.requestId === action.requestId);
+      if (row && row.answerMd !== '') deps.copyFormatted?.(row.answerMd, row.workspaceHost);
       return;
     }
     void (async () => {

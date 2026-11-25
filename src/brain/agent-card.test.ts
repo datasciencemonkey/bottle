@@ -432,6 +432,7 @@ describe('chip clicks from the card', () => {
       openAgent: (id) => void log.push(`open:${id}`),
       openSettings: () => void log.push('settings'),
       cardDone: (m) => void log.push(`done:${m === MOG ? 'mog' : m}`),
+      copy: (id) => void log.push(`copy:${id}`),
     };
     wireAgentChips(bus, deps);
     const input = (from: string, kind: string, payload: unknown, actionTicket?: string) =>
@@ -471,6 +472,15 @@ describe('chip clicks from the card', () => {
     r.input(`card-${MOG}`, 'chip_click', { chipId: 5 });
     r.input(`card-${MOG}`, 'chip_click', { chipId: 'agent-stop:' });
     expect(r.log).toEqual(['done:mog']);
+  });
+
+  it('[ADR 0124 amendment] a card Copy click names the turn, only from the card', () => {
+    const r = chipRig();
+    r.input(`card-${MOG}`, 'click', { action: 'agent.copy', turnId: T1 });
+    r.input('hub', 'click', { action: 'agent.copy', turnId: T1 });
+    r.input(`mog-${MOG}`, 'click', { action: 'agent.copy', turnId: T1 });
+    r.input(`card-${MOG}`, 'click', { action: 'agent.copy' });
+    expect(r.log).toEqual([`copy:${T1}`]);
   });
 });
 

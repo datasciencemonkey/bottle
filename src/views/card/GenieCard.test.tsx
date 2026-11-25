@@ -199,6 +199,22 @@ describe('Genie card (#573)', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it('[ADR 0124 amendment] the Copy button emits answer.copy with the exchange id', async () => {
+    const el = await mount();
+    await tauri.emitTo(`card-${ID}`, 'card:update', answered);
+    const c = el.querySelector('[data-genie="answer"]') as HTMLElement;
+    const btn = c.querySelector('button[data-action="copy"]') as HTMLElement;
+    expect(btn.getAttribute('aria-label')).toBe('Copy');
+    await act(async () => btn.click());
+    expect(inputEmits()).toContainEqual({
+      mogId: ID,
+      kind: 'click',
+      payload: { action: 'answer.copy', requestId: OP },
+    });
+    // It does not open the hub Conversations or close the card (no `target` click).
+    expect(clicks().filter((c) => c.payload.target !== undefined)).toEqual([]);
+  });
+
   it('[H-B] shows the quiet copy note from card.copyNote, not a blurb', async () => {
     const el = await mount();
     await tauri.emitTo(`card-${ID}`, 'card:update', { ...answered, copyNote: 'copied' });

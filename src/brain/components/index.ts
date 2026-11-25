@@ -74,6 +74,7 @@ import {
 } from '../hub-agent-wiring';
 import { MOG_PALETTE } from '../../shared/mog-palette';
 import { asLinkOpenClick, bareHost } from '../../shared/link-trust';
+import { formatAnswerForClipboard } from '../../shared/answer-clipboard-format';
 import { createGenieFollowup } from '../genie-followup';
 import { wireGenieCard } from '../genie-card-wiring';
 import { wireHubMemory } from '../hub-memory-wiring';
@@ -254,6 +255,16 @@ export function startBrain(): Brain {
       // The owner's "little button on the Conversations copy" request: the direct answer's
       // Markdown only, no html, independent of the "Copy Genie answers" toggle.
       copyMarkdown: (text) => call('clipboard_write_text', { text }),
+      // The owner's "Copy" button request (ADR 0124 amendment): formatted (html plus text),
+      // next to "Copy Markdown". No note round-trip here either (the view's own optimistic
+      // check-mark state, same as "Copy Markdown").
+      copyFormatted: (md, host) => {
+        const { text, html } = formatAnswerForClipboard(md, {
+          profileHost: host,
+          allowedAppUrls: [],
+        });
+        void call('clipboard_write_text', { text, html });
+      },
     });
     // The hub asks for its list with `conversations.ready`, and that request is lost while this
     // brain has no Channel yet (the core refuses `view_emit`) or while the store is locked. So
@@ -425,6 +436,10 @@ export function startBrain(): Brain {
     const stacks = new Map<MogId, CardStack>();
     /** #573: the newest Genie request of each MOG, for a double-click on the MOG. */
     const lastGenieOp = new Map<MogId, string>();
+    /** The owner's "Copy" button request (ADR 0124 amendment): the direct answer's own
+     * markdown and workspace host, for an explicit click on the card after the auto-copy (if
+     * any) already ran. Keyed by MOG; a stale `requestId` from an older answer is ignored. */
+    const lastDirectAnswer = new Map<MogId, { opId: string; md: string; host?: string }>();
     const stackFor = (mogId: MogId): CardStack => {
       let s = stacks.get(mogId);
       if (!s)
@@ -470,8 +485,10 @@ export function startBrain(): Brain {
       // the default for most users (the router's direct route, the zero-call fallback and the
       // refused-submit fallback all share this one `send`), so it gets its own copy hook, not
       // just the orchestrator turn's.
-      onAnswered: (mogId, opId, md, host) =>
-        answerClipboard.onDirectAnswered(mogId, opId, md, host),
+      onAnswered: (mogId, opId, md, host) => {
+        lastDirectAnswer.set(mogId, { opId, md, ...(host !== undefined ? { host } : {}) });
+        answerClipboard.onDirectAnswered(mogId, opId, md, host);
+      },
     });
     // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
     // events into the card of the turn and the history rows; the follow-up window is R-13.
@@ -638,6 +655,12 @@ export function startBrain(): Brain {
       }),
     );
     // The agent turns in memory (live, waiting, earlier) go to hub Conversations (ADR 0121).
+    // The owner's "Copy" button request (ADR 0124 amendment): an explicit, formatted (html
+    // plus text) copy of a finished turn, from the card or from hub Conversations alike.
+    const copyAgentTurn = (turnId: string) => {
+      const turn = agentClient.turn(turnId);
+      if (turn) answerClipboard.copyNow(turnId, turn);
+    };
     hubRef.current = wireHubAgent(bus, {
       client: agentClient,
       send: sendHubAgent,
@@ -651,6 +674,7 @@ export function startBrain(): Brain {
         const turn = agentClient.turn(turnId);
         if (turn) answerClipboard.copyMarkdownNow(turnId, turn);
       },
+      copy: copyAgentTurn,
     });
     // The agent chips of the card: Stop, Open in Conversations, Open Settings.
     wireAgentChips(bus, {
@@ -667,6 +691,7 @@ export function startBrain(): Brain {
         void workspaces.showSettings();
       },
       cardDone: (mogId) => agentCard.close(mogId),
+      copy: copyAgentTurn,
     });
     // #142 (ADR 0086, ADR 0098), B1: T3 sends an ⌥G ask at once or shows the Ask Genie chip.
     // Nothing goes to Genie without ⌥G or a chip press.
@@ -829,6 +854,16 @@ export function startBrain(): Brain {
       changeHome: () => {
         void showHub();
         void workspaces.showSettings();
+      },
+      // The owner's "Copy" button request (ADR 0124 amendment): the direct answer's own,
+      // explicit, formatted copy. `requestId` (when the view sends one) must match the
+      // newest direct answer this MOG's card knows: a stale click on an answer that already
+      // scrolled off copies nothing, rather than silently copying a newer one.
+      copyAnswer: (mogId, requestId) => {
+        const last = lastDirectAnswer.get(mogId);
+        if (last && (requestId === undefined || last.opId === requestId)) {
+          answerClipboard.copyDirectNow(mogId, last.opId, last.md, last.host);
+        }
       },
     });
     // #ui-4 (review #603, findings 1 and 4): the MOG right-click menu's native popup. A MOG

@@ -65,6 +65,12 @@ export interface GenieCardWiringDeps {
   remember?(mogId: MogId, requestId: string | undefined, ticket: string | undefined): void;
   /** ADR 0113: the card's Undo of a save. The callee forgets that item only if this MOG saved it in the last 8 s. */
   undoRemember?(mogId: MogId, itemId: string): void;
+  /**
+   * The owner's "Copy" button request (ADR 0124 amendment): an explicit click on the direct
+   * answer's own Copy control. `requestId` names the exchange the card shows (as "Remember
+   * this" does); `undefined` when the click carried none.
+   */
+  copyAnswer?(mogId: MogId, requestId: string | undefined): void;
 }
 
 function target(p: unknown): { target?: unknown; requestId?: unknown; on?: unknown } {
@@ -89,6 +95,10 @@ export function wireGenieCard(bus: BrainBus, deps: GenieCardWiringDeps): () => v
         : undefined;
     // ADR 0113: only the card of this MOG saves or undoes a memory.
     const action = (p as { action?: unknown }).action;
+    if (action === 'answer.copy') {
+      if (fromCard) deps.copyAnswer?.(mogId, requestId);
+      return;
+    }
     if (action === 'memory.remember' || action === 'memory.undo') {
       if (!fromCard) return;
       if (action === 'memory.undo') {

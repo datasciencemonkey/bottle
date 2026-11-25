@@ -103,6 +103,34 @@ describe('AgentTurnCard', () => {
     });
   });
 
+  it('[ADR 0124 amendment] a done turn with an answer shows Copy; it emits agent.copy', async () => {
+    const t = view({
+      state: 'done',
+      parts: [
+        { callId: 'c-00000001', workspace: sales, sections: [{ id: 'answer', md: 'Churn fell.' }] },
+      ],
+    });
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={t} chips={chips} />);
+    const btn = el.querySelector('button[data-action="copy"]') as HTMLButtonElement;
+    expect(btn.getAttribute('aria-label')).toBe('Copy');
+    await click(btn);
+    expect(inputEmits()).toContainEqual({
+      mogId: MOG,
+      kind: 'click',
+      payload: { action: 'agent.copy', turnId: T },
+    });
+  });
+
+  it('a turn with no answer to copy, or not done, shows no Copy button', async () => {
+    const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
+    expect(el.querySelector('button[data-action="copy"]')).toBeNull();
+    const doneNoAnswer = view({ state: 'done', parts: [] });
+    const { el: el2 } = await render(
+      <AgentTurnCard mogId={MOG} turn={doneNoAnswer} chips={chips} />,
+    );
+    expect(el2.querySelector('button[data-action="copy"]')).toBeNull();
+  });
+
   it('[AC-2a.10] shows "Still working…" in the slow state, in a live region', async () => {
     const { el } = await render(
       <AgentTurnCard mogId={MOG} turn={view({ state: 'slow' })} chips={chips} />,

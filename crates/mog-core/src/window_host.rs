@@ -279,6 +279,26 @@ impl ClipboardBackend for MacPasteboard {
     }
 }
 
+/// The general pasteboard's type names and change count (macOS only): the owner's `last-copy.json`
+/// proof diagnostic (ADR 0124 amendment). Read-only, and content-free on purpose (SEC-03): never
+/// the text or the HTML, only the fact of which types are on the pasteboard and its change count,
+/// so the owner can see for themselves whether Bottle's own `clipboard_write_text` wrote
+/// `public.html`, with no risk to anything sensitive the pasteboard may hold. The caller (the
+/// Tauri host, which alone knows the app data dir) writes the file; this only reads.
+#[cfg(target_os = "macos")]
+pub fn pasteboard_diagnostic() -> (Vec<String>, u64) {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::NSPasteboard;
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let types = pasteboard
+            .types()
+            .map(|t| t.to_vec().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+        (types, pasteboard.changeCount() as u64)
+    })
+}
+
 /// A backend for a platform with no clipboard write at all (Linux). `write` and `clear` are
 /// never reached: [`ClipboardWriteTextComponent::unsupported`] never calls them.
 #[derive(Debug, Default, Clone, Copy)]
@@ -294,10 +314,21 @@ impl ClipboardBackend for NoClipboard {
     }
 }
 
-/// The longest `text` and `html` *combined* that `clipboard_write_text` accepts, in UTF-8 bytes
-/// (100 KB). A Genie answer never needs more; a longer pair answers `too_large` rather than hang
-/// the pasteboard on a giant write.
+/// The longest `text` that `clipboard_write_text` accepts, in UTF-8 bytes (100 KB). A Genie
+/// answer never needs more as plain text; a longer one answers `too_large` rather than hang the
+/// pasteboard on a giant write.
 pub const CLIPBOARD_WRITE_MAX_BYTES: usize = 100 * 1024;
+
+/// The longest `html` that `clipboard_write_text` accepts, in UTF-8 bytes. `html` is checked on
+/// its own, not combined with `text` (bug found 2026-11-25, owner report: a table-heavy answer
+/// pasted as plain text only, with no `public.html`): `markdownToHtml`'s per-cell inline style
+/// (`CELL_STYLE`, `src/shared/answer-clipboard-format.ts`) is required for Gmail, Outlook, Docs
+/// and Word, which strip `<style>` blocks and `class` attributes on paste, but it multiplies a
+/// table's bytes well past the "about doubles" rule of thumb the combined cap once assumed: a
+/// plain-text table a few KB long can become a `html` form several times that size. A 4x
+/// allowance over the text cap covers a genuinely large table; `html` still answers `too_large`
+/// well short of a write big enough to hang the pasteboard.
+pub const CLIPBOARD_WRITE_HTML_MAX_BYTES: usize = CLIPBOARD_WRITE_MAX_BYTES * 4;
 
 /// The reply of `clipboard_write_text`: `{result: written|too_large|unsupported}`. A typed
 /// outcome, not a thrown error, the same convention as `insertion::InsertOutcome`.
@@ -307,7 +338,8 @@ pub enum ClipboardWriteOutcome {
     /// The text is now the durable, normal clipboard item: Cmd+V pastes it like anything else
     /// the user copied themselves.
     Written,
-    /// `text` is over [`CLIPBOARD_WRITE_MAX_BYTES`]. Nothing was written.
+    /// `text` is over [`CLIPBOARD_WRITE_MAX_BYTES`], or `html` is over
+    /// [`CLIPBOARD_WRITE_HTML_MAX_BYTES`]. Nothing was written.
     TooLarge,
     /// This build or OS has no clipboard write (Linux; or Windows with no path wired yet).
     Unsupported,
@@ -356,9 +388,11 @@ impl<B: ClipboardBackend + Copy> GatewayComponents for ClipboardWriteTextCompone
         }
         let a: ClipboardWriteTextArgs =
             serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-        // ADR 0124 amendment: the 100 KB cap covers `text` and `html` together, one write.
-        let combined_len = a.text.len() + a.html.as_deref().map_or(0, str::len);
-        if combined_len > CLIPBOARD_WRITE_MAX_BYTES {
+        // Bug fix 2026-11-25: `text` and `html` each answer `too_large` on their own bound, not
+        // combined (see `CLIPBOARD_WRITE_HTML_MAX_BYTES`): a table-heavy answer's `html` can be
+        // several times its `text` size on its own merits, with no risk to the pasteboard write.
+        let html_len = a.html.as_deref().map_or(0, str::len);
+        if a.text.len() > CLIPBOARD_WRITE_MAX_BYTES || html_len > CLIPBOARD_WRITE_HTML_MAX_BYTES {
             return Ok(json!({ "result": ClipboardWriteOutcome::TooLarge }));
         }
         let Some((backend, platform)) = self.target else {
@@ -601,27 +635,66 @@ mod clipboard_tests {
     }
 
     #[test]
-    fn clipboard_write_text_the_size_bound_covers_text_and_html_combined() {
+    fn clipboard_write_text_text_and_html_each_answer_too_large_on_their_own_bound() {
+        // Bug fix 2026-11-25: a `text` within its own bound must not answer `too_large` just
+        // because `html` (the same answer's bigger, tag-and-inline-style form) is still within
+        // its own, bigger bound — this used to fail here, before the two bounds were split.
         let rec = Recorder::default();
         let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
-        // Half the bound in each of `text` and `html`: together just over it.
-        let half = CLIPBOARD_WRITE_MAX_BYTES / 2;
-        let text = "x".repeat(half);
-        let html = "y".repeat(half + 1);
-        let reply = c
-            .call("clipboard_write_text", json!({"text": text, "html": html}))
-            .unwrap();
-        assert_eq!(reply, json!({"result": "too_large"}));
-        assert!(rec.calls.lock().unwrap().is_empty());
-        // Exactly at the combined bound: a normal write.
-        let html_ok = "y".repeat(half);
+        let text = "x".repeat(CLIPBOARD_WRITE_MAX_BYTES);
+        let html = "y".repeat(CLIPBOARD_WRITE_HTML_MAX_BYTES);
         let reply = c
             .call(
                 "clipboard_write_text",
-                json!({"text": text, "html": html_ok}),
+                json!({"text": text.clone(), "html": html}),
             )
             .unwrap();
         assert_eq!(reply, json!({"result": "written"}));
+        // `text` one byte over its own bound answers `too_large`, regardless of `html`.
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let over_text = "x".repeat(CLIPBOARD_WRITE_MAX_BYTES + 1);
+        let reply = c
+            .call(
+                "clipboard_write_text",
+                json!({"text": over_text, "html": "y"}),
+            )
+            .unwrap();
+        assert_eq!(reply, json!({"result": "too_large"}));
+        assert!(rec.calls.lock().unwrap().is_empty());
+        // `html` one byte over its own bound answers `too_large`, with a tiny `text`.
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let over_html = "y".repeat(CLIPBOARD_WRITE_HTML_MAX_BYTES + 1);
+        let reply = c
+            .call(
+                "clipboard_write_text",
+                json!({"text": "x", "html": over_html}),
+            )
+            .unwrap();
+        assert_eq!(reply, json!({"result": "too_large"}));
+        assert!(rec.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn clipboard_write_text_a_table_heavy_answer_keeps_its_html() {
+        // The exact bug the owner reported: a plain-text table well under the text bound, whose
+        // HTML form (inline `CELL_STYLE` on every `<td>`/`<th>`, `answer-clipboard-format.ts`)
+        // costs several times as many bytes for the same content, used to be silently dropped to
+        // text-only by the old combined bound.
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let text = "a\tb\tc\n".repeat(2_000); // 12,000 bytes.
+        let html =
+            "<tr><td style=\"border:1px solid #ccc;padding:4px 8px;\">a</td></tr>".repeat(2_000); // well over 2x `text`, still under the html bound.
+        assert!(html.len() > text.len() * 2);
+        let reply = c
+            .call("clipboard_write_text", json!({"text": text, "html": html}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+        let calls = rec.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].iter().any(|f| f.name == "public.html"));
     }
 
     #[test]

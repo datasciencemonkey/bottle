@@ -349,3 +349,130 @@ describe('createAnswerClipboard: the ADR 0124 amendment (html plus the "Copy Mar
     expect(writes).toEqual(['The answer.', 'The answer.']);
   });
 });
+
+describe('createAnswerClipboard: copyNow and copyDirectNow (the owner\'s "Copy" button request)', () => {
+  it('copyNow writes both text and html, reported through noteTurn', async () => {
+    const { deps, writes, htmls, turnNotes } = fakeDeps();
+    createAnswerClipboard(deps).copyNow(
+      't1',
+      turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [{ id: 'answer', md: 'Revenue grew **a lot**.' }],
+          },
+        ],
+      }),
+    );
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(writes).toEqual(['Revenue grew a lot.']);
+    expect(htmls[0]).toContain('<strong>a lot</strong>');
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
+  });
+
+  it('copyNow works even when the auto-copy toggle is off', async () => {
+    const { deps, writes, htmls } = fakeDeps({ enabled: () => false });
+    createAnswerClipboard(deps).copyNow('t1', turn());
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.']);
+    expect(htmls[0]).toBeDefined();
+  });
+
+  it('copyNow can run again for the same turn (no once-per-turn guard)', async () => {
+    const { deps, writes } = fakeDeps();
+    const clipboard = createAnswerClipboard(deps);
+    clipboard.copyNow('t1', turn());
+    clipboard.copyNow('t1', turn());
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.', 'The answer.']);
+  });
+
+  it('copyNow is a no-op for a withheld (quarantined) answer', async () => {
+    const { deps, writes } = fakeDeps();
+    createAnswerClipboard(deps).copyNow(
+      't1',
+      turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [
+              {
+                id: 'answer',
+                md: 'This answer was held back. It looked like it held instructions.',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+  });
+
+  it('copyNow waits for the dictation-insertion gate before writing', async () => {
+    let held: (() => void) | undefined;
+    const { deps, writes } = fakeDeps({
+      whenClear: (fn) => {
+        held = fn;
+      },
+    });
+    createAnswerClipboard(deps).copyNow('t1', turn());
+    expect(writes).toEqual([]);
+    held?.();
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.']);
+  });
+
+  it('copyDirectNow writes both text and html, reported through noteDirect', async () => {
+    const { deps, writes, htmls, directNotes } = fakeDeps();
+    createAnswerClipboard(deps).copyDirectNow(
+      MOG,
+      'op-1',
+      `Revenue was **$5M**. See [the report](https://${DIRECT_HOST}/x) for more.`,
+      DIRECT_HOST,
+    );
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(writes).toEqual([
+      'Revenue was $5M. See the report (https://sales.cloud.databricks.com/x) for more.',
+    ]);
+    expect(htmls[0]).toContain('<strong>$5M</strong>');
+    expect(htmls[0]).toContain(`<a href="https://${DIRECT_HOST}/x">the report</a>`);
+    expect(directNotes).toEqual([{ mogId: MOG, opId: 'op-1', outcome: 'copied' }]);
+  });
+
+  it('copyDirectNow works even when the auto-copy toggle is off', async () => {
+    const { deps, writes } = fakeDeps({ enabled: () => false });
+    createAnswerClipboard(deps).copyDirectNow(MOG, 'op-1', 'Revenue was $5M.');
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue was $5M.']);
+  });
+
+  it('copyDirectNow can run again for the same opId (no once guard)', async () => {
+    const { deps, writes } = fakeDeps();
+    const clipboard = createAnswerClipboard(deps);
+    clipboard.copyDirectNow(MOG, 'op-1', 'Revenue was $5M.');
+    clipboard.copyDirectNow(MOG, 'op-1', 'Revenue was $5M.');
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue was $5M.', 'Revenue was $5M.']);
+  });
+
+  it('copyDirectNow never copies an empty answer', async () => {
+    const { deps, writes } = fakeDeps();
+    createAnswerClipboard(deps).copyDirectNow(MOG, 'op-1', '   ');
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+  });
+
+  it('copyDirectNow with no host never trusts an https link in the HTML form', async () => {
+    const { deps, htmls } = fakeDeps();
+    createAnswerClipboard(deps).copyDirectNow(
+      MOG,
+      'op-1',
+      `See [the report](https://${DIRECT_HOST}/x).`,
+    );
+    await Promise.resolve();
+    expect(htmls[0]).not.toContain('<a ');
+  });
+});

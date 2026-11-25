@@ -292,11 +292,12 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
   );
 }
 
-/** How long the "Copy Markdown" button shows its check mark (ADR 0124 amendment). An optimistic,
- * view-local state: the direct answer has no brain-sent copy note to reuse (unlike the agent
- * turn's `copyNote`, `copy-answer-note.tsx`). */
+/** How long the "Copy Markdown" and "Copy" buttons show their check mark (ADR 0124 amendment).
+ * An optimistic, view-local state: the direct answer has no brain-sent copy note to reuse
+ * (unlike the agent turn's `copyNote`, `copy-answer-note.tsx`). */
 const COPY_MARKDOWN_CHECK_MS = 1_500;
 export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
+export const COPY_LABEL = 'Copy';
 
 /** One exchange of a thread: its question, meta line, answer and key numbers (#145). */
 function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string | undefined }) {
@@ -329,6 +330,21 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
     setCopied(true);
     clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(false), COPY_MARKDOWN_CHECK_MS);
+  }, [row.requestId]);
+  const [copiedFormatted, setCopiedFormatted] = useState(false);
+  const copyFormattedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copyFormattedTimer.current), []);
+  const copyFormatted = useCallback(() => {
+    void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+      action: 'conversations.copy',
+      requestId: row.requestId,
+    }).catch(() => undefined);
+    setCopiedFormatted(true);
+    clearTimeout(copyFormattedTimer.current);
+    copyFormattedTimer.current = setTimeout(
+      () => setCopiedFormatted(false),
+      COPY_MARKDOWN_CHECK_MS,
+    );
   }, [row.requestId]);
   return (
     <div className="conv-exchange" data-exchange={row.requestId}>
@@ -395,22 +411,40 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
         </p>
       )}
       {!failed && row.answerMd !== '' && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-6"
-              data-action="copy-markdown"
-              aria-label={COPY_MARKDOWN_LABEL}
-              onClick={copyMarkdown}
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{COPY_MARKDOWN_LABEL}</TooltipContent>
-        </Tooltip>
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6"
+                data-action="copy"
+                aria-label={COPY_LABEL}
+                onClick={copyFormatted}
+              >
+                {copiedFormatted ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{COPY_LABEL}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6"
+                data-action="copy-markdown"
+                aria-label={COPY_MARKDOWN_LABEL}
+                onClick={copyMarkdown}
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{COPY_MARKDOWN_LABEL}</TooltipContent>
+          </Tooltip>
+        </>
       )}
       <KeyNumbers items={row.keyNumbers} />
     </div>

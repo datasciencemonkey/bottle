@@ -424,6 +424,9 @@ export interface AgentChipDeps {
   openSettings(): void;
   /** The user closed the card of an agent turn (`card_done`). */
   cardDone(mogId: MogId): void;
+  /** The owner's "Copy" button request (ADR 0124 amendment): an explicit click on the agent
+   * turn card's own Copy control, formatted (html plus text). */
+  copy?(turnId: string): void;
 }
 
 /** What "Open in Conversations" needs. */
@@ -455,6 +458,9 @@ export function wireAgentChips(bus: BrainBus, deps: AgentChipDeps): () => void {
     if (input.from !== `card-${input.mogId}`) return;
     const p = isObj(input.payload) ? input.payload : {};
     if (input.kind === 'click' && p['target'] === CARD_DONE) return deps.cardDone(input.mogId);
+    if (input.kind === 'click' && p['action'] === 'agent.copy' && typeof p['turnId'] === 'string') {
+      return deps.copy?.(p['turnId']);
+    }
     if (input.kind !== 'chip_click' || typeof p['chipId'] !== 'string') return;
     const chip = parseAgentChip(p['chipId']);
     if (!chip) return;

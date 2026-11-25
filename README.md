@@ -112,7 +112,9 @@ directly and shows a short notice.
 Bottle copies each Genie answer to your clipboard, on the ⌥G card and on a reply in Conversations
 (turn this off in Settings → Workspace). It pastes formatted into Docs and email, and as cells
 into Excel; a small "Copy as Markdown" button on each reply in Conversations copies the raw
-Markdown instead, any time, even with the setting off.
+Markdown instead, any time, even with the setting off. A small **Copy** button next to it, and on
+the ⌥G card itself, copies the same formatted (HTML plus text) form on demand, any time, even with
+the setting off.
 
 ### Record: ⌥R (hold Right Option, tap R)
 

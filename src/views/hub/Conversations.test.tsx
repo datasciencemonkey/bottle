@@ -492,6 +492,50 @@ describe('hub Conversations links (#523)', () => {
   });
 });
 
+describe('[ADR 0124 amendment] hub Conversations Copy and Copy Markdown buttons', () => {
+  beforeEach(() => tauri.reset());
+
+  const copyEmits = () =>
+    viewEmits().filter((e) =>
+      ['conversations.copy', 'conversations.copy_markdown'].includes(
+        (e as { payload?: { action?: string } }).payload?.action ?? '',
+      ),
+    ) as { mogId: string; kind: string; payload: { action: string; requestId: string } }[];
+
+  it('shows both buttons for an answered row and each emits its own action', async () => {
+    const { el } = await mount();
+    const [one] = [row(1, at(19, 14, 2))];
+    await tauri.emitTo('hub', 'hub:conversations', { rows: [one] });
+    const copy = el.querySelector('button[data-action="copy"]') as HTMLButtonElement;
+    const markdown = el.querySelector('button[data-action="copy-markdown"]') as HTMLButtonElement;
+    expect(copy.getAttribute('aria-label')).toBe('Copy');
+    expect(markdown.getAttribute('aria-label')).toBe('Copy as Markdown');
+    await act(async () => void copy.click());
+    await act(async () => void markdown.click());
+    expect(copyEmits()).toEqual([
+      {
+        mogId: 'conversations',
+        kind: 'click',
+        payload: { action: 'conversations.copy', requestId: one?.requestId },
+      },
+      {
+        mogId: 'conversations',
+        kind: 'click',
+        payload: { action: 'conversations.copy_markdown', requestId: one?.requestId },
+      },
+    ]);
+  });
+
+  it('shows neither button for a failed row or a row with no answer', async () => {
+    const { el } = await mount();
+    await tauri.emitTo('hub', 'hub:conversations', {
+      rows: [row(1, at(19, 14, 2), { status: 'failed', answerMd: '' })],
+    });
+    expect(el.querySelector('button[data-action="copy"]')).toBeNull();
+    expect(el.querySelector('button[data-action="copy-markdown"]')).toBeNull();
+  });
+});
+
 describe('hub Conversations launch race: retry and give up', () => {
   beforeEach(() => {
     tauri.reset();

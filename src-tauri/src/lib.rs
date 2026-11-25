@@ -188,11 +188,16 @@ fn install_capture(handle: &tauri::AppHandle<tauri::Wry>) -> std::io::Result<()>
             gate.set(store.load().is_ok_and(|s| s.enabled));
         }
     }
-    let recording_temp_root = handle
-        .path()
-        .app_data_dir()
+    let app_data_dir = handle.path().app_data_dir().ok();
+    let recording_temp_root = app_data_dir
+        .clone()
         .map(|d| d.join(recording_cloud_host::TEMP_DIR))
-        .unwrap_or_else(|_| std::env::temp_dir().join("bottle-recordings"));
+        .unwrap_or_else(|| std::env::temp_dir().join("bottle-recordings"));
+    // The owner's `last-copy.json` proof diagnostic (ADR 0124 amendment): next to
+    // `last-capture.json`, so only in the real app data dir, never the temp-dir fallback above.
+    if app_data_dir.is_some() {
+        ipc::set_clipboard_diagnostic_dir(recording_temp_root.clone());
+    }
     let recording = recording_host::RecordingHost::new(
         &host,
         tap,

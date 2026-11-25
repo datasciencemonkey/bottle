@@ -173,9 +173,11 @@ pasting is not something most business users are going to do." A second request,
 HTML in the clipboard, plain text, the markdown as a little button on the conversations copy."
 
 1. **`clipboard_write_text` gets one new optional field, `html`.** `ClipboardWriteTextArgs {
-   text, html? }`; the 100 KB `CLIPBOARD_WRITE_MAX_BYTES` bound now covers `text` and `html`
-   combined, one write, so a long table cannot smuggle a second answer's worth of bytes past the
-   cap through the other field. On macOS, `html` (when given) is written as `public.html`
+   text, html? }`; `text` and `html` each answer `too_large` on their own 100 KB
+   `CLIPBOARD_WRITE_MAX_BYTES` / 400 KB `CLIPBOARD_WRITE_HTML_MAX_BYTES` bound, not combined
+   (bug fix, 2026-11-25: a combined bound used to drop `html` silently for a table-heavy answer
+   whose per-cell inline styling costs several times its plain-text size, matching an owner
+   report of a pasted table with no `public.html`). On macOS, `html` (when given) is written as `public.html`
    (`NSPasteboardTypeHTML`) next to `text`'s `public.utf8-plain-text`, both in the one
    `NSPasteboardItem` the durable write already makes (`clipboard_formats_durable`). Windows has
    no small, already-tested path to a CF_HTML byte-offset header in this codebase
@@ -238,3 +240,14 @@ HTML in the clipboard, plain text, the markdown as a little button on the conver
    `GenieDirectDeps.onAnswered` gains an optional fourth argument. None of this changes the
    `ClipboardWriteOutcome` reply shape (`written` / `too_large` / `unsupported`) or the Settings
    toggle, the dismiss rule, or the `NOTE_MS` clearing behaviour of decisions 1-13 above.
+
+## Amendment (2026-11-25): a "Copy" button and the `last-copy.json` proof diagnostic
+
+Next to the owner's existing "Copy Markdown" control, a small lucide-`Copy` "Copy" button
+(`AnswerClipboard.copyNow`/`copyDirectNow`, wired through `agent.copy` and `answer.copy` on the
+card and `conversations.copy` in hub Conversations) writes the same `{text, html}` form the
+auto-copy writes, even with the "Copy Genie answers" toggle off; and, on macOS only, every
+`clipboard_write_text` write that answers `written` now also records the general pasteboard's
+type names and change count only, never content, to a new `last-copy.json` (mode 0600) next to
+`last-capture.json` in the app data dir (`src-tauri/src/ipc.rs`'s `DiagnosticClipboardComponent`),
+so the owner can see for themselves whether Bottle's own write put `public.html` on the clipboard.

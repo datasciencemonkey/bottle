@@ -74,6 +74,16 @@ export interface AnswerClipboard {
    * Markdown. A no-op when the turn has no answer to copy (withheld, or an empty model note).
    */
   copyMarkdownNow(turnId: string, turn: Pick<AgentTurnView, 'summary' | 'parts'>): void;
+  /**
+   * The owner's "Copy" button request: an explicit click on a finished turn's own Copy control,
+   * formatted (html plus text, the same `formatAnswerForClipboard` output the auto-copy writes).
+   * Unlike {@link onTurnFinished} it ignores the "Copy Genie answers" toggle and the
+   * once-per-turn guard (the user may click it again, including with the toggle off); unlike
+   * {@link copyMarkdownNow} it writes `html` too. A no-op when the turn has no answer to copy.
+   */
+  copyNow(turnId: string, turn: Pick<AgentTurnView, 'summary' | 'parts'>): void;
+  /** As {@link copyNow}, for the direct path's own Copy control (`GenieCard`'s answer pill). */
+  copyDirectNow(mogId: string, opId: string, md: string, host?: string): void;
 }
 
 /** Keys already handled are capped, so a very long session never grows this without bound. */
@@ -140,6 +150,22 @@ export function createAnswerClipboard(deps: AnswerClipboardDeps): AnswerClipboar
       const text = finishedAnswerText(turn);
       if (text === undefined) return;
       deps.whenClear(() => writeOnce(text, undefined, (outcome) => deps.noteTurn(turnId, outcome)));
+    },
+    copyNow(turnId, turn) {
+      const md = finishedAnswerText(turn);
+      if (md === undefined) return;
+      const { text, html } = formatAnswerForClipboard(md, answerLinkTrust(turn));
+      deps.whenClear(() => writeOnce(text, html, (outcome) => deps.noteTurn(turnId, outcome)));
+    },
+    copyDirectNow(mogId, opId, md, host) {
+      if (md.trim() === '') return;
+      const { text, html } = formatAnswerForClipboard(
+        md,
+        host !== undefined ? { profileHost: host, allowedAppUrls: [] } : NO_LINKS,
+      );
+      deps.whenClear(() =>
+        writeOnce(text, html, (outcome) => deps.noteDirect(mogId, opId, outcome)),
+      );
     },
   };
 }

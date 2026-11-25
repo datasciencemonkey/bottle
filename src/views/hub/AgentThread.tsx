@@ -657,6 +657,7 @@ function MemTurn({
         onOpenLink={openAgentLink}
         actions={turn.state === 'needs_you' ? openSettings : undefined}
         onCopyMarkdown={() => send({ action: 'agent.copy_markdown', turnId: turn.turnId })}
+        onCopy={() => send({ action: 'agent.copy', turnId: turn.turnId })}
       />
     </section>
   );
@@ -790,6 +791,7 @@ export function AgentDetail({
               onOpenLink={openAgentLink}
               live
               onCopyMarkdown={() => send({ action: 'agent.copy_markdown', turnId: live.turnId })}
+              onCopy={() => send({ action: 'agent.copy', turnId: live.turnId })}
               actions={
                 <Button
                   type="button"

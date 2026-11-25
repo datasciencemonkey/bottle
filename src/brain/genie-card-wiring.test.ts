@@ -20,6 +20,7 @@ function setup() {
     changeHome: (m) => void log.push(['change-home', m]),
     remember: (m, id, t) => void log.push(['remember', m, id, t]),
     undoRemember: (m, id) => void log.push(['undo', m, id]),
+    copyAnswer: (m, id) => void log.push(['copy', m, id]),
   });
   const input = (from: string, kind: string, payload?: unknown, mogId = A, actionTicket?: string) =>
     bus.dispatch({
@@ -134,5 +135,23 @@ describe('Genie card wiring (#573)', () => {
     input(`card-${A}`, 'click', { action: 'memory.undo', itemId: 'x' });
     input(`card-${A}`, 'click', { action: 'memory.undo', itemId: OP });
     expect(log).toEqual([['undo', A, OP]]);
+  });
+
+  it('[ADR 0124 amendment] a card Copy click names the exchange', () => {
+    const { log, input } = setup();
+    input(`card-${A}`, 'click', { action: 'answer.copy', requestId: OP });
+    // No requestId: the callee gets undefined (its own fallback to the newest answer).
+    input(`card-${A}`, 'click', { action: 'answer.copy' });
+    expect(log).toEqual([
+      ['copy', A, OP],
+      ['copy', A, undefined],
+    ]);
+  });
+
+  it('[ADR 0124 amendment] Copy comes only from the card, never the MOG or the hub', () => {
+    const { log, input } = setup();
+    input(`mog-${A}`, 'click', { action: 'answer.copy', requestId: OP });
+    input('hub', 'click', { action: 'answer.copy', requestId: OP });
+    expect(log).toEqual([]);
   });
 });

@@ -776,6 +776,125 @@ fn os_clipboard_write() -> Option<&'static dyn GatewayComponents> {
     Some(CLIPBOARD.get_or_init(mog_core::window_host::os_component))
 }
 
+/// The file, next to `recording_host::CAPTURE_CHECK_FILE` (`last-capture.json`), that holds the
+/// `last-copy.json` diagnostic of the owner's "attach Genie's answer to the clipboard" request
+/// (ADR 0124 amendment): proof that Bottle's own `clipboard_write_text` wrote `public.html`.
+pub const CLIPBOARD_CHECK_FILE: &str = "last-copy.json";
+
+/// What reads the general pasteboard for the `last-copy.json` diagnostic: the type names and the
+/// change count, never content. A trait so a test checks the file with no real pasteboard.
+trait ClipboardDiagnosticReader: Send + Sync {
+    fn read(&self) -> (Vec<String>, u64);
+}
+
+/// The real macOS reader, over `mog_core::window_host::pasteboard_diagnostic`.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Default, Clone, Copy)]
+struct MacPasteboardReader;
+
+#[cfg(target_os = "macos")]
+impl ClipboardDiagnosticReader for MacPasteboardReader {
+    fn read(&self) -> (Vec<String>, u64) {
+        mog_core::window_host::pasteboard_diagnostic()
+    }
+}
+
+/// Wraps the real `clipboard_write_text` component (`inner`) with the `last-copy.json`
+/// diagnostic: after a write that answers `written`, `reader` names the pasteboard's types and
+/// change count, which this writes to `last-copy.json` in `dir` (mode 0600, truncated each
+/// time) — never any content, so the owner can see for themselves whether Bottle wrote
+/// `public.html`, with no risk to anything sensitive the pasteboard may hold. `dir` is set once
+/// (`set_dir`, from `setup()`, to the app data dir's recordings temp root — the same dir
+/// `recording_host::write_capture_check` uses); before that, or when the write did not answer
+/// `written`, the diagnostic is skipped and `inner`'s own result crosses unchanged either way.
+struct DiagnosticClipboardComponent<'a, R> {
+    inner: &'a dyn GatewayComponents,
+    reader: R,
+    dir: std::sync::OnceLock<std::path::PathBuf>,
+}
+
+impl<'a, R: ClipboardDiagnosticReader> DiagnosticClipboardComponent<'a, R> {
+    fn new(inner: &'a dyn GatewayComponents, reader: R) -> Self {
+        Self {
+            inner,
+            reader,
+            dir: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Set the diagnostic dir once. A later call is a no-op (`OnceLock`).
+    fn set_dir(&self, dir: std::path::PathBuf) {
+        let _ = self.dir.set(dir);
+    }
+}
+
+impl<R: ClipboardDiagnosticReader> GatewayComponents for DiagnosticClipboardComponent<'_, R> {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        let result = self.inner.call(command, args);
+        if let (Ok(reply), Some(dir)) = (&result, self.dir.get()) {
+            if reply.get("result").and_then(Value::as_str) == Some("written") {
+                write_clipboard_diagnostic(dir, self.reader.read());
+            }
+        }
+        result
+    }
+}
+
+/// `{types, changeCount}` only (SEC-03: never content), mode 0600. Best effort: a failure here
+/// never fails or blocks the real `clipboard_write_text` call that triggered it.
+fn write_clipboard_diagnostic(dir: &std::path::Path, (types, change_count): (Vec<String>, u64)) {
+    let v = json!({ "types": types, "changeCount": change_count });
+    let _ = std::fs::create_dir_all(dir);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    use std::io::Write as _;
+    if let Ok(mut f) = o.open(dir.join(CLIPBOARD_CHECK_FILE)) {
+        let _ = f.write_all(v.to_string().as_bytes());
+    }
+}
+
+#[cfg(target_os = "macos")]
+type DiagnosticComponent = DiagnosticClipboardComponent<'static, MacPasteboardReader>;
+
+#[cfg(target_os = "macos")]
+fn diagnostic_clipboard() -> Option<&'static DiagnosticComponent> {
+    use std::sync::OnceLock;
+    static DIAG: OnceLock<DiagnosticComponent> = OnceLock::new();
+    let inner = os_clipboard_write()?;
+    Some(DIAG.get_or_init(|| DiagnosticClipboardComponent::new(inner, MacPasteboardReader)))
+}
+
+/// `os_clipboard_write()`, wrapped with the `last-copy.json` diagnostic on macOS. Other targets
+/// pass the real component through unchanged: the diagnostic reads the macOS pasteboard only.
+fn os_diagnostic_clipboard_write() -> Option<&'static dyn GatewayComponents> {
+    #[cfg(target_os = "macos")]
+    {
+        diagnostic_clipboard().map(|d| d as &dyn GatewayComponents)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        os_clipboard_write()
+    }
+}
+
+/// Set the `last-copy.json` dir once, from `setup()` (`install_capture`'s `recording_temp_root`,
+/// the same dir `last-capture.json` uses). A no-op on a non-macOS build, or if the clipboard
+/// component itself is unavailable.
+#[cfg(target_os = "macos")]
+pub(crate) fn set_clipboard_diagnostic_dir(dir: std::path::PathBuf) {
+    if let Some(d) = diagnostic_clipboard() {
+        d.set_dir(dir);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn set_clipboard_diagnostic_dir(_dir: std::path::PathBuf) {}
+
 /// The brain link of one calling webview: its brain Channel state and its Channel IDs.
 struct WebviewBrain<'a, R: Runtime>(&'a tauri::Webview<R>);
 
@@ -891,7 +1010,7 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|s| s.inner().as_ref() as &dyn GatewayComponents),
         insert: os_insert(),
-        clipboard_write: os_clipboard_write(),
+        clipboard_write: os_diagnostic_clipboard_write(),
         agent: agent.as_ref().map(|a| a.inner() as &dyn GatewayComponents),
         stt: stt.as_ref().map(|s| s.inner() as &dyn SttEngine),
         mem: mem
@@ -1573,5 +1692,138 @@ mod tests {
             ipc.contains("try_state::<crate::agent_host::AgentHostApp>()"),
             "route_from reads the managed agent host"
         );
+    }
+
+    // ---------- `last-copy.json` (the owner's proof diagnostic, ADR 0124 amendment) ----------
+
+    #[derive(Clone, Copy)]
+    struct FakeClipboardWrite(&'static str);
+
+    impl GatewayComponents for FakeClipboardWrite {
+        fn call(&self, _command: &'static str, _args: Value) -> CoreResult<Value> {
+            Ok(json!({ "result": self.0 }))
+        }
+    }
+
+    struct FakeReader(Vec<String>, u64);
+
+    impl ClipboardDiagnosticReader for FakeReader {
+        fn read(&self) -> (Vec<String>, u64) {
+            (self.0.clone(), self.1)
+        }
+    }
+
+    /// A fresh temp dir for one test, removed again once the closure returns.
+    fn with_temp_dir(tag: &str, f: impl FnOnce(&std::path::Path)) {
+        let dir = std::env::temp_dir().join(format!(
+            "bottle-test-last-copy-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        f(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn last_copy_json_records_only_type_names_and_change_count_on_a_written_result() {
+        with_temp_dir("written", |dir| {
+            let inner = FakeClipboardWrite("written");
+            let reader = FakeReader(
+                vec![
+                    "public.html".to_owned(),
+                    "public.utf8-plain-text".to_owned(),
+                ],
+                42,
+            );
+            let comp = DiagnosticClipboardComponent::new(&inner, reader);
+            comp.set_dir(dir.to_path_buf());
+            let reply = comp
+                .call("clipboard_write_text", json!({"text": "x"}))
+                .unwrap();
+            // The wrapper never changes the real component's own reply.
+            assert_eq!(reply, json!({"result": "written"}));
+            let text = std::fs::read_to_string(dir.join(CLIPBOARD_CHECK_FILE)).unwrap();
+            let v: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                v,
+                json!({
+                    "types": ["public.html", "public.utf8-plain-text"],
+                    "changeCount": 42,
+                })
+            );
+            // SEC-03: never any content, only the fact of the type names.
+            assert_eq!(v.as_object().unwrap().len(), 2);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(dir.join(CLIPBOARD_CHECK_FILE))
+                    .unwrap()
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o600);
+            }
+        });
+    }
+
+    #[test]
+    fn last_copy_json_is_skipped_for_too_large_or_unsupported() {
+        for outcome in ["too_large", "unsupported"] {
+            with_temp_dir(&format!("skip-{outcome}"), |dir| {
+                let inner = FakeClipboardWrite(outcome);
+                let reader = FakeReader(vec!["public.html".to_owned()], 1);
+                let comp = DiagnosticClipboardComponent::new(&inner, reader);
+                comp.set_dir(dir.to_path_buf());
+                comp.call("clipboard_write_text", json!({"text": "x"}))
+                    .unwrap();
+                assert!(!dir.join(CLIPBOARD_CHECK_FILE).exists());
+            });
+        }
+    }
+
+    #[test]
+    fn last_copy_json_is_skipped_before_the_dir_is_set() {
+        // `set_dir` never called: the diagnostic must not panic, write anywhere, or change the
+        // real component's reply.
+        let inner = FakeClipboardWrite("written");
+        let reader = FakeReader(vec!["public.html".to_owned()], 1);
+        let comp = DiagnosticClipboardComponent::new(&inner, reader);
+        let reply = comp
+            .call("clipboard_write_text", json!({"text": "x"}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+    }
+
+    #[test]
+    fn last_copy_json_overwrites_the_previous_diagnostic() {
+        with_temp_dir("overwrite", |dir| {
+            let reader1 = FakeReader(vec!["public.utf8-plain-text".to_owned()], 1);
+            let comp1 = DiagnosticClipboardComponent::new(&FakeClipboardWrite("written"), reader1);
+            comp1.set_dir(dir.to_path_buf());
+            comp1
+                .call("clipboard_write_text", json!({"text": "x"}))
+                .unwrap();
+            let reader2 = FakeReader(
+                vec![
+                    "public.html".to_owned(),
+                    "public.utf8-plain-text".to_owned(),
+                ],
+                2,
+            );
+            let comp2 = DiagnosticClipboardComponent::new(&FakeClipboardWrite("written"), reader2);
+            comp2.set_dir(dir.to_path_buf());
+            comp2
+                .call(
+                    "clipboard_write_text",
+                    json!({"text": "x", "html": "<p>x</p>"}),
+                )
+                .unwrap();
+            let text = std::fs::read_to_string(dir.join(CLIPBOARD_CHECK_FILE)).unwrap();
+            let v: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                v,
+                json!({"types": ["public.html", "public.utf8-plain-text"], "changeCount": 2})
+            );
+        });
     }
 }

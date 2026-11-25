@@ -80,6 +80,8 @@ export interface HubAgentWiringDeps {
   openSettings(): void;
   /** The owner's "little button on the Conversations copy" request: `agent.copy_markdown`. */
   copyMarkdown?(turnId: string): void;
+  /** The owner's "Copy" button request (ADR 0124 amendment): `agent.copy`, formatted. */
+  copy?(turnId: string): void;
 }
 
 export interface HubAgentWiring {
@@ -110,6 +112,8 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
         return deps.openSettings();
       case 'agent.copy_markdown':
         return deps.copyMarkdown?.(a.turnId);
+      case 'agent.copy':
+        return deps.copy?.(a.turnId);
     }
   });
   return { push: () => push() };

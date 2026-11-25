@@ -522,9 +522,16 @@ export interface TurnBodyProps {
    * copy ({@link finishedAnswerText}).
    */
   onCopyMarkdown?: (() => void) | undefined;
+  /**
+   * The owner's "Copy" button request (ADR 0124 amendment): an explicit, formatted (html plus
+   * text) copy, next to "Copy Markdown" where both show. Shown only for a done turn with an
+   * answer to copy ({@link finishedAnswerText}).
+   */
+  onCopy?: (() => void) | undefined;
 }
 
 export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
+export const COPY_LABEL = 'Copy';
 
 /** The footer of a turn: the planner and the tokens, then the controls. */
 export function TurnFooter({ turn, actions }: { turn: AgentTurnView; actions?: ReactNode }) {
@@ -627,6 +634,7 @@ export function TurnBody({
   live = false,
   footerOutside = false,
   onCopyMarkdown,
+  onCopy,
 }: TurnBodyProps) {
   const queued = turn.state === 'queued';
   const rootRef = useRef<HTMLDivElement>(null);
@@ -758,6 +766,18 @@ export function TurnBody({
       {(turn.state === 'done' || turn.copyNote !== undefined) && (
         <div className="agent-copy-row">
           <CopyAnswerNote outcome={turn.copyNote} />
+          {turn.state === 'done' && onCopy && finishedAnswerText(turn) !== undefined && (
+            <button
+              type="button"
+              className="agent-copy-markdown"
+              data-action="copy"
+              title={COPY_LABEL}
+              aria-label={COPY_LABEL}
+              onClick={onCopy}
+            >
+              <Copy aria-hidden="true" size={12} strokeWidth={2} />
+            </button>
+          )}
           {turn.state === 'done' && onCopyMarkdown && finishedAnswerText(turn) !== undefined && (
             <button
               type="button"
@@ -940,7 +960,18 @@ export function AgentTurnCard({
         </svg>
       </button>
       <div className="agent-card-body" tabIndex={0} aria-label="Agent turn">
-        <TurnBody turn={turn} now={now} onOpenLink={openLink} live footerOutside />
+        <TurnBody
+          turn={turn}
+          now={now}
+          onOpenLink={openLink}
+          live
+          footerOutside
+          onCopy={() =>
+            void emitView(mogId, 'click', { action: 'agent.copy', turnId: turn.turnId }).catch(
+              () => undefined,
+            )
+          }
+        />
       </div>
       {queued.length > 0 && (
         <>
