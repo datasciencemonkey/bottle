@@ -128,8 +128,11 @@ know before you start.
 
 While a recording runs, Bottle holds the microphone, so dictation and ⌥G wait until you stop.
 
-A recording that does not upload stays only on your Mac. Open **Recordings** in the sidebar to
-upload it again or delete it. Deleting it removes only the copy on this Mac.
+Open **Recordings** in the sidebar to see every take. A new take shows the moment you press
+Stop, then moves through Uploading, Transcribing and Writing notes to Done. A recording that does
+not upload stays only on your Mac: upload it again, or click **Remove**. Remove takes a take off
+this Mac and off the list. A copy already in Databricks stays; Bottle warns you when the audio
+never reached Databricks.
 
 ## Privacy
 
@@ -168,25 +171,14 @@ Bottle reads workspaces from your Databricks CLI profiles. Check that the profil
 **Settings → Workspace**.
 
 **Sign-in expired.**
-In **Settings → Workspace**, click **Sign in…** next to the workspace. Or copy the sign-in command,
-run it in Terminal, then click refresh.
+When you ask with ⌥G, Bottle opens your browser to sign in again, then asks once more. You can
+also click **Sign in…** next to the workspace in **Settings → Workspace**, or copy the sign-in
+command, run it in Terminal, then click refresh.
 
-## Developers
+## More help
 
-Prerequisites: Node 22+, pnpm 11, Rust stable with clippy and rustfmt, and
-[`uv`](https://docs.astral.sh/uv/).
-
-```sh
-pnpm install
-pnpm tauri dev
-# add --features local-stt for local dictation; first run
-# uv run --no-project python scripts/vendor_sherpa_onnx.py (see AGENTS.md)
-scripts/pre-push.sh   # the full local gate: lint, typecheck, tests, clippy — run before you push
-```
-
-See [`AGENTS.md`](AGENTS.md) for the architecture and where things live, and
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the branch, commit and PR workflow. User guides:
-[`docs/user/`](docs/user/).
+- User guides: [`docs/user/`](docs/user/).
+- Want to build Bottle yourself or contribute? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
