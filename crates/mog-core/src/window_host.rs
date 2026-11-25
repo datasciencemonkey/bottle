@@ -7,7 +7,10 @@
 //! [`CoreError::IpcRefused`] with a code from `ipc_gateway::ERROR_CODES`.
 
 use crate::error::{CoreError, CoreResult};
-use crate::ipc::Geometry;
+use crate::ipc::{ClipboardWriteTextArgs, Geometry};
+use crate::ipc_gateway::GatewayComponents;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 const ID: &str = "R11";
 
@@ -65,6 +68,24 @@ pub struct ClipboardFormat {
     pub data: Vec<u8>,
 }
 
+/// The one format that carries `text` itself, with no privacy flags.
+fn text_format(platform: ClipboardPlatform, text: &str) -> ClipboardFormat {
+    match platform {
+        ClipboardPlatform::MacOs => ClipboardFormat {
+            name: "public.utf8-plain-text",
+            data: text.as_bytes().to_vec(),
+        },
+        ClipboardPlatform::Windows => ClipboardFormat {
+            name: "CF_UNICODETEXT",
+            data: text
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        },
+    }
+}
+
 /// The formats to write for `text` on `platform` (SEC-30): the text and the privacy flags.
 pub fn clipboard_formats(platform: ClipboardPlatform, text: &str) -> Vec<ClipboardFormat> {
     let marker = |name| ClipboardFormat {
@@ -77,27 +98,25 @@ pub fn clipboard_formats(platform: ClipboardPlatform, text: &str) -> Vec<Clipboa
     };
     match platform {
         ClipboardPlatform::MacOs => vec![
-            ClipboardFormat {
-                name: "public.utf8-plain-text",
-                data: text.as_bytes().to_vec(),
-            },
+            text_format(platform, text),
             marker("org.nspasteboard.ConcealedType"),
             marker("org.nspasteboard.TransientType"),
         ],
         ClipboardPlatform::Windows => vec![
-            ClipboardFormat {
-                name: "CF_UNICODETEXT",
-                data: text
-                    .encode_utf16()
-                    .chain([0])
-                    .flat_map(u16::to_le_bytes)
-                    .collect(),
-            },
+            text_format(platform, text),
             marker("ExcludeClipboardContentFromMonitorProcessing"),
             dword_zero("CanIncludeInClipboardHistory"),
             dword_zero("CanUploadToCloudClipboard"),
         ],
     }
+}
+
+/// The formats to write for `text` on `platform` as a normal, durable clipboard item
+/// (`clipboard_write_text`, ADR 0124): no concealed or transient marker, so clipboard managers,
+/// history and "paste again later" all see it, unlike the SEC-30 insertion write above. See
+/// [`ClipboardWriteTextComponent`] for why this command marks nothing concealed either.
+pub fn clipboard_formats_durable(platform: ClipboardPlatform, text: &str) -> Vec<ClipboardFormat> {
+    vec![text_format(platform, text)]
 }
 
 /// The platform of this build, or `None` where no clipboard flags are defined.
@@ -152,6 +171,23 @@ impl<B: ClipboardBackend> ClipboardWriter<B> {
             None => Err(CoreError::NotImplemented { component: ID }),
         }
     }
+
+    /// Write `text` for `platform` as a normal, durable item (`clipboard_write_text`): no
+    /// concealed or transient marker (see [`ClipboardWriteTextComponent`]).
+    pub fn write_durable_text_for(
+        &self,
+        platform: ClipboardPlatform,
+        text: &str,
+    ) -> CoreResult<()> {
+        let result = self
+            .backend
+            .write(&clipboard_formats_durable(platform, text));
+        if result.is_err() {
+            // Fail closed, as `write_text_for` does: no half-written item stays on the clipboard.
+            let _ = self.backend.clear();
+        }
+        result
+    }
 }
 
 /// The macOS clipboard: the general `NSPasteboard`.
@@ -193,6 +229,118 @@ impl ClipboardBackend for MacPasteboard {
         objc2_app_kit::NSPasteboard::generalPasteboard().clearContents();
         Ok(())
     }
+}
+
+/// A backend for a platform with no clipboard write at all (Linux). `write` and `clear` are
+/// never reached: [`ClipboardWriteTextComponent::unsupported`] never calls them.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoClipboard;
+
+impl ClipboardBackend for NoClipboard {
+    fn write(&self, _formats: &[ClipboardFormat]) -> CoreResult<()> {
+        Err(CoreError::NotImplemented { component: ID })
+    }
+
+    fn clear(&self) -> CoreResult<()> {
+        Ok(())
+    }
+}
+
+/// The longest `text` that `clipboard_write_text` accepts, in UTF-8 bytes (100 KB). A Genie
+/// answer never needs more; a longer one answers `too_large` rather than hang the pasteboard on
+/// a giant write.
+pub const CLIPBOARD_WRITE_MAX_BYTES: usize = 100 * 1024;
+
+/// The reply of `clipboard_write_text`: `{result: written|too_large|unsupported}`. A typed
+/// outcome, not a thrown error, the same convention as `insertion::InsertOutcome`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardWriteOutcome {
+    /// The text is now the durable, normal clipboard item: Cmd+V pastes it like anything else
+    /// the user copied themselves.
+    Written,
+    /// `text` is over [`CLIPBOARD_WRITE_MAX_BYTES`]. Nothing was written.
+    TooLarge,
+    /// This build or OS has no clipboard write (Linux; or Windows with no path wired yet).
+    Unsupported,
+}
+
+/// The `clipboard_write_text` component (the owner's "attach Genie's answer to the clipboard"
+/// request, one new IPC command the owner's sign-off authorizes).
+///
+/// Unlike [`ClipboardWriter::write_text_for`] (SEC-30, concealed and transient, used only by the
+/// dictation paste's own clipboard round-trip), this write carries **no** privacy marker:
+/// - Not transient: the owner asked for the answer to sit on the clipboard, pasteable later, not
+///   to vanish like a password manager's short-lived copy.
+/// - Not concealed either, on purpose, even though a Genie answer can hold business data: the
+///   concealed marker is also the one signal [`crate::insertion::mac_snapshot_is_concealed`]
+///   uses to decide a saved clipboard item looks like a password manager secret and must not be
+///   restored after a paste (ADR 0048, decision 12). Marking the answer concealed would make the
+///   very next dictation silently drop it instead of restoring it after the paste, which directly
+///   contradicts "durable, paste it later". The user chose, with a plain Settings toggle, to put
+///   this specific answer on their own clipboard; that is the same trust boundary as copying it
+///   by hand, so it gets no extra pasteboard-manager privacy flag.
+#[derive(Debug)]
+pub struct ClipboardWriteTextComponent<B> {
+    /// `None`: this OS has no clipboard write at all (`Unsupported`, never calls `backend`).
+    target: Option<(B, ClipboardPlatform)>,
+}
+
+impl<B: ClipboardBackend + Copy> ClipboardWriteTextComponent<B> {
+    /// A component that writes through `backend` with the conventions of `platform`.
+    pub fn new(backend: B, platform: ClipboardPlatform) -> Self {
+        Self {
+            target: Some((backend, platform)),
+        }
+    }
+
+    /// A component for an OS with no clipboard write: every call answers `unsupported`.
+    pub fn unsupported() -> Self {
+        Self { target: None }
+    }
+}
+
+impl<B: ClipboardBackend + Copy> GatewayComponents for ClipboardWriteTextComponent<B> {
+    fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
+        let refused = |code| CoreError::IpcRefused { code };
+        if command != "clipboard_write_text" {
+            return Err(refused("not_implemented"));
+        }
+        let a: ClipboardWriteTextArgs =
+            serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
+        if a.text.len() > CLIPBOARD_WRITE_MAX_BYTES {
+            return Ok(json!({ "result": ClipboardWriteOutcome::TooLarge }));
+        }
+        let Some((backend, platform)) = self.target else {
+            return Ok(json!({ "result": ClipboardWriteOutcome::Unsupported }));
+        };
+        ClipboardWriter::new(backend)
+            .write_durable_text_for(platform, &a.text)
+            .map_err(|_| refused("host_failed"))?;
+        Ok(json!({ "result": ClipboardWriteOutcome::Written }))
+    }
+}
+
+/// The `clipboard_write_text` component over the OS of this build: macOS and Windows (the
+/// existing [`crate::insertion::WindowsClipboard`] path). Linux has none: `unsupported`.
+#[cfg(target_os = "macos")]
+pub fn os_component() -> ClipboardWriteTextComponent<MacPasteboard> {
+    ClipboardWriteTextComponent::new(MacPasteboard, ClipboardPlatform::MacOs)
+}
+
+/// As the macOS `os_component`, over the existing Windows pasteboard path.
+#[cfg(windows)]
+pub fn os_component() -> ClipboardWriteTextComponent<crate::insertion::WindowsClipboard> {
+    ClipboardWriteTextComponent::new(
+        crate::insertion::WindowsClipboard,
+        ClipboardPlatform::Windows,
+    )
+}
+
+/// Linux has no clipboard write: every call answers `unsupported`, never `host_failed`.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn os_component() -> ClipboardWriteTextComponent<NoClipboard> {
+    ClipboardWriteTextComponent::unsupported()
 }
 
 #[cfg(test)]
@@ -313,5 +461,73 @@ mod clipboard_tests {
         w.write_text_for(ClipboardPlatform::MacOs, "secret")
             .unwrap();
         assert_eq!(*rec.clears.lock().unwrap(), 0);
+    }
+
+    // ---------- `clipboard_write_text` ----------
+
+    #[test]
+    fn clipboard_write_text_writes_a_durable_item_with_no_privacy_marker() {
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let reply = c
+            .call("clipboard_write_text", json!({"text": "the answer"}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+        let calls = rec.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        // No ConcealedType, no TransientType: a plain, durable text item only.
+        assert_eq!(
+            calls[0],
+            vec![ClipboardFormat {
+                name: "public.utf8-plain-text",
+                data: b"the answer".to_vec(),
+            }]
+        );
+    }
+
+    #[test]
+    fn clipboard_write_text_refuses_text_over_the_size_bound() {
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let long = "x".repeat(CLIPBOARD_WRITE_MAX_BYTES + 1);
+        let reply = c
+            .call("clipboard_write_text", json!({"text": long}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "too_large"}));
+        // A refused write never touches the real clipboard.
+        assert!(rec.calls.lock().unwrap().is_empty());
+        // The bound itself is a normal write.
+        let ok = "x".repeat(CLIPBOARD_WRITE_MAX_BYTES);
+        let reply = c.call("clipboard_write_text", json!({"text": ok})).unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+    }
+
+    #[test]
+    fn clipboard_write_text_is_unsupported_with_no_platform_target() {
+        let c = ClipboardWriteTextComponent::<&Recorder>::unsupported();
+        let reply = c
+            .call("clipboard_write_text", json!({"text": "hi"}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "unsupported"}));
+    }
+
+    #[test]
+    fn clipboard_write_text_refuses_any_other_command() {
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        assert!(c.call("insert_text", json!({})).is_err());
+    }
+
+    #[test]
+    fn clipboard_write_text_a_failed_backend_write_clears_the_clipboard() {
+        let rec = Recorder {
+            fail_write: true,
+            ..Recorder::default()
+        };
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        assert!(c
+            .call("clipboard_write_text", json!({"text": "hi"}))
+            .is_err());
+        assert_eq!(*rec.clears.lock().unwrap(), 1);
     }
 }

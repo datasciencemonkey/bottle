@@ -9,6 +9,7 @@
  *   workspace answers fold under it.
  */
 import { openInDatabricksUrl } from './link-trust';
+import type { AgentPartView, AgentTurnView } from './ipc';
 
 /** The text of a part whose answer the core withheld (a quarantine hit). */
 export const WITHHELD_TEXT = 'This answer was held back. It looked like it held instructions.';
@@ -51,6 +52,57 @@ export function foldedUnderLone(parts: readonly AnswerPart[]): Set<number> {
 
 /** The text of the link to the Genie One conversation of a workspace. */
 export const openGenieOneText = (workspace: string): string => `Open Genie One in ${workspace}`;
+
+// ---------- the owner's "attach Genie's answer to the clipboard" request ----------
+
+/** The `answer` section's markdown of a part's sections, if it has one. */
+function answerMdOf(sections: readonly { id: string; md?: string }[]): string | undefined {
+  return sections.find((s) => s.id === 'answer')?.md;
+}
+
+/**
+ * The [`AnswerPart`] of a live [`AgentPartView`]. Mirrors `answerPartOf` in
+ * `src/views/card/AgentTurnCard.tsx` (same rule, same `WITHHELD_TEXT` check): this copy takes no
+ * React or view import, so the brain's clipboard decision never pulls in the view's dependencies.
+ */
+function toAnswerPart(p: AgentPartView): AnswerPart {
+  return {
+    answered: true,
+    withheld: answerMdOf(p.sections) === WITHHELD_TEXT,
+    fromEarlier: p.fromEarlier === true,
+    workspace: p.workspace.name,
+  };
+}
+
+/**
+ * Strip bare `[n]` citation markers (ADR 0122) from `md`. Pasted outside Bottle they have no
+ * footnote or footer link to point to, so they would read as stray reference numbers, not real
+ * content. A real Markdown link (`[1](url)` or `[1][ref]`) is untouched: only a marker with no
+ * following `(` or `[` is removed, with the one space before it, if any.
+ */
+export function stripCitationMarkers(md: string): string {
+  return md.replace(/[ \t]?\[\d+\](?![([])/g, '');
+}
+
+/**
+ * The plain text a finished turn's card or Conversations reply actually shows: the model's
+ * combined note (its `[n]` markers stripped, since they are junk once pasted outside Bottle) when
+ * the turn has one, else the one Genie answer that {@link loneAnswerIndex} names, verbatim.
+ * `undefined` when the turn has no answer to show (every call withheld, or the model's note was
+ * hidden by quarantine): the caller must never copy then.
+ */
+export function finishedAnswerText(
+  turn: Pick<AgentTurnView, 'summary' | 'parts'>,
+): string | undefined {
+  if (turn.summary) {
+    const md = turn.summary.md;
+    return md.trim() === '' ? undefined : stripCitationMarkers(md);
+  }
+  const lone = loneAnswerIndex(turn.parts.map(toAnswerPart));
+  if (lone < 0) return undefined;
+  const md = answerMdOf(turn.parts[lone]?.sections ?? []);
+  return md !== undefined && md.trim() !== '' ? md : undefined;
+}
 
 /** A workspace answer that a turn holds: where its Genie One link comes from. */
 export interface FooterSource {

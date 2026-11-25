@@ -32,6 +32,7 @@ export function workspaceList(
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
       cloudDictation: false,
+      copyGenieAnswer: true,
     },
     ...over,
   };

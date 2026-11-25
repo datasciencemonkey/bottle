@@ -21,6 +21,7 @@ vi.mock('@tauri-apps/api/window', async () => (await import('../test-tauri')).wi
 
 const AGENT = {
   genieCallBudget: 10,
+  copyGenieAnswer: true,
 } as const;
 const row = (o: Partial<HubWorkspaceRow> & { profile: string }): HubWorkspaceRow => ({
   name: o.profile,

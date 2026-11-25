@@ -58,6 +58,7 @@ export const COMMANDS = {
   consent_records_list: B,
   stt_transcribe: B,
   insert_text: B,
+  clipboard_write_text: B,
   agent_start: B,
   agent_stop: B,
   agent_send: B,
@@ -367,6 +368,9 @@ export interface CommandArgs {
     tags: Tags;
   };
   insert_text: { mogId: MogId; text: string; leaseId: LeaseId };
+  /** The owner's "attach Genie's answer to the clipboard" request. `text` is bound by
+   * the Rust `CLIPBOARD_WRITE_MAX_BYTES` (100 KB); a longer one answers `too_large`. */
+  clipboard_write_text: { text: string };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
   agent_stop: MogArgs;
   agent_send: { mogId: MogId; turn: JsonObject };
@@ -478,6 +482,8 @@ export interface CommandArgs {
     cleanDictation?: boolean;
     /** ADR 0123: "Dictation engine: Databricks". A bool only. */
     cloudDictation?: boolean;
+    /** "Copy Genie answers to the clipboard" (Settings → Workspace). A bool only. */
+    copyGenieAnswer?: boolean;
   };
   /** ADR 0122: always the home profile. Bottle never picks one. */
   orchestrator_models: NoArgs;
@@ -530,6 +536,8 @@ export interface AgentSettings {
   cleanDictation: boolean;
   /** ADR 0123: "Dictation engine: Databricks". Default false (on this Mac). */
   cloudDictation: boolean;
+  /** "Copy Genie answers to the clipboard" (Settings → Workspace). Default true. */
+  copyGenieAnswer: boolean;
 }
 /** The answer of every `workspace_*` command. */
 export interface WorkspaceList {
@@ -744,6 +752,9 @@ export interface AgentTurnView {
     citations?: AgentCitation[];
   };
   notice?: string;
+  /** The quiet "Copied to clipboard" / "Couldn't copy" note, brain-set once the
+   * `clipboard_write_text` call of a finished answer resolves. The view fades it on its own. */
+  copyNote?: 'copied' | 'failed';
   tokens?: number;
   /** When the user saw the answer, in Unix ms (UX slice 4, Activity). */
   seenAt?: number;
@@ -1235,6 +1246,8 @@ export interface CommandReturns {
   insert_text: {
     result: 'inserted' | 'no_permission' | 'no_focus' | 'secure_field' | 'target_changed';
   };
+  /** The owner's "attach Genie's answer to the clipboard" request. */
+  clipboard_write_text: { result: 'written' | 'too_large' | 'unsupported' };
   agent_start: { agentSessionId: string };
   agent_stop: Empty;
   agent_send: Empty;

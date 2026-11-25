@@ -12,6 +12,9 @@
  * - "Genie calls per question [5 | 10 | 20]": D2, the most Genie calls for one question.
  * - D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision 2026-11-24):
  *   cross-workspace data is always on. There is no switch for it.
+ * - "Copy Genie answers to the clipboard": a switch, on by default. It sends
+ *   `workspace.copy_genie_answer`, and works with no orchestrator model (it also covers the
+ *   direct Genie fallback).
  * - The disclosure line: where a cross-workspace question goes.
  */
 import { useId } from 'react';
@@ -35,6 +38,8 @@ function send(action: WorkspaceAction | OrchestratorAction): void {
 
 export const ORCHESTRATOR_LABEL = 'Orchestrator model';
 export const CLEAN_DICTATION_LABEL = 'Clean up dictation';
+export const COPY_GENIE_ANSWER_LABEL = 'Copy Genie answers to the clipboard';
+export const COPY_GENIE_ANSWER_HELP = 'Bottle copies each finished Genie answer to your clipboard.';
 export const DICTATION_ENGINE_LABEL = 'Dictation engine';
 /** ADR 0123: shown when "Databricks" is chosen. */
 export const DICTATION_ENGINE_DISCLOSURE =
@@ -68,6 +73,7 @@ export function AgentSettings({
   const modelId = useId();
   const cleanId = useId();
   const engineId = useId();
+  const copyId = useId();
   if (!list) return null;
   const home = list.rows.find((r) => r.isHome);
   const homeName = home?.name ?? 'your home workspace';
@@ -231,6 +237,21 @@ export function AgentSettings({
                 </label>
               ))}
             </RadioGroup>
+          }
+        />
+        <SettingsRow
+          label={<span id={`${copyId}-label`}>{COPY_GENIE_ANSWER_LABEL}</span>}
+          htmlFor={copyId}
+          description={COPY_GENIE_ANSWER_HELP}
+          control={
+            <Switch
+              id={copyId}
+              data-copy-genie-answer
+              checked={list.agent.copyGenieAnswer}
+              aria-labelledby={`${copyId}-label`}
+              className={HIT}
+              onCheckedChange={(on) => send({ action: 'workspace.copy_genie_answer', on })}
+            />
           }
         />
       </SettingsGroup>

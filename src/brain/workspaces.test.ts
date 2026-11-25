@@ -147,6 +147,7 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     expect(r.last()?.homePick).toBeUndefined();
     expect(r.last()?.agent).toEqual({
       genieCallBudget: 10,
+      copyGenieAnswer: true,
     });
   });
 
@@ -263,7 +264,7 @@ describe('workspaces: the list and its hub view (ADR 0117)', () => {
     await deps.send({
       rows: [],
       home: null,
-      agent: { genieCallBudget: 10 },
+      agent: { genieCallBudget: 10, copyGenieAnswer: true },
     });
     expect(core.emitTo.mock.calls.map((c) => [c[0], c[1]])).toEqual([
       ['hub', HUB_WORKSPACES_EVENT],
@@ -599,6 +600,16 @@ describe('workspaces: hub actions (ADR 0117)', () => {
       { genieCallBudget: 20 },
     ]);
     expect(r.last()?.agent).toMatchObject({ genieCallBudget: 20 });
+  });
+
+  it('workspace.copy_genie_answer writes the agent settings', async () => {
+    const r = rig(workspaceList('home', [{ profile: 'home', mogIds: [id(1)] }]));
+    await r.ws.refresh();
+    await r.ws.act({ action: 'workspace.copy_genie_answer', on: false });
+    expect(r.calls.filter((c) => c[0] === 'settings_write').map((c) => c[1])).toEqual([
+      { copyGenieAnswer: false },
+    ]);
+    expect(r.last()?.agent).toMatchObject({ copyGenieAnswer: false });
   });
 
   it('a store failure sends a fixed error notice, never the error text', async () => {

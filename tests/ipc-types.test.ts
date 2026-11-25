@@ -534,6 +534,7 @@ const agentTyped: Record<string, unknown> = {
       endpoint: 'system.ai.claude-haiku-5-5',
       cleanDictation: true,
       cloudDictation: false,
+      copyGenieAnswer: true,
     },
   } satisfies WorkspaceList,
   OrchestratorModels: {

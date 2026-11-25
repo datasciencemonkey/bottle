@@ -12,6 +12,7 @@ import {
   AgentSettings,
   BUDGET_HELP,
   CLEAN_DICTATION_LABEL,
+  COPY_GENIE_ANSWER_LABEL,
   DICTATION_ENGINE_LABEL,
   DICTATION_ENGINE_LOCAL,
   ORCHESTRATOR_LABEL,
@@ -48,7 +49,7 @@ const list = (): HubWorkspaceList => ({
     row({ profile: 'pat', name: 'Token only', signIn: 'unsupported' }),
   ],
   home: 'sales',
-  agent: { genieCallBudget: 10 },
+  agent: { genieCallBudget: 10, copyGenieAnswer: true },
 });
 const clicks = () => inputEmits().map((e) => (e as { payload: unknown }).payload);
 const act2 = (fn: () => void) => act(async () => fn());
@@ -61,6 +62,7 @@ afterEach(() => {
 describe('AgentSettings', () => {
   const model = (el: Element) => el.querySelector<HTMLSelectElement>('[data-orchestrator-model]');
   const clean = (el: Element) => el.querySelector<HTMLElement>('[data-orchestrator-clean]');
+  const copyAnswer = (el: Element) => el.querySelector<HTMLElement>('[data-copy-genie-answer]');
 
   it('has no row for the old session host and no agent workspace menu', async () => {
     const { el } = await render(<AgentSettings list={list()} orchestrator={ORCH} />);
@@ -129,6 +131,26 @@ describe('AgentSettings', () => {
     expect(clean(off.el)?.getAttribute('aria-checked')).toBe('false');
     await click(clean(off.el));
     expect(clicks()).toEqual([{ action: 'orchestrator.clean_dictation', on: true }]);
+  });
+
+  it('"Copy Genie answers to the clipboard" is a labelled switch, on by default, that sends the new value', async () => {
+    const { el } = await render(<AgentSettings list={list()} orchestrator={ORCH} />);
+    const sw = copyAnswer(el);
+    expect(sw?.getAttribute('role')).toBe('switch');
+    expect(sw?.getAttribute('aria-checked')).toBe('true');
+    expect(document.getElementById(sw?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe(
+      COPY_GENIE_ANSWER_LABEL,
+    );
+    await click(sw);
+    expect(clicks()).toEqual([{ action: 'workspace.copy_genie_answer', on: false }]);
+  });
+
+  it('"Copy Genie answers to the clipboard" still shows with no orchestrator model (the direct Genie fallback)', async () => {
+    const { el } = await render(<AgentSettings list={list()} />);
+    expect(copyAnswer(el)?.getAttribute('aria-checked')).toBe('true');
+    // No orchestrator view: the model row and "Clean up dictation" do not render, but this does.
+    expect(model(el)).toBeNull();
+    expect(clean(el)).toBeNull();
   });
 
   it('[ADR 0123] "Dictation engine" is a two-way choice, On this Mac by default, that sends the new value', async () => {

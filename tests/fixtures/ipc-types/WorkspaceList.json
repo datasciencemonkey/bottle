@@ -15,6 +15,7 @@
     "genieCallBudget": 10,
     "endpoint": "system.ai.claude-haiku-5-5",
     "cleanDictation": true,
-    "cloudDictation": false
+    "cloudDictation": false,
+    "copyGenieAnswer": true
   }
 }

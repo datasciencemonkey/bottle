@@ -16,6 +16,9 @@
  *   it; a part withheld from the agent stays in view with "Not shown to the agent".
  *   A part of an earlier turn says so.
  * - A queued turn shows the pill "Queued" and "Sends when the answer above lands".
+ * - A finished turn shows a quiet "Copied" / "Couldn't copy" note (`copy-answer-note.tsx`) once
+ *   the brain's `clipboard_write_text` call resolves (the owner's "attach Genie's answer to the
+ *   clipboard" request).
  * Colours, sizes and curves come from `tokens.css` (`agent-run.css`).
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -43,6 +46,7 @@ import {
 import { LINK_OPEN, bareHost, openInDatabricksUrl } from '../../shared/link-trust';
 import { paletteColorOf } from '../../shared/mog-palette';
 import { emitView } from '../view-ipc';
+import { CopyAnswerNote } from './copy-answer-note';
 import { SafeMarkdown } from './safe-markdown';
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -740,6 +744,7 @@ export function TurnBody({
         underLone={underLone}
         linked={onOpenLink ? linked : undefined}
       />
+      <CopyAnswerNote outcome={turn.copyNote} />
       {onOpenLink && <GenieOneLinks links={genieLinks} onOpenLink={onOpenLink} />}
       {answerFirst && <CallsOf turn={turn} now={now} />}
       {!footerOutside && <TurnFooter turn={turn} actions={actions} />}

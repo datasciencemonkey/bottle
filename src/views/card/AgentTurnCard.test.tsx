@@ -620,6 +620,24 @@ describe('AgentTurnCard', () => {
     const { el } = await render(<AgentTurnCard mogId={MOG} turn={view()} chips={chips} />);
     expect(el.querySelector('.agent-card-body')?.getAttribute('tabindex')).toBe('0');
   });
+
+  it('[owner request] shows the quiet copy note once the brain sets turn.copyNote', async () => {
+    const { el } = await render(
+      <AgentTurnCard
+        mogId={MOG}
+        turn={view({ state: 'done', copyNote: 'copied' })}
+        chips={chips}
+      />,
+    );
+    expect(el.querySelector('[data-agent-copy-note]')?.textContent).toBe('Copied');
+  });
+
+  it('shows no copy note before the brain sets turn.copyNote', async () => {
+    const { el } = await render(
+      <AgentTurnCard mogId={MOG} turn={view({ state: 'done' })} chips={chips} />,
+    );
+    expect(el.querySelector('[data-agent-copy-note]')).toBeNull();
+  });
 });
 
 describe('answer first', () => {

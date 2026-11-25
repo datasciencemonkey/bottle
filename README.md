@@ -109,6 +109,9 @@ starts at your home workspace again.
 If the model itself isn't reachable, Bottle falls back to asking Genie on your home workspace
 directly and shows a short notice.
 
+Bottle copies each Genie answer to your clipboard, on the ⌥G card and on a reply in Conversations
+(turn this off in Settings → Workspace).
+
 ### Record: ⌥R (hold Right Option, tap R)
 
 Call recording is off until you turn on **Record calls** in **Settings → Call recording**. Bottle

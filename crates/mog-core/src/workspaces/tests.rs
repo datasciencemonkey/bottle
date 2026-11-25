@@ -545,6 +545,7 @@ fn an_old_config_with_cross_workspace_data_still_loads() {
         agent_endpoint: None,
         clean_dictation: None,
         cloud_dictation: None,
+        copy_genie_answer: None,
     })
     .unwrap();
     let data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
@@ -568,6 +569,7 @@ fn the_home_and_model_reads_use_the_cache_until_a_write_of_the_store() {
         agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
         clean_dictation: None,
         cloud_dictation: None,
+        copy_genie_answer: None,
     })
     .unwrap();
     assert_eq!(
@@ -701,6 +703,7 @@ fn settings_write_stores_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
             endpoint: ep("system.ai.claude-haiku-5-5"),
             clean_dictation: true,
             cloud_dictation: false,
+            copy_genie_answer: true,
         }
     );
     // A bad budget or model cannot be built, and the command refuses it on the wire.
@@ -725,6 +728,7 @@ fn settings_write_stores_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
             agent_endpoint: Some(ep("system.ai.gpt-oss-20b")),
             clean_dictation: Some(false),
             cloud_dictation: None,
+            copy_genie_answer: None,
         })
         .unwrap();
     assert_eq!(
@@ -742,6 +746,7 @@ fn settings_write_stores_d2_and_the_endpoint_and_a_bad_value_changes_nothing() {
             agent_endpoint: None,
             clean_dictation: None,
             cloud_dictation: None,
+            copy_genie_answer: None,
         })
         .unwrap();
     assert_eq!(l.agent.endpoint.as_str(), "system.ai.gpt-oss-20b");
@@ -830,6 +835,39 @@ fn adr_0123_a_failed_settings_write_leaves_the_fast_flag_unchanged() {
     assert!(!w.cloud_dictation_fast());
     assert!(!w.cloud_dictation());
     assert_eq!(fs::read(s.file()).unwrap(), before);
+}
+
+/// "Copy Genie answers to the clipboard" (Settings → Workspace): a bool, on by default, and a
+/// file from before this field reads as on.
+#[test]
+fn copy_genie_answer_is_a_bool_on_by_default() {
+    let s = Scratch::new();
+    let w = ready(&s);
+    assert!(w.list(false).unwrap().agent.copy_genie_answer);
+    for v in [json!("yes"), json!(1), json!(null), json!([])] {
+        let bad = w.call("workspace_settings_write", json!({"copyGenieAnswer": v}));
+        assert_eq!(code(bad.unwrap_err()), "invalid_args");
+    }
+    let l = w
+        .call(
+            "workspace_settings_write",
+            json!({"copyGenieAnswer": false}),
+        )
+        .unwrap();
+    assert_eq!(l["agent"]["copyGenieAnswer"], false);
+    assert!(!w.list(false).unwrap().agent.copy_genie_answer);
+    // A later write of another field keeps it off.
+    w.call("workspace_settings_write", json!({"cleanDictation": false}))
+        .unwrap();
+    assert!(!w.list(false).unwrap().agent.copy_genie_answer);
+    // An old file with no field reads as on.
+    let mut data: Value = serde_json::from_slice(&fs::read(s.file()).unwrap()).unwrap();
+    data["agent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("copyGenieAnswer");
+    write_file(&w, &s, &data);
+    assert!(w.list(false).unwrap().agent.copy_genie_answer);
 }
 
 /// ADR 0122: a file from before the orchestrator reads on. The old D9 default, or any other

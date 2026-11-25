@@ -109,6 +109,25 @@
   font-size: var(--mog-text-xs);
 }
 
+/* The owner's "attach Genie's answer to the clipboard" request: a quiet "Copied" / "Couldn't
+   copy" note next to the answer. No banner, no toast stack. */
+.agent-copy-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--mog-text-muted);
+  font-size: var(--mog-text-xs);
+}
+
+.agent-copy-note[data-tone='bad'] {
+  color: var(--mog-destructive-text);
+}
+
+.agent-copy-note-icon {
+  flex: none;
+}
+
 /* The workspace colour is lifted toward white so it keeps 3:1 on the raised surface. */
 .agent-call,
 .agent-part,

@@ -56,6 +56,7 @@ import {
 } from '../../shared/hub-conversations';
 import { createGenieDirectSend } from '../genie-direct';
 import { createAgentCard, openTurnInConversations, wireAgentChips } from '../agent-card';
+import { createAnswerClipboard } from './answer-clipboard';
 import {
   asTurnEvent,
   createAgentClient,
@@ -474,6 +475,17 @@ export function startBrain(): Brain {
       onCardOpen: (open) => followUp.card(open),
       onFault: () => void agentLog.event('card.render', { ok: 0 }),
     });
+    // The owner's "attach Genie's answer to the clipboard" request: one `clipboard_write_text`
+    // write for the one answer each finished turn shows, on the card or in Conversations.
+    const answerClipboard = createAnswerClipboard({
+      enabled: () => workspaces.last()?.agent.copyGenieAnswer ?? true,
+      write: async (text) => (await call('clipboard_write_text', { text })).result,
+      whenClear: (fn) => arrivalGate.whenClear(fn),
+      note: (mogId, turn, outcome) => agentCard.show(mogId, { ...turn, copyNote: outcome }),
+      // No new telemetry span (ADR 0079's closed set is shared with the Rust gate): a failed
+      // clipboard write is a card-render-adjacent fault, the same bucket `agentCard` uses above.
+      onFault: () => void agentLog.event('card.render', { ok: 0 }),
+    });
     const routeNames = () => {
       const cat = workspaces.catalog();
       const home = cat.find((c) => c.isHome);
@@ -517,7 +529,10 @@ export function startBrain(): Brain {
           ...(turnId !== undefined && isStale ? { isStale } : {}),
         });
       },
-      showTurn: (mogId, view) => agentCard.show(mogId, view),
+      showTurn: (mogId, view) => {
+        agentCard.show(mogId, view);
+        answerClipboard.onTurn(mogId, view);
+      },
       dropTurn: (mogId, turnId) => agentCard.drop(mogId, turnId),
       note: showNote,
       phase: (mogId, phase) => captureMood.ask(mogId, phase),

@@ -116,6 +116,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     row("consent_records_list", B),
     row("stt_transcribe", B),
     row("insert_text", B),
+    // ADR 0124: the owner's "attach Genie's answer to the clipboard" request. Brain only, like
+    // `insert_text`: a view never touches the OS clipboard.
+    row("clipboard_write_text", B),
     row("agent_start", B),
     row("agent_stop", B),
     row("agent_send", B),
@@ -1041,6 +1044,15 @@ args!(
         )]
         #[schemars(with = "bool")]
         cloud_dictation: Option<bool>,
+        /// The owner's "attach Genie's answer to the clipboard" request: "Copy Genie answers to
+        /// the clipboard" (Settings → Workspace), default true.
+        #[serde(
+            default,
+            deserialize_with = "present_bool",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "bool")]
+        copy_genie_answer: Option<bool>,
     }
 );
 
@@ -1132,6 +1144,13 @@ args!(InsertTextArgs {
     // that had the focus when that lease was granted; else `target_changed`.
     lease_id: LeaseRef,
 });
+args!(
+    /// `clipboard_write_text` (ADR 0124): the one new IPC command of the owner's "attach Genie's
+    /// answer to the clipboard" request. `text` is bound by
+    /// `window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer one answers `too_large`, not a schema
+    /// refusal (so the brain still gets a clean typed outcome, not `invalid_args`).
+    ClipboardWriteTextArgs { text: String }
+);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1723,6 +1742,7 @@ macro_rules! for_command {
             "consent_notice_record" => Some($f::<ConsentNoticeRecordArgs>()),
             "stt_transcribe" => Some($f::<SttTranscribeArgs>()),
             "insert_text" => Some($f::<InsertTextArgs>()),
+            "clipboard_write_text" => Some($f::<ClipboardWriteTextArgs>()),
             "agent_start" => Some($f::<AgentStartArgs>()),
             "agent_send" => Some($f::<AgentSendArgs>()),
             "agent_tool_result" => Some($f::<AgentToolResultArgs>()),

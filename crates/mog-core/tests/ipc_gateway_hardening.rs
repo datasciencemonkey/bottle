@@ -83,6 +83,7 @@ fn sample(command: &str) -> (&'static str, Value) {
             json!({"segmentId": "s1", "provider": "local_parakeet", "tags": t})
         }
         "insert_text" => json!({"mogId": "a1", "text": "hello", "leaseId": "1"}),
+        "clipboard_write_text" => json!({"text": "hello"}),
         "agent_start" => json!({"mogId": "a1", "harness": "claude"}),
         "agent_stop" | "mog_set_active" | "window_mog_close" | "window_card_show"
         | "window_card_hide" => json!({"mogId": "a1"}),

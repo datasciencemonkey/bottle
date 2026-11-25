@@ -41,6 +41,8 @@ export interface HubWorkspaceList {
   agent: {
     /** D2 "Genie calls per question". */
     genieCallBudget: HubGenieCallBudget;
+    /** "Copy Genie answers to the clipboard". Default true. */
+    copyGenieAnswer: boolean;
   };
   /** A row with a sign-in or a switch change in progress: the view shows a spinner on it. */
   busyProfile?: string;
@@ -62,7 +64,9 @@ export type WorkspaceAction =
   | { action: 'workspace.refresh' }
   | { action: 'workspace.edit'; profile: string; name?: string; colorVariant?: string }
   /** Slice 1 (the agent loop) ships the control. */
-  | { action: 'workspace.budget'; genieCallBudget: HubGenieCallBudget };
+  | { action: 'workspace.budget'; genieCallBudget: HubGenieCallBudget }
+  /** "Copy Genie answers to the clipboard" (Settings → Workspace). */
+  | { action: 'workspace.copy_genie_answer'; on: boolean };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -114,6 +118,8 @@ export function asWorkspaceAction(p: unknown): WorkspaceAction | undefined {
       return isBudget(p['genieCallBudget'])
         ? { action, genieCallBudget: p['genieCallBudget'] }
         : undefined;
+    case 'workspace.copy_genie_answer':
+      return isBool(p['on']) ? { action, on: p['on'] } : undefined;
     default:
       return undefined;
   }
@@ -141,12 +147,13 @@ export function asHubWorkspaceList(p: unknown): HubWorkspaceList | undefined {
   const home = p['home'];
   if (home !== null && !isProfile(home)) return undefined;
   const a = p['agent'];
-  if (!isBudget(a['genieCallBudget'])) return undefined;
+  if (!isBudget(a['genieCallBudget']) || !isBool(a['copyGenieAnswer'])) return undefined;
   const out: HubWorkspaceList = {
     rows,
     home,
     agent: {
       genieCallBudget: a['genieCallBudget'],
+      copyGenieAnswer: a['copyGenieAnswer'],
     },
   };
   const pick = p['homePick'];

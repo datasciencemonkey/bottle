@@ -940,10 +940,20 @@ pub struct AgentSettings {
     /// model on the home AI Gateway. Default false (local Parakeet).
     #[serde(default)]
     pub cloud_dictation: bool,
+    /// "Copy Genie answers to the clipboard" (Settings → Workspace): the brain copies each
+    /// finished Genie answer with `clipboard_write_text`. Default true. A file from before this
+    /// field reads as true.
+    #[serde(default = "default_copy_genie_answer")]
+    pub copy_genie_answer: bool,
 }
 
 /// The default of [`AgentSettings::clean_dictation`].
 pub fn default_clean_dictation() -> bool {
+    true
+}
+
+/// The default of [`AgentSettings::copy_genie_answer`].
+pub fn default_copy_genie_answer() -> bool {
     true
 }
 

@@ -43,8 +43,9 @@ use crate::mog_config::MogConfigStore;
 use crate::profile_service::ProfileService;
 use crate::token_broker::{CliTokenBroker, TokenBroker};
 use crate::types::{
-    default_clean_dictation, AgentSettings, GenieCallBudget, MogId, OrchestratorModel, Profile,
-    ProfileName, TokenState, WorkspaceList, WorkspaceRow, WorkspaceSignIn,
+    default_clean_dictation, default_copy_genie_answer, AgentSettings, GenieCallBudget, MogId,
+    OrchestratorModel, Profile, ProfileName, TokenState, WorkspaceList, WorkspaceRow,
+    WorkspaceSignIn,
 };
 
 /// The file name in the app config dir.
@@ -191,6 +192,10 @@ struct AgentData {
     /// ADR 0123: dictation goes to the home AI Gateway. A file from before reads as false.
     #[serde(default)]
     cloud_dictation: bool,
+    /// "Copy Genie answers to the clipboard" (Settings → Workspace). A file from before this
+    /// field reads as true.
+    #[serde(default = "default_copy_genie_answer")]
+    copy_genie_answer: bool,
     /// ADR 0122: the old per-profile run setting. Read so that an old file still loads; never
     /// kept and never written.
     #[serde(default, skip_serializing, rename = "runProfile")]
@@ -464,6 +469,7 @@ impl WorkspaceStore {
                 endpoint: default_model(),
                 clean_dictation: true,
                 cloud_dictation: false,
+                copy_genie_answer: true,
                 _legacy_run_profile: None,
                 _legacy_cross_workspace_data: None,
             },
@@ -597,6 +603,7 @@ impl WorkspaceStore {
                 endpoint: data.agent.endpoint.clone(),
                 clean_dictation: data.agent.clean_dictation,
                 cloud_dictation: data.agent.cloud_dictation,
+                copy_genie_answer: data.agent.copy_genie_answer,
             },
         })
     }
@@ -797,6 +804,9 @@ impl WorkspaceStore {
             }
             if let Some(v) = a.cloud_dictation {
                 data.agent.cloud_dictation = v;
+            }
+            if let Some(v) = a.copy_genie_answer {
+                data.agent.copy_genie_answer = v;
             }
             self.save(&data)?;
             // Only after a successful save: a failed write must not make the fast flag

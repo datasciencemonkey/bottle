@@ -617,6 +617,21 @@
       "title": "NoArgs",
       "type": "object"
     },
+    "clipboard_write_text": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "`clipboard_write_text` (ADR 0124): the one new IPC command of the owner's \"attach Genie's\nanswer to the clipboard\" request. `text` is bound by\n`window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer one answers `too_large`, not a schema\nrefusal (so the brain still gets a clean typed outcome, not `invalid_args`).",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "ClipboardWriteTextArgs",
+      "type": "object"
+    },
     "config_delete": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -2265,6 +2280,10 @@
           "description": "ADR 0123: \"Dictation engine: Databricks\".",
           "type": "boolean"
         },
+        "copyGenieAnswer": {
+          "description": "The owner's \"attach Genie's answer to the clipboard\" request: \"Copy Genie answers to\nthe clipboard\" (Settings → Workspace), default true.",
+          "type": "boolean"
+        },
         "genieCallBudget": {
           "anyOf": [
             {
@@ -2416,6 +2435,13 @@
     },
     {
       "name": "insert_text",
+      "phase": "MVP-D",
+      "windows": [
+        "brain"
+      ]
+    },
+    {
+      "name": "clipboard_write_text",
       "phase": "MVP-D",
       "windows": [
         "brain"

@@ -98,6 +98,8 @@ export interface WorkspacesDeps {
     cleanDictation?: boolean;
     /** ADR 0123: "Dictation engine: Databricks". */
     cloudDictation?: boolean;
+    /** "Copy Genie answers to the clipboard" (Settings → Workspace). */
+    copyGenieAnswer?: boolean;
   }): Promise<WorkspaceList>;
   /** `profile_reauth`. */
   reauth(profile: ProfileName): Promise<unknown>;
@@ -260,6 +262,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
       home: l.home,
       agent: {
         genieCallBudget: l.agent.genieCallBudget,
+        copyGenieAnswer: l.agent.copyGenieAnswer,
       },
     };
     if (l.home === null) {
@@ -463,6 +466,8 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
         return edit(a);
       case 'workspace.budget':
         return publish(keep(await deps.settingsWrite({ genieCallBudget: a.genieCallBudget })));
+      case 'workspace.copy_genie_answer':
+        return publish(keep(await deps.settingsWrite({ copyGenieAnswer: a.on })));
       default:
         return;
     }
@@ -509,6 +514,7 @@ export function createWorkspaces(deps: WorkspacesDeps): Workspaces {
               home: null,
               agent: {
                 genieCallBudget: 10,
+                copyGenieAnswer: true,
               },
               notice,
             })

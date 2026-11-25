@@ -12,7 +12,9 @@
 //! `permission_status` (R1, #552, ADR 0101),
 //! `consent_*` (T12 records, ADR 0060), the `capture_*` commands (R2, #425, ADR 0055),
 //! `app_setting_*` (the app-wide settings, #453), `insert_text` (the R11 paste, ADR 0048),
-//! `mcp_call` (R8 `McpCallComponent`, #467) and `agent_start`, `agent_stop` and `agent_send`
+//! `clipboard_write_text` (the owner's "attach Genie's answer to the clipboard" request,
+//! `mog_core::window_host::os_component`), `mcp_call` (R8 `McpCallComponent`, #467) and
+//! `agent_start`, `agent_stop` and `agent_send`
 //! (the one R16 `SharedAgentHost`, #307), `stt_transcribe` (R4 `LocalStt`, #514) and
 //! `mem_local_exec` (the one R10 store, through `mog_core::local_store::mem_local_exec`, #426).
 //! Every other command stays `not_implemented` until its feature issue wires its component.
@@ -261,6 +263,11 @@ pub struct HostComponents<'a> {
     pub app_settings: Option<&'a dyn GatewayComponents>,
     /// The R11 paste for `insert_text` (#58, ADR 0048): `mog_core::insertion::os_component`.
     pub insert: Option<&'a dyn GatewayComponents>,
+    /// `clipboard_write_text`: the owner's "attach Genie's answer to the clipboard" request.
+    /// `mog_core::window_host::os_component`. `None` only on a target this build has no
+    /// `os_component` for; in practice always `Some` (macOS, Windows and the Linux
+    /// `unsupported` component all exist).
+    pub clipboard_write: Option<&'a dyn GatewayComponents>,
     /// `agent_start`, `agent_stop` and `agent_send` (#307): `agent_host::AgentHostApp`, the one
     /// R16 `SharedAgentHost` of the process. `None` when it could not start: `host_failed`.
     pub agent: Option<&'a dyn GatewayComponents>,
@@ -360,6 +367,7 @@ impl<'a> HostComponents<'a> {
             capture_ticket: None,
             app_settings: None,
             insert: None,
+            clipboard_write: None,
             agent: None,
             stt: None,
             mem: None,
@@ -538,6 +546,13 @@ impl GatewayComponents for HostComponents<'_> {
             // #58 (ADR 0048): the R11 paste. The gateway let only the brain through.
             "insert_text" => self
                 .insert
+                .ok_or_else(|| host_failed(command))?
+                .call(command, args),
+            // The owner's "attach Genie's answer to the clipboard" request. The gateway let
+            // only the brain through. A write never leaves `ERROR_CODES`: too large or
+            // unsupported crosses as a typed `{result: ...}` outcome, not a refusal.
+            "clipboard_write_text" => self
+                .clipboard_write
                 .ok_or_else(|| host_failed(command))?
                 .call(command, args),
             // #467: R8. The gateway let only the brain through (SEC-02a). An R8 code outside
@@ -741,6 +756,24 @@ fn os_insert() -> Option<&'static dyn GatewayComponents> {
     None
 }
 
+/// The `clipboard_write_text` component of this OS (macOS, Windows and Linux's own
+/// `unsupported` component all exist, so this is always `Some`; no `host_failed` build target).
+/// A single NSPasteboard/Win32 clipboard write of up to 100 KB does not wait, so (unlike
+/// `insert_text`) it needs no worker and no main-thread hop: it runs on the calling thread
+/// (`clipboard_write_text` is not in `runs_off_main_thread` below).
+fn os_clipboard_write() -> Option<&'static dyn GatewayComponents> {
+    use std::sync::OnceLock;
+    #[cfg(target_os = "macos")]
+    type Backend = mog_core::window_host::MacPasteboard;
+    #[cfg(windows)]
+    type Backend = mog_core::insertion::WindowsClipboard;
+    #[cfg(not(any(target_os = "macos", windows)))]
+    type Backend = mog_core::window_host::NoClipboard;
+    static CLIPBOARD: OnceLock<mog_core::window_host::ClipboardWriteTextComponent<Backend>> =
+        OnceLock::new();
+    Some(CLIPBOARD.get_or_init(mog_core::window_host::os_component))
+}
+
 /// The brain link of one calling webview: its brain Channel state and its Channel IDs.
 struct WebviewBrain<'a, R: Runtime>(&'a tauri::Webview<R>);
 
@@ -856,6 +889,7 @@ fn route_from<R: Runtime>(
             .as_ref()
             .map(|s| s.inner().as_ref() as &dyn GatewayComponents),
         insert: os_insert(),
+        clipboard_write: os_clipboard_write(),
         agent: agent.as_ref().map(|a| a.inner() as &dyn GatewayComponents),
         stt: stt.as_ref().map(|s| s.inner() as &dyn SttEngine),
         mem: mem

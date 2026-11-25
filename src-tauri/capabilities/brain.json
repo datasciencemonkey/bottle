@@ -33,6 +33,7 @@
     "allow-consent-records-list",
     "allow-stt-transcribe",
     "allow-insert-text",
+    "allow-clipboard-write-text",
     "allow-agent-start",
     "allow-agent-stop",
     "allow-agent-send",
