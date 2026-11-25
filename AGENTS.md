@@ -192,7 +192,7 @@ Rules of the boundary:
   `REVIEW: APPROVED` with `Head: <sha>`, or its findings. After a rebase, get a new approval or post a range-diff
   note that shows only context changed.
 - **Merging:** only the orchestrator merges. Agents never merge. The merge gate requires an approval on the head,
-  green Windows and Linux CI, a passing local macOS squash suite, and no file overlap with recent main changes.
+  green Linux CI (Windows jobs run nightly only), a passing local macOS squash suite, and no file overlap with recent main changes.
 - **Remove hanging worktrees after a merge.** When a PR merges, the orchestrator removes the worktree of every
   branch in that PR, including lane worktrees whose commits were cherry-picked into it and build worktrees made
   from it. Keep the branch. Run `cargo clean` first, then `git worktree remove <path>` (no `--force`). If a

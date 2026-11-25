@@ -5,8 +5,9 @@
 # the requirements and the mascot stay in repo-checks.yml.
 #
 # Runner policy (ADR 0045): GitHub's hosted macOS queue held runs for hours,
-# so no job runs on macOS. Every event runs on windows-2025 and ubuntu-24.04 (package: Windows
-# only; Linux is not a product target). The macOS gate is local: run scripts/pre-push.sh on a Mac
+# so no job runs on macOS. Pull requests and pushes to main run on ubuntu-24.04 only. The
+# nightly schedule and manual dispatch also run windows-2025 (package: Windows only; Linux is not
+# a product target). Owner decision 2026-11-24: Windows jobs run nightly only. The macOS gate is local: run scripts/pre-push.sh on a Mac
 # (Apple Silicon) before each push. scripts/package-macos.sh builds, signs and notarizes the DMG
 # (NFR-15a). A macOS-only break is caught only by that local run.
 name: App CI
@@ -42,7 +43,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        # Windows runs only nightly and on manual dispatch (owner decision 2026-11-24).
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-24.04","windows-2025"]' || '["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -133,7 +135,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        # Windows runs only nightly and on manual dispatch (owner decision 2026-11-24).
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-24.04","windows-2025"]' || '["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -190,7 +193,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        # Windows runs only nightly and on manual dispatch (owner decision 2026-11-24).
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-24.04","windows-2025"]' || '["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -230,6 +234,8 @@ jobs:
 
   package:
     name: Package (${{ matrix.os }})
+    # Windows only, so nightly and manual dispatch only (owner decision 2026-11-24).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
