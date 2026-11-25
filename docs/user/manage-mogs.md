@@ -1,32 +1,68 @@
-# Manage your MOGs
+# Manage your MOG and its workspaces
 
-The hub lists every MOG that you define. You can define any number of MOGs.
+Bottle runs one MOG. Each connected Databricks CLI profile is a workspace of that MOG.
+You see every workspace in **Settings → Workspace**, and you turn each one on or off there.
 
-## Actions
+## Settings → Workspace
 
-- **Create MOG:** type a name and a home profile, then select Create MOG. With no name, Bottle uses "MOG 1", "MOG 2" and so on.
-- **Edit:** change the name, the home profile or the persona instructions (2,000 characters at most). Select Save. Esc cancels.
-- **Duplicate:** Bottle makes a copy with the name "<name> copy". The copy has no per-MOG key.
-- **Start:** Bottle shows the MOG on your desktop.
-- **Stop:** Bottle closes the MOG.
-- **Delete:** Bottle asks first. Delete removes only the settings of the MOG. Its memory and history stay until you use Wipe in Settings.
+The list shows your home workspace first, then every other workspace: a colour swatch, a name,
+a muted host, and a sign-in status (Signed in, Expired, Not checked yet, Not supported, or Not in
+your CLI config).
 
-## How many MOGs can run
+The home row has a **Home** badge and no switch; it says **Always on**.
+Every other row has a **Make home** button and a switch, **Available to your MOG**.
 
-8 MOGs can run at the same time. If 8 MOGs run and you start one more, the hub shows "8 MOGs are running. Stop one to start <name>." Stop a MOG, then start the new one.
+## Turn a workspace on or off
 
-## Keyboard
+Use the **Available to your MOG** switch on a workspace row. On sends your questions to that
+workspace when a question needs more than your home workspace. Off keeps it out.
 
-Use Tab to move between the buttons and the fields. Each button names its MOG, for example "Start Sales". A screen reader reads the running count and each message.
+A new connection starts off. Turn it on to let your MOG use it.
 
-## Talk with no profile
+Some rows have no switch to turn on and no **Make home** button, for example a profile type
+Bottle does not support, or a profile missing from your `~/.databrickscfg`. The row says why.
 
-Dictation works with no Databricks CLI profile and no sign-in. Bottle then decides offline: a sentence with a question mark, or one that starts with a question word (what, when, where, which, who, why, how), is a question. All other speech is dictation.
+## Make home
 
-Every utterance is dictation first. Bottle pastes your text at the cursor. If the paste is refused, the pop-up beside the MOG shows the text with **Copy**.
+Select **Make home** on a workspace row. Bottle asks "Make `<name>` your home? Plain questions go
+there first." Select **Make home** again to confirm, or **Cancel**.
 
-After each dictation, the pop-up also shows **Ask Genie** and the hint "Hold ⌥G to ask Genie". Move the pointer over the pop-up to keep it open and read the text. Nothing goes to Genie until you press **Ask Genie**. When you press it, Bottle removes hidden characters, HTML, code fences and link addresses from the text. The card then shows the exact text that goes to Genie. A text over 1,000 characters is cut at a word edge, and the card says so. The press sends the text straight to Genie One in the workspace of your home profile. The card shows "Asking Genie", then the answer. If Genie does not answer, the card shows the reason and a code. Bottle does not send the question again. If you ignore the pop-up, it fades.
+Your home workspace always stays on. When you hold the talk key and tap G (⌥G) to ask a plain
+question, Bottle asks your home workspace first. It asks your other switched-on workspaces only
+when your home workspace has no data or cannot answer, or when your question names another
+workspace by name.
 
-- **No home profile:** a press on Ask Genie shows your Databricks CLI profiles. Select one. Bottle saves only its name as the home profile of the MOG, then sends the text. Bottle never picks a profile for you.
-- **⌥G during the hold:** hold the talk key, tap G, then release. Bottle does not paste. It sends the exact text to Genie at once, with no preview. With no home profile, the profile list shows first. Not yet on Windows.
-- **History:** Bottle saves each question that it sent to Genie, with the answer and its key numbers, in the encrypted store on this device. Nothing goes to the cloud. If the store is not available, the card still shows the answer, and nothing is saved. Use Forget or Settings → Wipe to delete it.
+If you have no home workspace yet, the Workspace section shows "Choose a home workspace" with a
+**Choose…** button. Select it to open "Choose your home workspace": pick one from the list and
+select **Use as home**, or select **Not now** to decide later.
+
+## Refresh, sign in, and renaming
+
+Select the refresh icon beside "Workspace" to recheck every workspace's sign-in status.
+
+A workspace with **Expired** status shows a **Sign in…** button. Select it to sign in again in
+your browser. You can also run the command shown under "Or run in Terminal:" and select **Copy**
+to copy it.
+
+Open the **…** menu on a row for **Rename** or **Colour**.
+
+## Connect another workspace
+
+Select **Connect another workspace…** at the bottom of the Workspace section, then **Connect…**.
+This opens the same "Connect a workspace" flow as first run: paste your workspace URL, then set a
+**Profile name** (Bottle saves it as a Databricks CLI profile in `~/.databrickscfg`), then select
+**Sign in**.
+
+## Memories and forgetting
+
+Your MOG's memories live on the **Memory** page in the hub. Select **Forget memory…** there, then
+confirm with **Forget** in the dialog, to delete them.
+
+## Could not verify
+
+The following claims from the stale version of this page could not be verified against the
+int-0110 screen text and are dropped rather than guessed:
+
+- Exact keyboard navigation behaviour (Tab order) across the Workspace list.
+- Whether a screen reader announces a running count, since that applied to the old multi-MOG hub
+  and has no equivalent in the one-MOG Settings → Workspace view.
