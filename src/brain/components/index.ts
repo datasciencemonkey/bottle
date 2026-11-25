@@ -251,6 +251,9 @@ export function startBrain(): Brain {
       send: sendHubConversations,
       sendOpen: sendHubConversationsOpen,
       hubPresent: () => hubExists(),
+      // The owner's "little button on the Conversations copy" request: the direct answer's
+      // Markdown only, no html, independent of the "Copy Genie answers" toggle.
+      copyMarkdown: (text) => call('clipboard_write_text', { text }),
     });
     // The hub asks for its list with `conversations.ready`, and that request is lost while this
     // brain has no Channel yet (the core refuses `view_emit`) or while the store is locked. So
@@ -467,7 +470,8 @@ export function startBrain(): Brain {
       // the default for most users (the router's direct route, the zero-call fallback and the
       // refused-submit fallback all share this one `send`), so it gets its own copy hook, not
       // just the orchestrator turn's.
-      onAnswered: (mogId, opId, md) => answerClipboard.onDirectAnswered(mogId, opId, md),
+      onAnswered: (mogId, opId, md, host) =>
+        answerClipboard.onDirectAnswered(mogId, opId, md, host),
     });
     // Slice 2a: the one live orchestrator session. The client turns `agent:turn` and `agent:session`
     // events into the card of the turn and the history rows; the follow-up window is R-13.
@@ -486,7 +490,11 @@ export function startBrain(): Brain {
     // resolves, well after `agentClient` exists: an ordinary forward reference in a closure.
     const answerClipboard = createAnswerClipboard({
       enabled: () => workspaces.last()?.agent.copyGenieAnswer ?? true,
-      write: async (text) => (await call('clipboard_write_text', { text })).result,
+      // ADR 0124 amendment: `html` is the Docs/email/Excel form; the manual "Copy Markdown"
+      // button sends no `html`, so `clipboard_write_text` gets `text` only then too.
+      write: async (text, html) =>
+        (await call('clipboard_write_text', { text, ...(html !== undefined ? { html } : {}) }))
+          .result,
       whenClear: (fn) => arrivalGate.whenClear(fn),
       // The turn's own record takes the note (not a direct `agentCard.show`): the view then
       // comes from `agent-run.ts`'s current state, not a stale snapshot, and `update()` there
@@ -636,6 +644,12 @@ export function startBrain(): Brain {
       openSettings: () => {
         void showHub();
         void workspaces.showSettings();
+      },
+      // The owner's "little button on the Conversations copy" request: an explicit, repeatable
+      // Markdown-only copy, independent of the "Copy Genie answers" toggle.
+      copyMarkdown: (turnId) => {
+        const turn = agentClient.turn(turnId);
+        if (turn) answerClipboard.copyMarkdownNow(turnId, turn);
       },
     });
     // The agent chips of the card: Stop, Open in Conversations, Open Settings.

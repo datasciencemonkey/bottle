@@ -46,7 +46,11 @@ export type AgentAction =
   | { action: 'agent.ready' }
   | { action: 'agent.stop'; turnId: string }
   | { action: 'agent.remove_queued'; turnId: string }
-  | { action: 'agent.open_settings' };
+  | { action: 'agent.open_settings' }
+  /** The owner's "little button on the Conversations copy" request: an explicit "Copy
+   * Markdown" click on a finished turn's reply. Unlike the auto-copy, it ignores the toggle
+   * and may run again for the same turn. */
+  | { action: 'agent.copy_markdown'; turnId: string };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -98,6 +102,7 @@ export function asAgentAction(p: unknown): AgentAction | undefined {
       return { action: p['action'] };
     case 'agent.stop':
     case 'agent.remove_queued':
+    case 'agent.copy_markdown':
       return isTurnId(p['turnId']) ? { action: p['action'], turnId: p['turnId'] } : undefined;
     default:
       return undefined;

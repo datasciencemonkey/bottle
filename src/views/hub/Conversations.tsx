@@ -45,10 +45,11 @@ import {
   type ThreadComposerThread,
 } from '../../shared/hub-conversations';
 import { paletteColorOf } from '../../shared/mog-palette';
-import { ExternalLink } from 'lucide-react';
+import { Check, Copy, ExternalLink } from 'lucide-react';
 import { LINK_OPEN, openInDatabricksUrl } from '../../shared/link-trust';
 import { SafeMarkdown } from '../card/safe-markdown';
 import { Button } from '../ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { ConversationsSkeleton } from '../ui/motion-effects';
 import { emitView } from '../view-ipc';
 import { motion, useReducedMotion } from 'motion/react';
@@ -291,6 +292,12 @@ function KeyNumbers({ items }: { items: ConversationRow['keyNumbers'] }) {
   );
 }
 
+/** How long the "Copy Markdown" button shows its check mark (ADR 0124 amendment). An optimistic,
+ * view-local state: the direct answer has no brain-sent copy note to reuse (unlike the agent
+ * turn's `copyNote`, `copy-answer-note.tsx`). */
+const COPY_MARKDOWN_CHECK_MS = 1_500;
+export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
+
 /** One exchange of a thread: its question, meta line, answer and key numbers (#145). */
 function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string | undefined }) {
   const failed = row.status === 'failed';
@@ -311,6 +318,18 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
     },
     [row.requestId],
   );
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const copyMarkdown = useCallback(() => {
+    void emitView(CONVERSATIONS_VIEW_ID, 'click', {
+      action: 'conversations.copy_markdown',
+      requestId: row.requestId,
+    }).catch(() => undefined);
+    setCopied(true);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), COPY_MARKDOWN_CHECK_MS);
+  }, [row.requestId]);
   return (
     <div className="conv-exchange" data-exchange={row.requestId}>
       <h2 id={headingId} className="conv-question">
@@ -374,6 +393,24 @@ function Exchange({ row, headingId }: { row: ConversationRow; headingId?: string
         <p className="conv-answer conv-answer--none">
           {failed ? 'Genie could not answer this question.' : 'Genie sent no answer text.'}
         </p>
+      )}
+      {!failed && row.answerMd !== '' && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              data-action="copy-markdown"
+              aria-label={COPY_MARKDOWN_LABEL}
+              onClick={copyMarkdown}
+            >
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{COPY_MARKDOWN_LABEL}</TooltipContent>
+        </Tooltip>
       )}
       <KeyNumbers items={row.keyNumbers} />
     </div>

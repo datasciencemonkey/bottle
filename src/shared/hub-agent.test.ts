@@ -47,6 +47,11 @@ describe('hub-agent shape checks (slice 2a)', () => {
       action: 'agent.remove_queued',
       turnId: T1,
     });
+    // [ADR 0124 amendment] the "Copy Markdown" button.
+    expect(asAgentAction({ action: 'agent.copy_markdown', turnId: T1, z: 3 })).toEqual({
+      action: 'agent.copy_markdown',
+      turnId: T1,
+    });
   });
 
   it('refuses bad actions', () => {
@@ -55,6 +60,8 @@ describe('hub-agent shape checks (slice 2a)', () => {
     expect(
       asAgentAction({ action: 'agent.remove_queued', turnId: T1.toUpperCase() }),
     ).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy_markdown' })).toBeUndefined();
+    expect(asAgentAction({ action: 'agent.copy_markdown', turnId: 'nope' })).toBeUndefined();
     expect(asAgentAction({ action: 'workspace.cross' })).toBeUndefined();
     expect(asAgentAction(null)).toBeUndefined();
   });

@@ -74,6 +74,33 @@ describe('conversations.delete', () => {
   });
 });
 
+describe('[ADR 0124 amendment] conversations.copy_markdown', () => {
+  it('accepts a valid requestId and drops unknown fields', () => {
+    expect(
+      asConversationsAction({ action: 'conversations.copy_markdown', requestId: 'r1', z: 1 }),
+    ).toEqual({
+      action: 'conversations.copy_markdown',
+      requestId: 'r1',
+    });
+  });
+
+  it('refuses a missing, empty or over-long requestId', () => {
+    expect(asConversationsAction({ action: 'conversations.copy_markdown' })).toBeUndefined();
+    expect(
+      asConversationsAction({ action: 'conversations.copy_markdown', requestId: '' }),
+    ).toBeUndefined();
+    expect(
+      asConversationsAction({
+        action: 'conversations.copy_markdown',
+        requestId: 'x'.repeat(65),
+      }),
+    ).toBeUndefined();
+    expect(
+      asConversationsAction({ action: 'conversations.copy_markdown', requestId: 5 }),
+    ).toBeUndefined();
+  });
+});
+
 describe('agent.thread_send', () => {
   const ok = { action: 'agent.thread_send', threadId: U1, mogId: U2, question: 'Why?' };
   it('accepts a valid send and drops unknown fields', () => {

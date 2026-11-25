@@ -1146,10 +1146,15 @@ args!(InsertTextArgs {
 });
 args!(
     /// `clipboard_write_text` (ADR 0124): the one new IPC command of the owner's "attach Genie's
-    /// answer to the clipboard" request. `text` is bound by
-    /// `window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer one answers `too_large`, not a schema
+    /// answer to the clipboard" request. `text` plus `html` (ADR 0124 amendment: paste
+    /// formatted into Docs, email and Excel) are bound together by
+    /// `window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer pair answers `too_large`, not a schema
     /// refusal (so the brain still gets a clean typed outcome, not `invalid_args`).
-    ClipboardWriteTextArgs { text: String }
+    ClipboardWriteTextArgs {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        html: Option<String>,
+    }
 );
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

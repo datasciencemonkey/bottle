@@ -339,6 +339,41 @@ describe('wireHubConversations (#103)', () => {
     await expect(w.findThread('')).resolves.toBeUndefined();
   });
 
+  it('[ADR 0124 amendment] "Copy Markdown" writes the row\'s raw Markdown, resolved from the brain\'s own list', async () => {
+    const { store } = fakeStore({ [MOG_A]: [dbRow(1, T0)] });
+    const copied: string[] = [];
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+      copyMarkdown: async (text) => void copied.push(text),
+    });
+    await w.refresh();
+    input({ action: 'conversations.copy_markdown', requestId: req(1) });
+    await Promise.resolve();
+    expect(copied).toEqual(['**Answer** 1']);
+  });
+
+  it('[ADR 0124 amendment] "Copy Markdown" is a no-op for an unknown or answer-less row', async () => {
+    const { store } = fakeStore({
+      [MOG_A]: [dbRow(1, T0, { finalAnswerMd: null })],
+    });
+    const copied: string[] = [];
+    const w = wireHubConversations(bus, {
+      store,
+      mogs,
+      send: async () => undefined,
+      sendOpen: async () => undefined,
+      copyMarkdown: async (text) => void copied.push(text),
+    });
+    await w.refresh();
+    input({ action: 'conversations.copy_markdown', requestId: req(1) });
+    input({ action: 'conversations.copy_markdown', requestId: req(99) });
+    await Promise.resolve();
+    expect(copied).toEqual([]);
+  });
+
   it('[#103] dispose stops the hub input', async () => {
     const { store, calls } = fakeStore({});
     const w = wireHubConversations(bus, {

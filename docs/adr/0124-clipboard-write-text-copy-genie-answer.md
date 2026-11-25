@@ -164,3 +164,77 @@ anything small that goes with it (a Settings toggle, a small view note).
   copy both reach Conversations for free; it has no dedicated test file of its own (none existed
   before this change), so this path is covered by `TurnBody`'s own tests, `agent-run.ts`'s
   `markCopied` test and code inspection, not a new `AgentThread.tsx` test suite.
+
+## Amendment (2026-11-25): HTML, Excel-ready plain text, and a "Copy Markdown" button
+
+The owner's request, verbatim: "when we push stuff into the clipboard… deliver data that is
+amenable to directly be pasted into, let's say, Docs or email or Excel. Basic Markdown-based
+pasting is not something most business users are going to do." A second request, verbatim: "put
+HTML in the clipboard, plain text, the markdown as a little button on the conversations copy."
+
+1. **`clipboard_write_text` gets one new optional field, `html`.** `ClipboardWriteTextArgs {
+   text, html? }`; the 100 KB `CLIPBOARD_WRITE_MAX_BYTES` bound now covers `text` and `html`
+   combined, one write, so a long table cannot smuggle a second answer's worth of bytes past the
+   cap through the other field. On macOS, `html` (when given) is written as `public.html`
+   (`NSPasteboardTypeHTML`) next to `text`'s `public.utf8-plain-text`, both in the one
+   `NSPasteboardItem` the durable write already makes (`clipboard_formats_durable`). Windows has
+   no small, already-tested path to a CF_HTML byte-offset header in this codebase
+   (`WindowsClipboard` writes plain memory formats only); rather than add one under this amendment,
+   `html` is silently dropped there and Windows keeps writing `CF_UNICODETEXT` only, exactly as
+   before. Linux stays `unsupported`. `src-tauri/schemas/ipc-commands.json` is regenerated
+   (`BOTTLE_UPDATE_SCHEMAS=1`).
+2. **The brain converts the answer's Markdown into both forms, not just strips citations.**
+   `src/shared/answer-clipboard-format.ts` (pure, no React, no IPC) parses the same minimal
+   Markdown grammar the card's allowlist renderer uses (`src/views/card/safe-markdown.tsx`:
+   headings, bold, italic, lists, GFM tables, links, code) and renders it twice:
+   - **HTML**: real `<h1>`-`<h6>` (not the card's own bold-paragraph downgrade — Word, Gmail and
+     Docs all render a heading tag as a heading, which is what a pasted answer should look like
+     there), `<strong>`/`<em>`, `<ul>`/`<ol>`/`<li>`, a real `<table>` with `<th>`/`<td>` and
+     minimal inline border/padding styles (no `<style>` block: Gmail, Outlook and Word do not all
+     load one), `<code>`/`<pre>`. Every literal character is escaped first, so an injected
+     `<script>` or `on*` attribute inside the Genie text lands as inert escaped text, never as
+     markup. A link is an `<a href>` only when `trustedUrl` (`src/shared/link-trust.ts`, the same
+     rule the card uses for its own links) passes it; anything else — another scheme, an
+     untrusted host — is plain escaped text. No `<img>`: an image token keeps only its alt text.
+   - **Plain text**: the Markdown syntax is gone (no `**`, `#`, table pipes); a table becomes
+     TAB-separated cells, one row per line including the header row, so it pastes into cells in
+     Excel or Google Sheets; a link becomes "label (url)" (plain text is never clickable, so this
+     form keeps every link, trusted host or not — the host-trust rule is an HTML-only concern).
+   - This is a second, text-only implementation of `safe-markdown.tsx`'s grammar, not a shared
+     import: a brain module must not import from a view file (decision 13's `NOTE_MS`
+     duplication is the same rule), and the two renderers differ in output (React nodes vs.
+     strings) and destination (an in-app card vs. Word, Gmail, Docs and Excel). No new
+     dependency: the existing hand-rolled parser was already small enough to port.
+3. **The link-trust host for the HTML form follows the same rule the card already applies.**
+   `answerLinkTrust(turn)` (`src/shared/agent-answer-rule.ts`) mirrors `AgentTurnCard.tsx`'s own
+   `trust`/`summaryTrust`: a lone Genie answer trusts only its own workspace host; a combined note
+   trusts every part and citation host of the turn. For the direct path, `genie-direct.ts`'s
+   `onAnswered` hook gained a fourth, optional argument, `host` — the same workspace host the
+   card already resolves for its own "Open in Databricks" link — threaded straight to
+   `createAnswerClipboard`'s `onDirectAnswered`. With no host, nothing is trusted
+   (`NO_LINKS`): a clipboard copy never guesses a workspace.
+4. **A new "Copy Markdown" button, independent of the auto-copy.** One small icon button (lucide
+   `Copy`, tooltip and `aria-label="Copy as Markdown"`) next to a finished answer: `TurnBody`
+   (shared by the card and hub Conversations, `src/views/card/AgentTurnCard.tsx`) gets a new,
+   optional `onCopyMarkdown` prop, shown only when the turn is `done` and has an answer to copy
+   (`finishedAnswerText`); only `src/views/hub/AgentThread.tsx`'s two uses of `TurnBody` wire it
+   (`agent.copy_markdown`, a new `AgentAction`) — the small MOG card does not offer it, to keep
+   its cramped layout as it was. The direct answer gets its own copy of the control in hub
+   Conversations' `Exchange` (`src/views/hub/Conversations.tsx`: a new `conversations.copy_markdown`
+   `ConversationsAction`, resolved to a row's `answerMd` from the brain's own last list read,
+   never from the view). A click always writes through `clipboard_write_text` with `text` only
+   (no `html`), so it pastes as raw Markdown — unlike the auto-copy, it ignores the "Copy Genie
+   answers" toggle and carries no once-per-answer guard (`AnswerClipboard.copyMarkdownNow`), since
+   it is an explicit user action, not an automatic one. The agent-turn button reuses the existing
+   `copyNote` round trip for feedback (`CopyAnswerNote` already shows "Copied"/"Couldn't copy");
+   the direct-answer button has no equivalent brain-sent note for a `ConversationRow`, so it shows
+   a brief, view-local check-mark state instead (optimistic: the click is assumed to succeed,
+   the same trade-off Bottle already accepts for the auto-copy racing an unrelated clipboard
+   write).
+5. **Consequences.** `ClipboardWriteTextArgs`, `src/shared/ipc.ts`'s `clipboard_write_text` entry,
+   and `src-tauri/schemas/ipc-commands.json` all gain the optional `html` field. `AgentAction`
+   gains `agent.copy_markdown`; `ConversationsAction` gains `conversations.copy_markdown`; neither
+   is a contract file (both are "frozen for the slice," changed here through the orchestrator).
+   `GenieDirectDeps.onAnswered` gains an optional fourth argument. None of this changes the
+   `ClipboardWriteOutcome` reply shape (`written` / `too_large` / `unsupported`) or the Settings
+   toggle, the dismiss rule, or the `NOTE_MS` clearing behaviour of decisions 1-13 above.

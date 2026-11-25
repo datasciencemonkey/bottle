@@ -137,6 +137,35 @@
   flex: none;
 }
 
+/* ADR 0124 amendment, the owner's "little button on the Conversations copy" request: a quiet
+   icon button next to the Copied note that writes the answer's raw Markdown only. */
+.agent-copy-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-copy-markdown {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--mog-radius-sm, 4px);
+  background: transparent;
+  color: var(--mog-text-muted);
+  cursor: pointer;
+}
+
+.agent-copy-markdown:hover,
+.agent-copy-markdown:focus-visible {
+  background: var(--mog-surface-raised, rgba(0, 0, 0, 0.06));
+  color: var(--mog-text);
+}
+
 /* The workspace colour is lifted toward white so it keeps 3:1 on the raised surface. */
 .agent-call,
 .agent-part,

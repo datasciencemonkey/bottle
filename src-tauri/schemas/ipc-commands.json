@@ -620,8 +620,14 @@
     "clipboard_write_text": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "description": "`clipboard_write_text` (ADR 0124): the one new IPC command of the owner's \"attach Genie's\nanswer to the clipboard\" request. `text` is bound by\n`window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer one answers `too_large`, not a schema\nrefusal (so the brain still gets a clean typed outcome, not `invalid_args`).",
+      "description": "`clipboard_write_text` (ADR 0124): the one new IPC command of the owner's \"attach Genie's\nanswer to the clipboard\" request. `text` plus `html` (ADR 0124 amendment: paste\nformatted into Docs, email and Excel) are bound together by\n`window_host::CLIPBOARD_WRITE_MAX_BYTES`; a longer pair answers `too_large`, not a schema\nrefusal (so the brain still gets a clean typed outcome, not `invalid_args`).",
       "properties": {
+        "html": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "text": {
           "type": "string"
         }

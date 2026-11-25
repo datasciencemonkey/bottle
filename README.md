@@ -110,7 +110,9 @@ If the model itself isn't reachable, Bottle falls back to asking Genie on your h
 directly and shows a short notice.
 
 Bottle copies each Genie answer to your clipboard, on the ⌥G card and on a reply in Conversations
-(turn this off in Settings → Workspace).
+(turn this off in Settings → Workspace). It pastes formatted into Docs and email, and as cells
+into Excel; a small "Copy as Markdown" button on each reply in Conversations copies the raw
+Markdown instead, any time, even with the setting off.
 
 ### Record: ⌥R (hold Right Option, tap R)
 

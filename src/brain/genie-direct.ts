@@ -78,9 +78,10 @@ export interface GenieDirectDeps {
   /**
    * The owner's "attach Genie's answer to the clipboard" request: a real Genie answer (never a
    * clarify question, a failure or a stop) came back, once, verbatim. Called whether or not the
-   * user closed the ready pill: the answer was still delivered.
+   * user closed the ready pill: the answer was still delivered. `host` is the workspace host of
+   * the answer (ADR 0124 amendment): the one host the clipboard's HTML form trusts links for.
    */
-  onAnswered?: ((mogId: MogId, opId: string, md: string) => void) | undefined;
+  onAnswered?: ((mogId: MogId, opId: string, md: string, host?: string) => void) | undefined;
   /**
    * UX slice 1: the arrival gate. While the user holds the talk key, the terminal event changes
    * only the pill to "Answer ready" (an answer) and the card update waits for `whenClear`.
@@ -237,7 +238,9 @@ export function createGenieDirectSend(deps: GenieDirectDeps): GenieDirectSend {
         // it landed — a silent clipboard overwrite of something the user already dismissed would
         // surprise them (owner decision, reversible: drop the `!closed.has(opId)` check below).
         if (outcome.t === 'answer' && !outcome.incomplete && !newer && !closed.has(opId)) {
-          safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md));
+          // ADR 0124 amendment: `host` (already resolved above, for the card's own link trust)
+          // is the one workspace host the clipboard's HTML form trusts links for.
+          safely(() => deps.onAnswered?.(turn.mogId, opId, outcome.md, host));
         }
         // The user closed the ready pill: the card stays closed. The blurb ends empty.
         if (closed.delete(opId)) {

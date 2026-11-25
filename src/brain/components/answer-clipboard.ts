@@ -28,7 +28,9 @@
  * - clear their own note `NOTE_MS` after setting it (the brain, not only the view's local fade
  *   timer), so "Copied" never resurfaces hours later on a remount or a reopened thread.
  */
-import { finishedAnswerText } from '../../shared/agent-answer-rule';
+import { answerLinkTrust, finishedAnswerText } from '../../shared/agent-answer-rule';
+import { formatAnswerForClipboard } from '../../shared/answer-clipboard-format';
+import { NO_LINKS } from '../../shared/link-trust';
 import type { AgentTurnView } from '../../shared/ipc';
 
 /** The outcome of one `clipboard_write_text` call, as the card or thread reply shows it. */
@@ -42,8 +44,10 @@ const NOTE_MS = 2_000;
 export interface AnswerClipboardDeps {
   /** "Copy Genie answers to the clipboard", read once per answer. */
   enabled(): boolean;
-  /** `clipboard_write_text`. */
-  write(text: string): Promise<'written' | 'too_large' | 'unsupported'>;
+  /** `clipboard_write_text`. `html` is the ADR 0124 amendment (paste formatted into Docs and
+   * email, as cells into Excel): omitted for the manual "Copy Markdown" button, which writes
+   * raw Markdown text only (`copyMarkdownNow`). */
+  write(text: string, html?: string): Promise<'written' | 'too_large' | 'unsupported'>;
   /** Defer `fn` until no dictation insertion is in flight. */
   whenClear(fn: () => void): void;
   /** The outcome of a turn's copy (the ⌥G card and Conversations both show it), or `undefined`
@@ -58,8 +62,18 @@ export interface AnswerClipboardDeps {
 export interface AnswerClipboard {
   /** Call from `agent-run.ts`'s `deps.finished`. Never call for a dismissed turn. */
   onTurnFinished(mogId: string, turn: AgentTurnView): void;
-  /** Call from `genie-direct.ts`'s `onAnswered`. Never call for a dismissed send. */
-  onDirectAnswered(mogId: string, opId: string, md: string): void;
+  /** Call from `genie-direct.ts`'s `onAnswered`. Never call for a dismissed send. `host` is the
+   * direct answer's workspace host (ADR 0124 amendment): the one host the HTML form's links
+   * trust. */
+  onDirectAnswered(mogId: string, opId: string, md: string, host?: string): void;
+  /**
+   * The owner's "put the Markdown as a little button on the Conversations copy" request: an
+   * explicit click on the per-answer "Copy Markdown" control. Unlike {@link onTurnFinished}, it
+   * ignores the "Copy Genie answers" toggle and the once-per-turn guard (the user may click it
+   * again), and it always writes plain Markdown text only, with no `html`, so it pastes as raw
+   * Markdown. A no-op when the turn has no answer to copy (withheld, or an empty model note).
+   */
+  copyMarkdownNow(turnId: string, turn: Pick<AgentTurnView, 'summary' | 'parts'>): void;
 }
 
 /** Keys already handled are capped, so a very long session never grows this without bound. */
@@ -71,38 +85,55 @@ export function createAnswerClipboard(deps: AnswerClipboardDeps): AnswerClipboar
     handled.add(key);
     if (handled.size > MAX_HANDLED) handled.delete(handled.values().next().value as string);
   };
-  /** Copy `text` once for `key`, then report the outcome through `note`, and clear it again. */
+  /** Write `text`/`html` once, then report the outcome through `note`, and clear it again. */
+  const writeOnce = (
+    text: string,
+    html: string | undefined,
+    note: (outcome: CopyOutcome | undefined) => void,
+  ): void => {
+    deps.write(text, html).then(
+      (outcome) => {
+        note(outcome === 'written' ? 'copied' : 'failed');
+        setTimeout(() => note(undefined), NOTE_MS);
+      },
+      () => {
+        deps.onFault?.();
+        note('failed');
+        setTimeout(() => note(undefined), NOTE_MS);
+      },
+    );
+  };
+  /** Copy `text`/`html` once for `key` (the once-per-answer auto-copy), gated on the toggle. */
   const copyOnce = (
     key: string,
     text: string,
+    html: string | undefined,
     note: (outcome: CopyOutcome | undefined) => void,
   ): void => {
     if (handled.has(key)) return;
     remember(key);
     if (!deps.enabled()) return;
-    deps.whenClear(() => {
-      deps.write(text).then(
-        (outcome) => {
-          note(outcome === 'written' ? 'copied' : 'failed');
-          setTimeout(() => note(undefined), NOTE_MS);
-        },
-        () => {
-          deps.onFault?.();
-          note('failed');
-          setTimeout(() => note(undefined), NOTE_MS);
-        },
-      );
-    });
+    deps.whenClear(() => writeOnce(text, html, note));
   };
   return {
     onTurnFinished(_mogId, turn) {
+      const md = finishedAnswerText(turn);
+      if (md === undefined) return;
+      const { text, html } = formatAnswerForClipboard(md, answerLinkTrust(turn));
+      copyOnce(`turn:${turn.turnId}`, text, html, (outcome) => deps.noteTurn(turn.turnId, outcome));
+    },
+    onDirectAnswered(mogId, opId, md, host) {
+      if (md.trim() === '') return;
+      const { text, html } = formatAnswerForClipboard(
+        md,
+        host !== undefined ? { profileHost: host, allowedAppUrls: [] } : NO_LINKS,
+      );
+      copyOnce(`direct:${opId}`, text, html, (outcome) => deps.noteDirect(mogId, opId, outcome));
+    },
+    copyMarkdownNow(turnId, turn) {
       const text = finishedAnswerText(turn);
       if (text === undefined) return;
-      copyOnce(`turn:${turn.turnId}`, text, (outcome) => deps.noteTurn(turn.turnId, outcome));
-    },
-    onDirectAnswered(mogId, opId, md) {
-      if (md.trim() === '') return;
-      copyOnce(`direct:${opId}`, md, (outcome) => deps.noteDirect(mogId, opId, outcome));
+      deps.whenClear(() => writeOnce(text, undefined, (outcome) => deps.noteTurn(turnId, outcome)));
     },
   };
 }

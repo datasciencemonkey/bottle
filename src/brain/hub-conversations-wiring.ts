@@ -82,6 +82,9 @@ export interface ConversationsWireDeps extends ConversationsReadDeps {
   forgetConversation?(conversationId: string): void;
   /** Whether a hub window exists. Default: yes (the hub is built at start and only hidden). */
   hubPresent?(): Promise<boolean>;
+  /** The owner's "little button on the Conversations copy" request: `clipboard_write_text`
+   * with `text` only (no `html`), for the row the brain resolved from its own last list read. */
+  copyMarkdown?(text: string): Promise<unknown>;
 }
 
 export interface HubConversationsWiring {
@@ -580,6 +583,13 @@ export function wireHubConversations(
     if (action.action === 'conversations.delete') {
       // Clear failed sends `onlyFailed` with the same keys: the brain checks each again.
       void remove(action.threads, { onlyFailed: action.onlyFailed === true });
+      return;
+    }
+    if (action.action === 'conversations.copy_markdown') {
+      // Resolved from the brain's own last list read, never from the view: the click only
+      // names the row by id.
+      const row = last?.list.rows.find((r) => r.requestId === action.requestId);
+      if (row && row.answerMd !== '') void deps.copyMarkdown?.(row.answerMd);
       return;
     }
     void (async () => {

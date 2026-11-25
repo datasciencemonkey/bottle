@@ -78,6 +78,8 @@ export interface HubAgentWiringDeps {
   send(view: HubAgentView): Promise<unknown>;
   /** Show the hub on Settings → Workspace. */
   openSettings(): void;
+  /** The owner's "little button on the Conversations copy" request: `agent.copy_markdown`. */
+  copyMarkdown?(turnId: string): void;
 }
 
 export interface HubAgentWiring {
@@ -106,6 +108,8 @@ export function wireHubAgent(bus: BrainBus, deps: HubAgentWiringDeps): HubAgentW
         return void deps.client.stop(a.turnId).then(() => push());
       case 'agent.open_settings':
         return deps.openSettings();
+      case 'agent.copy_markdown':
+        return deps.copyMarkdown?.(a.turnId);
     }
   });
   return { push: () => push() };

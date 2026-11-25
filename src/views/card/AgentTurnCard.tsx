@@ -23,7 +23,7 @@
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { ChevronRight, EyeOff } from 'lucide-react';
+import { ChevronRight, Copy, EyeOff } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AFTER_HOVER_MS, CARD_DONE, CARD_MOG_HOVER_EVENT } from '../../shared/genie-status';
 import type { MogId } from '../../shared/interfaces';
@@ -36,6 +36,7 @@ import type {
   CardSection,
 } from '../../shared/ipc';
 import {
+  finishedAnswerText,
   foldedUnderLone,
   genieOneLinks,
   loneAnswerIndex,
@@ -514,7 +515,16 @@ export interface TurnBodyProps {
   live?: boolean;
   /** The caller draws the footer itself (the card keeps it outside its scroll region). */
   footerOutside?: boolean;
+  /**
+   * The owner's "little button on the Conversations copy" request: an explicit "Copy Markdown"
+   * click. Undefined where the surface does not offer it (the small MOG card does not; hub
+   * Conversations does, via `AgentThread.tsx`). Shown only for a done turn with an answer to
+   * copy ({@link finishedAnswerText}).
+   */
+  onCopyMarkdown?: (() => void) | undefined;
 }
+
+export const COPY_MARKDOWN_LABEL = 'Copy as Markdown';
 
 /** The footer of a turn: the planner and the tokens, then the controls. */
 export function TurnFooter({ turn, actions }: { turn: AgentTurnView; actions?: ReactNode }) {
@@ -616,6 +626,7 @@ export function TurnBody({
   actions,
   live = false,
   footerOutside = false,
+  onCopyMarkdown,
 }: TurnBodyProps) {
   const queued = turn.state === 'queued';
   const rootRef = useRef<HTMLDivElement>(null);
@@ -745,7 +756,21 @@ export function TurnBody({
         linked={onOpenLink ? linked : undefined}
       />
       {(turn.state === 'done' || turn.copyNote !== undefined) && (
-        <CopyAnswerNote outcome={turn.copyNote} />
+        <div className="agent-copy-row">
+          <CopyAnswerNote outcome={turn.copyNote} />
+          {turn.state === 'done' && onCopyMarkdown && finishedAnswerText(turn) !== undefined && (
+            <button
+              type="button"
+              className="agent-copy-markdown"
+              data-action="copy-markdown"
+              title={COPY_MARKDOWN_LABEL}
+              aria-label={COPY_MARKDOWN_LABEL}
+              onClick={onCopyMarkdown}
+            >
+              <Copy aria-hidden="true" size={12} strokeWidth={2} />
+            </button>
+          )}
+        </div>
       )}
       {onOpenLink && <GenieOneLinks links={genieLinks} onOpenLink={onOpenLink} />}
       {answerFirst && <CallsOf turn={turn} now={now} />}

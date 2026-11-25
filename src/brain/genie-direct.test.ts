@@ -939,6 +939,20 @@ describe('genie direct send: the MOG shows the work and the answer (#573)', () =
       ]);
     });
 
+    it('[ADR 0124 amendment] passes the resolved workspace host to onAnswered', async () => {
+      const c = fakeCard();
+      const seen: (string | undefined)[] = [];
+      const send = createGenieDirectSend({
+        genie: fakeBridge([answerEvent]).bridge,
+        cardFor: () => c.card,
+        newOpId: () => OP,
+        hostOf: async () => 'sales.cloud.databricks.com',
+        onAnswered: (_m, _o, _md, host) => void seen.push(host),
+      });
+      await send(turn());
+      expect(seen).toEqual(['sales.cloud.databricks.com']);
+    });
+
     it('never calls onAnswered for a failure, a clarify question or a stop', async () => {
       const cases: AskEvent[] = [
         { t: 'failed', code: 'OFFLINE', userText: 'x', retry: 'none' },

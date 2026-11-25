@@ -1,5 +1,6 @@
 /** The owner rule for the answer of an agent turn, and its Genie One links. Fake values. */
 import {
+  answerLinkTrust,
   finishedAnswerText,
   foldedUnderLone,
   genieOneLinks,
@@ -183,5 +184,73 @@ describe('finishedAnswerText (the owner\'s "attach Genie\'s answer to the clipbo
       parts: [part('logfood', 'first try'), part('logfood', 'final answer')],
     };
     expect(finishedAnswerText(turn)).toBe('final answer');
+  });
+});
+
+describe('answerLinkTrust (ADR 0124 amendment: the clipboard HTML link-trust rule)', () => {
+  it('a lone answer trusts only its own workspace host', () => {
+    const turn: Pick<AgentTurnView, 'summary' | 'parts'> = {
+      parts: [
+        part('sales', 'Revenue is $5M.', {
+          sections: [
+            { id: 'answer', md: 'Revenue is $5M.' },
+            { id: 'footer', workspaceHost: 'sales.cloud.databricks.com' },
+          ],
+        }),
+      ],
+    };
+    expect(answerLinkTrust(turn)).toEqual({
+      profileHost: 'sales.cloud.databricks.com',
+      allowedAppUrls: [],
+    });
+  });
+
+  it('a lone answer with no footer host trusts nothing', () => {
+    const turn: Pick<AgentTurnView, 'summary' | 'parts'> = {
+      parts: [part('sales', 'Revenue is $5M.')],
+    };
+    expect(answerLinkTrust(turn)).toEqual({ profileHost: '', allowedAppUrls: [] });
+  });
+
+  it('a combined summary trusts every part and citation host, deduplicated', () => {
+    const turn: Pick<AgentTurnView, 'summary' | 'parts'> = {
+      summary: {
+        md: 'Revenue grew [1] and headcount grew [2].',
+        kind: 'combined',
+        workspaces: [],
+        citations: [
+          {
+            n: 1,
+            callId: 'c-sales',
+            workspace: { name: 'Sales', colorVariant: 'blue' },
+            workspaceHost: 'sales.cloud.databricks.com',
+          },
+          {
+            n: 2,
+            callId: 'c-fin',
+            workspace: { name: 'Finance', colorVariant: 'rose' },
+            workspaceHost: 'fin.cloud.databricks.com',
+          },
+        ],
+      },
+      parts: [
+        part('sales', 'x', {
+          sections: [
+            { id: 'answer', md: 'x' },
+            { id: 'footer', workspaceHost: 'sales.cloud.databricks.com' },
+          ],
+        }),
+        part('fin', 'y'),
+      ],
+    };
+    const trust = answerLinkTrust(turn);
+    expect(trust.profileHost).toBe('');
+    expect(trust.allowedAppUrls).toEqual(
+      expect.arrayContaining([
+        'https://sales.cloud.databricks.com',
+        'https://fin.cloud.databricks.com',
+      ]),
+    );
+    expect(trust.allowedAppUrls).toHaveLength(2);
   });
 });

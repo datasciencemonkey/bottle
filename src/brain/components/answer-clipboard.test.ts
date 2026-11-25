@@ -7,6 +7,7 @@ import {
 } from './answer-clipboard';
 
 const MOG = 'a1';
+const DIRECT_HOST = 'sales.cloud.databricks.com';
 
 function turn(o: Partial<AgentTurnView> = {}): AgentTurnView {
   return {
@@ -32,11 +33,13 @@ function fakeDeps(o: Partial<AnswerClipboardDeps> = {}) {
   const turnNotes: { turnId: string; outcome: CopyOutcome | undefined }[] = [];
   const directNotes: { mogId: string; opId: string; outcome: CopyOutcome | undefined }[] = [];
   const writes: string[] = [];
+  const htmls: (string | undefined)[] = [];
   const faults: number[] = [];
   const deps: AnswerClipboardDeps = {
     enabled: () => true,
-    write: async (text) => {
+    write: async (text, html) => {
       writes.push(text);
+      htmls.push(html);
       return 'written';
     },
     whenClear: (fn) => fn(),
@@ -45,7 +48,7 @@ function fakeDeps(o: Partial<AnswerClipboardDeps> = {}) {
     onFault: () => faults.push(1),
     ...o,
   };
-  return { deps, turnNotes, directNotes, writes, faults };
+  return { deps, turnNotes, directNotes, writes, htmls, faults };
 }
 
 describe('createAnswerClipboard: onTurnFinished (the orchestrator path, H1)', () => {
@@ -221,5 +224,115 @@ describe('createAnswerClipboard: onDirectAnswered (the direct Genie path, H2)', 
     await Promise.resolve();
     await Promise.resolve();
     expect(writes).toEqual(['The answer.', 'A different direct answer.']);
+  });
+
+  it('[ADR 0124 amendment] trusts the given host for the HTML form', async () => {
+    const { deps, writes, htmls } = fakeDeps();
+    createAnswerClipboard(deps).onDirectAnswered(
+      MOG,
+      'op-1',
+      `Revenue was **$5M**. See [the report](https://${DIRECT_HOST}/x) for more.`,
+      DIRECT_HOST,
+    );
+    await Promise.resolve();
+    expect(writes).toEqual([
+      'Revenue was $5M. See the report (https://sales.cloud.databricks.com/x) for more.',
+    ]);
+    expect(htmls[0]).toContain('<strong>$5M</strong>');
+    expect(htmls[0]).toContain(`<a href="https://${DIRECT_HOST}/x">the report</a>`);
+  });
+
+  it('[ADR 0124 amendment] with no host, an https link is never trusted in the HTML form', async () => {
+    const { deps, htmls } = fakeDeps();
+    createAnswerClipboard(deps).onDirectAnswered(
+      MOG,
+      'op-1',
+      `See [the report](https://${DIRECT_HOST}/x).`,
+    );
+    await Promise.resolve();
+    expect(htmls[0]).not.toContain('<a ');
+  });
+});
+
+describe('createAnswerClipboard: the ADR 0124 amendment (html plus the "Copy Markdown" button)', () => {
+  it('onTurnFinished writes a plain-text form (markdown syntax removed) and an HTML form', async () => {
+    const { deps, writes, htmls } = fakeDeps();
+    createAnswerClipboard(deps).onTurnFinished(
+      MOG,
+      turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [
+              { id: 'answer', md: 'Revenue grew **a lot**.' },
+              { id: 'footer', workspaceHost: DIRECT_HOST },
+            ],
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue grew a lot.']);
+    expect(htmls[0]).toContain('<strong>a lot</strong>');
+  });
+
+  it('copyMarkdownNow writes the raw Markdown text only, with no html', async () => {
+    const { deps, writes, htmls, turnNotes } = fakeDeps();
+    createAnswerClipboard(deps).copyMarkdownNow(
+      't1',
+      turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [{ id: 'answer', md: 'Revenue grew **a lot**.' }],
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    expect(writes).toEqual(['Revenue grew **a lot**.']);
+    expect(htmls).toEqual([undefined]);
+    expect(turnNotes).toEqual([{ turnId: 't1', outcome: 'copied' }]);
+  });
+
+  it('copyMarkdownNow works even when the auto-copy toggle is off', async () => {
+    const { deps, writes } = fakeDeps({ enabled: () => false });
+    createAnswerClipboard(deps).copyMarkdownNow('t1', turn());
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.']);
+  });
+
+  it('copyMarkdownNow is a no-op for a withheld (quarantined) answer', async () => {
+    const { deps, writes } = fakeDeps();
+    createAnswerClipboard(deps).copyMarkdownNow(
+      't1',
+      turn({
+        parts: [
+          {
+            callId: 'c1',
+            workspace: { name: 'Sales', colorVariant: 'coral' },
+            sections: [
+              {
+                id: 'answer',
+                md: 'This answer was held back. It looked like it held instructions.',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+  });
+
+  it('copyMarkdownNow can run again for the same turn (no once-per-turn guard)', async () => {
+    const { deps, writes } = fakeDeps();
+    const clipboard = createAnswerClipboard(deps);
+    clipboard.copyMarkdownNow('t1', turn());
+    clipboard.copyMarkdownNow('t1', turn());
+    await Promise.resolve();
+    expect(writes).toEqual(['The answer.', 'The answer.']);
   });
 });

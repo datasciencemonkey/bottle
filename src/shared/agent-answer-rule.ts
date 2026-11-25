@@ -8,7 +8,7 @@
  * - Any other count: the text of the model is the main answer when it has text, and the
  *   workspace answers fold under it.
  */
-import { openInDatabricksUrl } from './link-trust';
+import { bareHost, openInDatabricksUrl, type LinkTrust } from './link-trust';
 import type { AgentPartView, AgentTurnView } from './ipc';
 
 /** The text of a part whose answer the core withheld (a quarantine hit). */
@@ -58,6 +58,13 @@ export const openGenieOneText = (workspace: string): string => `Open Genie One i
 /** The `answer` section's markdown of a part's sections, if it has one. */
 function answerMdOf(sections: readonly { id: string; md?: string }[]): string | undefined {
   return sections.find((s) => s.id === 'answer')?.md;
+}
+
+/** The `footer` section's workspace host of a part's sections, if it has one. */
+function footerHostOf(
+  sections: readonly { id: string; workspaceHost?: string }[],
+): string | undefined {
+  return sections.find((s) => s.id === 'footer')?.workspaceHost;
 }
 
 /**
@@ -167,6 +174,32 @@ export function finishedAnswerText(
   if (md.trim() === '') return undefined;
   const citationNumbers = (turn.summary.citations ?? []).map((c) => c.n);
   return stripCitationMarkers(md, citationNumbers);
+}
+
+/**
+ * The link trust rule for a clipboard copy of a turn's answer (ADR 0124 amendment, the HTML
+ * clipboard format): the same rule the card and hub Conversations use to decide which links of
+ * the answer are clickable (`AgentTurnCard.tsx`'s `trust`/`summaryTrust`).
+ * - A lone Genie answer (see {@link loneAnswerIndex}): only that part's own workspace host.
+ * - Otherwise (the model's combined note): every workspace host of this turn's parts and
+ *   citations, so a link the model cited to any of them is trusted.
+ * With no host at all, nothing is trusted: a clipboard copy never guesses a workspace.
+ */
+export function answerLinkTrust(turn: Pick<AgentTurnView, 'parts' | 'summary'>): LinkTrust {
+  const lone = loneAnswerIndex(turn.parts.map(toAnswerPart));
+  if (lone >= 0) {
+    return {
+      profileHost: footerHostOf(turn.parts[lone]?.sections ?? []) ?? '',
+      allowedAppUrls: [],
+    };
+  }
+  const hosts = [
+    ...turn.parts.map((p) => footerHostOf(p.sections) ?? ''),
+    ...(turn.summary?.citations ?? []).map((c) => c.workspaceHost ?? ''),
+  ]
+    .map(bareHost)
+    .filter((h) => h !== '');
+  return { profileHost: '', allowedAppUrls: [...new Set(hosts)].map((h) => `https://${h}`) };
 }
 
 /** A workspace answer that a turn holds: where its Genie One link comes from. */

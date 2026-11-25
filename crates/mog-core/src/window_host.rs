@@ -113,12 +113,40 @@ pub fn clipboard_formats(platform: ClipboardPlatform, text: &str) -> Vec<Clipboa
     }
 }
 
-/// The formats to write for `text` on `platform` as a normal, durable clipboard item
-/// (`clipboard_write_text`, ADR 0124): no concealed or transient marker, so clipboard managers,
-/// history and "paste again later" all see it, unlike the SEC-30 insertion write above. See
-/// [`ClipboardWriteTextComponent`] for why this command marks nothing concealed either.
-pub fn clipboard_formats_durable(platform: ClipboardPlatform, text: &str) -> Vec<ClipboardFormat> {
-    vec![text_format(platform, text)]
+/// The pasteboard type that carries `html` on macOS (`NSPasteboardTypeHTML`'s UTI). The data is
+/// the HTML fragment's UTF-8 bytes, verbatim: the brain already escaped and sanitised it
+/// (`src/shared/answer-clipboard-format.ts`) before this command ever saw it.
+fn html_format(html: &str) -> ClipboardFormat {
+    ClipboardFormat {
+        name: "public.html",
+        data: html.as_bytes().to_vec(),
+    }
+}
+
+/// The formats to write for `text` (and, on macOS, `html`) on `platform` as a normal, durable
+/// clipboard item (`clipboard_write_text`, ADR 0124): no concealed or transient marker, so
+/// clipboard managers, history and "paste again later" all see it, unlike the SEC-30 insertion
+/// write above. See [`ClipboardWriteTextComponent`] for why this command marks nothing concealed
+/// either.
+///
+/// ADR 0124 amendment (paste formatted into Docs, email and Excel): `html`, when given, is
+/// written as `public.html` next to the plain text, so macOS apps that prefer rich content (Gmail,
+/// Google Docs, Word) paste the formatted answer; `public.utf8-plain-text` stays for apps that
+/// paste text only. Windows has no small, well-tested path to a CF_HTML byte-offset header in
+/// this codebase today (`crates/mog-core/src/insertion/windows.rs`'s `WindowsClipboard` writes
+/// plain memory formats only), so `html` is silently dropped there: Windows keeps writing
+/// `CF_UNICODETEXT` only, exactly as it did before this amendment.
+pub fn clipboard_formats_durable(
+    platform: ClipboardPlatform,
+    text: &str,
+    html: Option<&str>,
+) -> Vec<ClipboardFormat> {
+    match (platform, html) {
+        (ClipboardPlatform::MacOs, Some(html)) => {
+            vec![html_format(html), text_format(platform, text)]
+        }
+        _ => vec![text_format(platform, text)],
+    }
 }
 
 /// The platform of this build, or `None` where no clipboard flags are defined.
@@ -174,16 +202,18 @@ impl<B: ClipboardBackend> ClipboardWriter<B> {
         }
     }
 
-    /// Write `text` for `platform` as a normal, durable item (`clipboard_write_text`): no
-    /// concealed or transient marker (see [`ClipboardWriteTextComponent`]).
+    /// Write `text` (and, on macOS, `html`) for `platform` as a normal, durable item
+    /// (`clipboard_write_text`): no concealed or transient marker (see
+    /// [`ClipboardWriteTextComponent`]).
     pub fn write_durable_text_for(
         &self,
         platform: ClipboardPlatform,
         text: &str,
+        html: Option<&str>,
     ) -> CoreResult<()> {
         let result = self
             .backend
-            .write(&clipboard_formats_durable(platform, text));
+            .write(&clipboard_formats_durable(platform, text, html));
         if result.is_err() {
             // Fail closed, as `write_text_for` does: no half-written item stays on the clipboard.
             let _ = self.backend.clear();
@@ -264,9 +294,9 @@ impl ClipboardBackend for NoClipboard {
     }
 }
 
-/// The longest `text` that `clipboard_write_text` accepts, in UTF-8 bytes (100 KB). A Genie
-/// answer never needs more; a longer one answers `too_large` rather than hang the pasteboard on
-/// a giant write.
+/// The longest `text` and `html` *combined* that `clipboard_write_text` accepts, in UTF-8 bytes
+/// (100 KB). A Genie answer never needs more; a longer pair answers `too_large` rather than hang
+/// the pasteboard on a giant write.
 pub const CLIPBOARD_WRITE_MAX_BYTES: usize = 100 * 1024;
 
 /// The reply of `clipboard_write_text`: `{result: written|too_large|unsupported}`. A typed
@@ -326,7 +356,9 @@ impl<B: ClipboardBackend + Copy> GatewayComponents for ClipboardWriteTextCompone
         }
         let a: ClipboardWriteTextArgs =
             serde_json::from_value(args).map_err(|_| refused("invalid_args"))?;
-        if a.text.len() > CLIPBOARD_WRITE_MAX_BYTES {
+        // ADR 0124 amendment: the 100 KB cap covers `text` and `html` together, one write.
+        let combined_len = a.text.len() + a.html.as_deref().map_or(0, str::len);
+        if combined_len > CLIPBOARD_WRITE_MAX_BYTES {
             return Ok(json!({ "result": ClipboardWriteOutcome::TooLarge }));
         }
         let Some((backend, platform)) = self.target else {
@@ -337,7 +369,7 @@ impl<B: ClipboardBackend + Copy> GatewayComponents for ClipboardWriteTextCompone
         // dictation, would land in the focused app.
         let _paste = PASTE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         ClipboardWriter::new(backend)
-            .write_durable_text_for(platform, &a.text)
+            .write_durable_text_for(platform, &a.text, a.html.as_deref())
             .map_err(|_| refused("host_failed"))?;
         Ok(json!({ "result": ClipboardWriteOutcome::Written }))
     }
@@ -522,6 +554,104 @@ mod clipboard_tests {
         let ok = "x".repeat(CLIPBOARD_WRITE_MAX_BYTES);
         let reply = c.call("clipboard_write_text", json!({"text": ok})).unwrap();
         assert_eq!(reply, json!({"result": "written"}));
+    }
+
+    #[test]
+    fn clipboard_write_text_writes_both_html_and_text_on_macos() {
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        let reply = c
+            .call(
+                "clipboard_write_text",
+                json!({"text": "the answer", "html": "<p>the answer</p>"}),
+            )
+            .unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+        let calls = rec.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            vec![
+                ClipboardFormat {
+                    name: "public.html",
+                    data: b"<p>the answer</p>".to_vec(),
+                },
+                ClipboardFormat {
+                    name: "public.utf8-plain-text",
+                    data: b"the answer".to_vec(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn clipboard_write_text_still_writes_text_only_with_no_html() {
+        // The existing text-only contract keeps working once `html` is optional.
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        c.call("clipboard_write_text", json!({"text": "plain"}))
+            .unwrap();
+        assert_eq!(
+            rec.calls.lock().unwrap()[0],
+            vec![ClipboardFormat {
+                name: "public.utf8-plain-text",
+                data: b"plain".to_vec(),
+            }]
+        );
+    }
+
+    #[test]
+    fn clipboard_write_text_the_size_bound_covers_text_and_html_combined() {
+        let rec = Recorder::default();
+        let c = ClipboardWriteTextComponent::new(&rec, ClipboardPlatform::MacOs);
+        // Half the bound in each of `text` and `html`: together just over it.
+        let half = CLIPBOARD_WRITE_MAX_BYTES / 2;
+        let text = "x".repeat(half);
+        let html = "y".repeat(half + 1);
+        let reply = c
+            .call("clipboard_write_text", json!({"text": text, "html": html}))
+            .unwrap();
+        assert_eq!(reply, json!({"result": "too_large"}));
+        assert!(rec.calls.lock().unwrap().is_empty());
+        // Exactly at the combined bound: a normal write.
+        let html_ok = "y".repeat(half);
+        let reply = c
+            .call(
+                "clipboard_write_text",
+                json!({"text": text, "html": html_ok}),
+            )
+            .unwrap();
+        assert_eq!(reply, json!({"result": "written"}));
+    }
+
+    #[test]
+    fn clipboard_write_text_drops_html_on_windows_and_writes_text_only() {
+        // ADR 0124 amendment: Windows has no small CF_HTML path in this codebase yet, so `html`
+        // is silently dropped there and `CF_UNICODETEXT` is written exactly as before. This is a
+        // platform-agnostic data-construction test (`clipboard_formats_durable`), not an FFI
+        // call, so it runs and is checked on every host, not only a Windows build.
+        let formats =
+            clipboard_formats_durable(ClipboardPlatform::Windows, "hi", Some("<p>hi</p>"));
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].name, "CF_UNICODETEXT");
+    }
+
+    #[test]
+    fn clipboard_formats_durable_macos_puts_html_before_text() {
+        let formats = clipboard_formats_durable(ClipboardPlatform::MacOs, "hi", Some("<b>hi</b>"));
+        assert_eq!(
+            formats,
+            vec![
+                ClipboardFormat {
+                    name: "public.html",
+                    data: b"<b>hi</b>".to_vec(),
+                },
+                ClipboardFormat {
+                    name: "public.utf8-plain-text",
+                    data: b"hi".to_vec(),
+                },
+            ]
+        );
     }
 
     #[test]

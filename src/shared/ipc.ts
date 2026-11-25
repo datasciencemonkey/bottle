@@ -368,9 +368,11 @@ export interface CommandArgs {
     tags: Tags;
   };
   insert_text: { mogId: MogId; text: string; leaseId: LeaseId };
-  /** The owner's "attach Genie's answer to the clipboard" request. `text` is bound by
-   * the Rust `CLIPBOARD_WRITE_MAX_BYTES` (100 KB); a longer one answers `too_large`. */
-  clipboard_write_text: { text: string };
+  /** The owner's "attach Genie's answer to the clipboard" request. `html` (ADR 0124 amendment:
+   * paste formatted into Docs, email and Excel) is optional; on macOS it is written alongside
+   * `text` as `public.html`, next to the plain text. `text` and `html` combined are bound by
+   * the Rust `CLIPBOARD_WRITE_MAX_BYTES` (100 KB); a longer pair answers `too_large`. */
+  clipboard_write_text: { text: string; html?: string };
   agent_start: { mogId: MogId; harness: 'claude' | 'codex'; model?: string };
   agent_stop: MogArgs;
   agent_send: { mogId: MogId; turn: JsonObject };
