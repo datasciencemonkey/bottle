@@ -89,7 +89,9 @@ pub fn system(i: &PromptInput<'_>) -> String {
     );
     p.push_str(
         "Format: write answer in Markdown. Keep the formatting of the Genie answer, its tables \
-         and its hyperlinks exactly. Never drop or rewrite a URL. \
+         and its hyperlinks exactly. Every hyperlink that appears in a genie_answer block you \
+         use must appear in your answer too, as a Markdown link [label](url), with its label \
+         and its URL unchanged. Never drop or rewrite a URL. \
          Never invent a URL. Use only URLs that appear in the genie_answer blocks.\n",
     );
     p.push_str(
@@ -160,6 +162,10 @@ mod tests {
         let c = cat();
         let p = system(&input(&c));
         assert!(p.contains("Markdown"));
+        assert!(p.contains(
+            "Every hyperlink that appears in a genie_answer block you use must appear in your \
+             answer too, as a Markdown link [label](url)"
+        ));
         assert!(p.contains("Never drop or rewrite a URL"));
         assert!(p.contains("Never invent a URL"));
         assert!(!p.contains("Keep answer short"));

@@ -1646,6 +1646,11 @@ fn build_result(
         return hidden;
     };
     let mut out = Vec::new();
+    // The Genie answer text of each validated source, in citation order: the same text the
+    // model saw (see `genie_answer_text`), never a withheld or quarantined one (the loop below
+    // returns `hidden` for those before this ever fills in, so a source that reaches here is
+    // always a clean, cited answer).
+    let mut cited_texts: Vec<String> = Vec::new();
     for s in sources {
         let (Some(ws), Some(cid)) = (s["workspace"].as_str(), s["callId"].as_str()) else {
             return hidden;
@@ -1655,11 +1660,12 @@ fn build_result(
             .find(|c| c.call_id == cid && c.alias == ws && c.state == AgentCallState::Answered);
         let Some(c) = ok else { return hidden };
         // A withheld call keeps the state Answered, so ask the guard. No detail: not a source.
-        if guard
-            .call_detail(&c.turn_id, &c.call_id)
-            .is_none_or(|d| d.withheld.is_some())
-        {
+        let detail = guard.call_detail(&c.turn_id, &c.call_id);
+        if detail.as_ref().is_none_or(|d| d.withheld.is_some()) {
             return hidden;
+        }
+        if let Some(t) = detail.as_ref().and_then(|d| genie_answer_text(d)) {
+            cited_texts.push(t.to_owned());
         }
         out.push(AgentSource {
             workspace_id: ws.to_owned(),
@@ -1672,14 +1678,21 @@ fn build_result(
     if answer.trim().is_empty() && out.is_empty() {
         return hidden;
     }
+    // Cross-workspace data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1
+    // removed), so an answer that cites more than one workspace is always Combined.
+    let combined = cites_many_workspaces(&out);
     let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
     let aliases: Vec<&str> = out.iter().map(|s| s.workspace_id.as_str()).collect();
-    let answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
+    let mut answer = strip_bad_markers(&strip_source_footer(answer, &ids, &aliases), out.len());
+    // The real fix behind the prompt's "never drop a URL" rule (ADR 0122 amendment, 2026-11-25):
+    // a combined answer that dropped a link the model used still gets it, appended. A lone
+    // answer (one workspace) is shown verbatim and is never touched.
+    if combined {
+        answer = append_missing_links(&answer, &cited_texts);
+    }
     AgentTurnResult {
         answer: Some(cut_answer(&answer)),
-        // Cross-workspace data is always on (ADR 0122 amendment, owner decision 2026-11-24: D1
-        // removed), so an answer that cites more than one workspace is always Combined.
-        answer_kind: if cites_many_workspaces(&out) {
+        answer_kind: if combined {
             AgentAnswerKind::Combined
         } else {
             AgentAnswerKind::Note
@@ -1687,6 +1700,96 @@ fn build_result(
         sources: out,
         usage,
     }
+}
+
+/// The Genie answer text of a cited call, the same text its `<genie_answer>` block held (see
+/// `guard::receipt::text_block`): `final_answer` from the structured content, or else the
+/// reply's plain text. `None` for a call with no reply, or no usable text.
+fn genie_answer_text(c: &AgentTurnCall) -> Option<&str> {
+    let reply = c.reply.as_ref()?;
+    let t = reply
+        .structured_content
+        .get("final_answer")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(reply.text.as_str());
+    (!t.trim().is_empty()).then_some(t)
+}
+
+/// One link a cited Genie answer carried: the label to show for it (a Markdown link's own
+/// label, or the URL itself for a bare URL) and the URL.
+struct FoundLink {
+    label: String,
+    url: String,
+}
+
+/// The Markdown links (`[label](https://…)`) and bare `https://…` URLs of `text`, in the order
+/// they appear. Capped at `guard::receipt::MAX_TEXT_CHARS` chars, the same bound the model's own
+/// `<genie_answer>` block uses, so a long table cannot make the scan slow.
+fn find_links(text: &str) -> Vec<FoundLink> {
+    static MD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static BARE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let md = MD.get_or_init(|| {
+        regex::Regex::new(r"\[([^\]\n]{1,200})\]\((https?://[^\s()]+)\)").expect("a fixed pattern")
+    });
+    let bare =
+        BARE.get_or_init(|| regex::Regex::new(r"https?://[^\s()\[\]]+").expect("a fixed pattern"));
+    let bound: String = text.chars().take(guard::receipt::MAX_TEXT_CHARS).collect();
+    let mut spans: Vec<(usize, usize, FoundLink)> = Vec::new();
+    for c in md.captures_iter(&bound) {
+        let m = c.get(0).expect("group 0");
+        spans.push((
+            m.start(),
+            m.end(),
+            FoundLink {
+                label: c[1].to_owned(),
+                url: c[2].to_owned(),
+            },
+        ));
+    }
+    for m in bare.find_iter(&bound) {
+        // Already captured as a Markdown link's own URL.
+        if spans
+            .iter()
+            .any(|&(s, e, _)| m.start() >= s && m.end() <= e)
+        {
+            continue;
+        }
+        spans.push((
+            m.start(),
+            m.end(),
+            FoundLink {
+                label: m.as_str().to_owned(),
+                url: m.as_str().to_owned(),
+            },
+        ));
+    }
+    spans.sort_by_key(|&(start, _, _)| start);
+    spans.into_iter().map(|(_, _, l)| l).collect()
+}
+
+/// Append a `**Links**` section listing every URL that `texts` (the Genie answers the model
+/// cited) carries but `answer` (the model's own text) does not, in the order each first
+/// appears. De-duplicated: a URL that repeats, in one text or across several, is appended once.
+fn append_missing_links(answer: &str, texts: &[String]) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut missing = Vec::new();
+    for t in texts {
+        for link in find_links(t) {
+            if seen.insert(link.url.clone()) && !answer.contains(&link.url) {
+                missing.push(link);
+            }
+        }
+    }
+    if missing.is_empty() {
+        return answer.to_owned();
+    }
+    let mut out = answer.trim_end().to_owned();
+    out.push_str("\n\n**Links**");
+    for l in &missing {
+        out.push_str(&format!("\n- [{}]({})", l.label, l.url));
+    }
+    out
 }
 
 /// Cut an answer that is too long back to its last line break before the limit, so a link or a

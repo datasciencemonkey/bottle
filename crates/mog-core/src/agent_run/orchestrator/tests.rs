@@ -244,6 +244,30 @@ fn by_profile(profile: &str) -> &'static str {
     }
 }
 
+// ---------- the links guard (owner decision 2026-11-25: never drop a link) ----------
+
+const SALES_W_LINK: &str =
+    "Revenue rose to 4.2M. See the [Dashboard](https://sales.example/dash) for details.";
+const FIN_W_LINK: &str =
+    "Costs were 3.1M. See the [Report](https://finance.example/report) for details.";
+
+fn with_links(profile: &str) -> &'static str {
+    match profile {
+        "p-sales" => SALES_W_LINK,
+        _ => FIN_W_LINK,
+    }
+}
+
+/// Like `with_links`, but a third profile's answer is the prompt-injection text (`EVIL`), so its
+/// call ends up withheld (quarantined).
+fn with_links_and_evil(profile: &str) -> &'static str {
+    match profile {
+        "p-sales" => SALES_W_LINK,
+        "p-fin" => FIN_W_LINK,
+        _ => EVIL,
+    }
+}
+
 #[derive(Debug)]
 struct Gate;
 
@@ -780,6 +804,159 @@ fn two_workspaces_with_d1_on_give_a_combined_answer_that_cites_one_and_two() {
         .collect();
     assert_eq!(ws, ["sales", "finance"]);
     assert_eq!(r.r8.count("genie_ask"), 2);
+}
+
+#[test]
+fn a_combined_answer_that_drops_a_link_gets_it_appended() {
+    let r = rig(
+        10,
+        FakeR8::answering(with_links),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let sources: Vec<Value> =
+                    results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+                // The model cites both workspaces but writes no URL of its own.
+                reply_of(vec![final_item(json!({
+                    "answer": "Sales rose and costs held [1][2].",
+                    "sources": sources,
+                }))])
+            }
+        }),
+    );
+    let (tid, o) = r.run("compare sales to finance");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
+    let answer = res.answer.unwrap();
+    assert_eq!(
+        answer,
+        "Sales rose and costs held [1][2].\n\n**Links**\n\
+         - [Dashboard](https://sales.example/dash)\n\
+         - [Report](https://finance.example/report)"
+    );
+}
+
+#[test]
+fn a_combined_answer_that_keeps_all_links_is_unchanged() {
+    let r = rig(
+        10,
+        FakeR8::answering(with_links),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let sources: Vec<Value> =
+                    results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+                let v = json!({
+                    "answer": "Sales rose, see [Dashboard](https://sales.example/dash) [1]. \
+                        Costs held, see [Report](https://finance.example/report) [2].",
+                    "sources": sources,
+                });
+                reply_of(vec![final_item(v)])
+            }
+        }),
+    );
+    let (tid, o) = r.run("compare sales to finance");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
+    let answer = res.answer.unwrap();
+    assert!(!answer.contains("**Links**"), "{answer}");
+    assert_eq!(
+        answer,
+        "Sales rose, see [Dashboard](https://sales.example/dash) [1]. \
+         Costs held, see [Report](https://finance.example/report) [2]."
+    );
+}
+
+#[test]
+fn a_combined_answer_s_missing_links_are_de_duplicated() {
+    // Both workspaces happen to cite the very same URL.
+    let r = rig(
+        10,
+        FakeR8::answering(|_| "See [Doc](https://shared.example/doc) for details."),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let sources: Vec<Value> =
+                    results_in(body).iter().map(|(w, c)| source(w, c)).collect();
+                reply_of(vec![final_item(json!({
+                    "answer": "Both say the same thing [1][2].",
+                    "sources": sources,
+                }))])
+            }
+        }),
+    );
+    let (tid, o) = r.run("compare sales to finance");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let answer = r.host.turn_result(&tid).unwrap().answer.unwrap();
+    assert_eq!(
+        answer.matches("https://shared.example/doc").count(),
+        1,
+        "{answer}"
+    );
+    assert_eq!(answer.matches("**Links**").count(), 1, "{answer}");
+}
+
+#[test]
+fn a_withheld_part_s_url_is_never_added_to_the_links_section() {
+    let r = rig(
+        10,
+        FakeR8::answering(with_links_and_evil),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![
+                ask_item("fc0", "sales"),
+                ask_item("fc1", "finance"),
+                ask_item("fc2", "ops"),
+            ]),
+            _ => {
+                let got = results_in(body);
+                let outs = outputs_in(body);
+                assert!(outs.iter().any(|o| o.contains("withheld")), "{outs:?}");
+                // Citing the withheld "ops" call would hide the whole answer, so the model
+                // cites only the two clean workspaces.
+                let sources: Vec<Value> = got
+                    .iter()
+                    .filter(|(w, _)| w != "ops")
+                    .map(|(w, c)| source(w, c))
+                    .collect();
+                reply_of(vec![final_item(json!({
+                    "answer": "Sales and finance both say things [1][2].",
+                    "sources": sources,
+                }))])
+            }
+        }),
+    );
+    r.ws.0.lock().unwrap().catalog.push(CatalogEntry {
+        alias: "ops".into(),
+        profile: "p-ops".into(),
+        name: "ops".into(),
+        is_home: false,
+        is_agent_workspace: false,
+    });
+    let (tid, o) = r.run("compare sales finance and ops");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Combined);
+    let answer = res.answer.unwrap();
+    assert!(answer.contains("https://sales.example/dash"), "{answer}");
+    assert!(
+        answer.contains("https://finance.example/report"),
+        "{answer}"
+    );
+    assert!(!answer.contains("evil"), "{answer}");
+}
+
+#[test]
+fn a_lone_answer_is_untouched_by_the_links_guard() {
+    let r = rig(10, FakeR8::answering(with_links), ask_then_cite(&["sales"]));
+    let (tid, o) = r.run("what was revenue?");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.answer_kind, AgentAnswerKind::Note);
+    // "answer [1]" never mentions the Dashboard link that the sales Genie answer carried, but a
+    // lone answer is shown verbatim and the links guard never touches it.
+    assert_eq!(res.answer.as_deref(), Some("answer [1]"));
 }
 
 #[test]

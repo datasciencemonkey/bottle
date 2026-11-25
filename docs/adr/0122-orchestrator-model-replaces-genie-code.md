@@ -193,6 +193,16 @@ The owner's rule (verbatim): "Remove it, always combine."
    passed as `false` once D1 was gone — is removed, since nothing ever read anything else into
    it.
 
+## Amendment: Links guaranteed (2026-11-25, owner decision)
+
+The owner's rule (verbatim): "update the model that is orchestrating everything to ensure that
+it does not take out any links."
+
+8. **The prompt's "never drop a URL" rule now has a code guard behind it.** `build_result`
+   appends a `**Links**` section for any URL a cited, non-withheld Genie answer carried that the
+   model's own combined answer dropped, de-duplicated and in order of first appearance, never
+   from a withheld or quarantined part, and never on a lone answer (still shown verbatim).
+
 ## Consequences
 
 - Bottle owns a tool loop, so its step cap, time cap and tool list are security controls and need tests.
