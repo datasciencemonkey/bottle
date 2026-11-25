@@ -249,6 +249,8 @@ fn adr_0103_the_handoff_slot_forwards_once_the_cloud_side_connects() {
         duration_ms: 0,
         cause: StopCause::User,
         system_audio: mog_core::recording_capture::session::SystemAudioState::Ok,
+        system_open_ms: 0,
+        system_open_timed_out: false,
         profile: None,
         instructions: None,
         capture: Default::default(),

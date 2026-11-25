@@ -12,6 +12,7 @@ import {
   RECORDING_ERRORS,
   RECORDING_TEXT,
   RECORDING_VIEW_ID,
+  SYSTEM_AUDIO_HINT,
   type HubRecording,
   type HubRecordingDetail,
   type HubRecordings,
@@ -25,6 +26,7 @@ import {
   settingsPatchOf,
   turnsOf,
   wireRecording,
+  SYSTEM_AUDIO_HINT_MS,
   type RecDetail,
   type RecJob,
   type RecSettings,
@@ -32,6 +34,7 @@ import {
   type RecSummary,
   type RecordingApi,
 } from './recording-wiring';
+import { createSimScheduler, type SimScheduler } from '../test-support/sim-scheduler';
 
 vi.mock('@tauri-apps/api/core', async () => (await import('./test-core')).coreModule);
 vi.mock('@tauri-apps/api/event', async () => (await import('./test-core')).eventModule);
@@ -123,7 +126,7 @@ function fakeApi(start: Partial<RecSettings> = {}) {
   };
 }
 
-function setup(start: Partial<RecSettings> = {}) {
+function setup(start: Partial<RecSettings> = {}, scheduler?: SimScheduler) {
   const bus = new BrainBus();
   const fake = fakeApi(start);
   const sent: { event: string; payload: unknown }[] = [];
@@ -137,6 +140,7 @@ function setup(start: Partial<RecSettings> = {}) {
     },
     mood,
     notify,
+    ...(scheduler ? { clock: scheduler.clock, schedule: scheduler.at } : {}),
   });
   const click = (payload: Record<string, unknown>, from = 'hub') =>
     bus.dispatch({
@@ -408,18 +412,90 @@ describe('recording wiring (brain, ADR 0103)', () => {
     expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.failed);
   });
 
-  it('[REC-H8] a silent system audio state shows the System Audio fix-it notice', async () => {
-    const t = setup({ enabled: true, consentAck: true });
+  it('[REC-H8] a short system audio silence shows no alert at all (#593 follow-up)', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
     t.click({ action: 'recording.ready' });
     await flush();
     t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
     await flush();
-    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
-      RECORDING_ERRORS.system_audio_denied,
-    );
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS - 1);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+  });
+
+  it('[REC-H8] a long system audio silence shows a calm status hint, not a red alert', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(SYSTEM_AUDIO_HINT);
+    expect(SYSTEM_AUDIO_HINT.role).toBe('status');
     t.click({ action: 'recording.system_audio' });
     await flush();
     expect(t.fake.api.openSystemAudioSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('[REC-H8] sound before the hint cancels it; sound after it clears it', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS / 2);
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'ok' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS * 2);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS * 3);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(SYSTEM_AUDIO_HINT);
+
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'ok' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+  });
+
+  it('[REC-H8] the hint timer is dropped once the recording ends', async () => {
+    const s = createSimScheduler();
+    const t = setup({ enabled: true, consentAck: true }, s);
+    t.click({ action: 'recording.ready' });
+    await flush();
+    t.fake.pushState({ phase: 'recording', endsAtMs: 10, systemAudio: 'silent_or_denied' });
+    await flush();
+    t.fake.pushState({ phase: 'idle' });
+    await flush();
+    await s.runUntil(SYSTEM_AUDIO_HINT_MS * 2);
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toBeUndefined();
+  });
+
+  it('[REC-H8] a real system_audio_denied error keeps its own red alert meaning', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.api.retry.mockRejectedValue({ error: 'system_audio_denied' });
+    t.click({ action: 'recordings.retry', id: 'r2' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(
+      RECORDING_ERRORS.system_audio_denied,
+    );
+  });
+
+  it('[REC-H8] a failed Open System Settings shows a plain text, never nothing', async () => {
+    const t = setup({ enabled: true, consentAck: true });
+    t.fake.api.openSystemAudioSettings.mockRejectedValue({ error: 'host_failed' });
+    t.click({ action: 'recording.system_audio' });
+    await flush();
+    expect(t.last<HubRecording>(HUB_RECORDING_EVENT)?.error).toEqual(RECORDING_ERRORS.failed);
   });
 
   it('[REC-H9] the Recordings list is newest first; a failed row has its plain text', async () => {

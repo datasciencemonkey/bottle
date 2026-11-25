@@ -11,8 +11,14 @@
 //!   older OS, no backend, a refused tap). So `open` always returns `Ok`; the outcome is in
 //!   the shared [`SystemAudioStatus`] (`Live` or `Unavailable`), which the recording session
 //!   shows as `system_audio`.
-//! - **Timeout.** `open` waits at most `open_timeout` for the build. A late build is dropped
-//!   by the thread when it returns, so no tap stays on.
+//! - **Timeout (CAP-10c).** `open` waits at most its timeout for the build; past that it
+//!   answers mic-only (`Unavailable`) so the recording can go on, but it does not give up on
+//!   the build. The thread's own `Msg::Open` handler is what finally sets `status`, whether
+//!   the build resolves in time or late: a build that succeeds late is adopted (`status` goes
+//!   to `Live`, corrected from the opener's own `Unavailable` guess) as long as nothing
+//!   cancelled it since (a `close` or a newer `open`); otherwise it drops here, never a live
+//!   stream that `status` does not know about. The very first `open` of a device's life waits
+//!   longer ([`OPEN_TIMEOUT_FIRST`]): its process tap build can take longer than a later one.
 //! - **Close** drops the stream on the thread before it returns (or, while a slow build still
 //!   runs, as soon as that build returns), like the mic (MOG-09, CAP-13b).
 //! - **Faults.** A stream that the OS invalidates (a default output change) is built again
@@ -25,18 +31,23 @@
 //! R2 CaptureService stays the only owner of both streams (CAP-01a) and the panic stop closes
 //! both (MB-05).
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::capture::{AudioDevice, AudioSource, DeviceError};
 
 use super::{codes, mix_to_mono, DataFn, FaultFn, FrameSink, MicFrame, MicHost, StreamFault};
 
-/// How long `open` waits for the system audio stream by default.
+/// How long `open` waits for the system audio stream after the first one (CAP-10c).
 pub const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long the very first `open` waits. The first process tap build can take longer than a
+/// later one (observed about 8.6 s end to end on a real machine, review of #593/#107 follow-up);
+/// a longer first wait makes the caller's own timeout (which only means "go on mic-only for
+/// now") fire less often, while a late build is still adopted instead of lost either way.
+pub const OPEN_TIMEOUT_FIRST: Duration = Duration::from_secs(15);
 /// How long `close` waits for the thread (it never waits for a slow build beyond this).
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
@@ -69,18 +80,49 @@ impl SystemAudioAvailability {
     }
 }
 
+/// The diagnostic counters of [`SystemAudioStatus`] (CAP-10c): no audio, no path, no name,
+/// counts and timings only. `last-capture.json` reads them through
+/// `RecordingSession`/`FinishedRecording` to show why a system audio tap stayed `unavailable`.
+#[derive(Debug, Default)]
+struct OpenDiag {
+    availability: AtomicU8,
+    /// Ms the last `open` took to resolve: either the caller's own answer (live or refused
+    /// within the timeout), or a later worker adoption of a build that finished past it.
+    open_ms: AtomicU64,
+    /// The last `open`'s resolution (whichever of the two above it was) took longer than the
+    /// timeout that was in force for it.
+    timed_out: AtomicBool,
+}
+
 /// The shared, read-only view of the system audio state. Clones share one value.
 #[derive(Debug, Clone, Default)]
-pub struct SystemAudioStatus(Arc<AtomicU8>);
+pub struct SystemAudioStatus(Arc<OpenDiag>);
 
 impl SystemAudioStatus {
     /// The state now.
     pub fn get(&self) -> SystemAudioAvailability {
-        SystemAudioAvailability::from_u8(self.0.load(Ordering::SeqCst))
+        SystemAudioAvailability::from_u8(self.0.availability.load(Ordering::SeqCst))
     }
 
     fn set(&self, v: SystemAudioAvailability) {
-        self.0.store(v.to_u8(), Ordering::SeqCst);
+        self.0.availability.store(v.to_u8(), Ordering::SeqCst);
+    }
+
+    /// Ms the last `open` took to resolve (CAP-10c diagnostic); 0 before the first `open`.
+    pub fn open_ms(&self) -> u64 {
+        self.0.open_ms.load(Ordering::SeqCst)
+    }
+
+    /// The last `open`'s resolution took longer than the timeout in force for it (CAP-10c
+    /// diagnostic): either the caller gave up with no stream yet, or the worker's late build
+    /// finished after that same wait.
+    pub fn timed_out(&self) -> bool {
+        self.0.timed_out.load(Ordering::SeqCst)
+    }
+
+    fn record_open(&self, elapsed_ms: u64, timed_out: bool) {
+        self.0.open_ms.store(elapsed_ms, Ordering::SeqCst);
+        self.0.timed_out.store(timed_out, Ordering::SeqCst);
     }
 }
 
@@ -88,9 +130,20 @@ fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Ms since `started` (CAP-10c diagnostic only: never audio, never a path, never a name).
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
 enum Msg {
     Open {
         generation: u64,
+        /// When `open` sent this message (CAP-10c diagnostic): the worker times the build and
+        /// play from here, not from when it gets to handle the message.
+        started: Instant,
+        /// The timeout `open` is waiting against, so the worker can tell a late (CAP-10c)
+        /// resolution from an on-time one even after `open` itself has given up.
+        timeout: Duration,
         reply: SyncSender<Result<(), DeviceError>>,
     },
     Close {
@@ -112,20 +165,26 @@ struct SinkSlot {
 /// The system audio device. See the [module docs](self).
 pub struct SystemAudioDevice {
     tx: Option<Sender<Msg>>,
-    /// The generation that `open` wants now; `None` after a close or a timeout.
+    /// The generation that `open` wants now; cleared only by `close` (CAP-10c: not by a
+    /// timeout, so a build that finishes late can still be adopted instead of leaking a live,
+    /// untracked stream).
     wanted: Arc<Mutex<Option<u64>>>,
     next: Mutex<u64>,
     status: SystemAudioStatus,
+    open_timeout_first: Duration,
     open_timeout: Duration,
     thread: Option<JoinHandle<()>>,
 }
 
 impl SystemAudioDevice {
     /// Start the `bottle-sysaudio` thread over the host that `make_host` builds there. No
-    /// stream opens here.
+    /// stream opens here. The very first `open` of this device's life waits
+    /// `open_timeout_first`; every later one waits `open_timeout` (CAP-10c: the first process
+    /// tap build can take longer than a later one).
     pub fn spawn<H, F>(
         make_host: F,
         sink: Box<dyn FrameSink>,
+        open_timeout_first: Duration,
         open_timeout: Duration,
     ) -> std::io::Result<(Self, SystemAudioStatus)>
     where
@@ -150,6 +209,7 @@ impl SystemAudioDevice {
                 wanted,
                 next: Mutex::new(0),
                 status: status.clone(),
+                open_timeout_first,
                 open_timeout,
                 thread: Some(thread),
             },
@@ -166,6 +226,7 @@ impl SystemAudioDevice {
                 wanted: Arc::new(Mutex::new(None)),
                 next: Mutex::new(0),
                 status: status.clone(),
+                open_timeout_first: Duration::ZERO,
                 open_timeout: Duration::ZERO,
                 thread: None,
             },
@@ -194,20 +255,32 @@ impl AudioDevice for SystemAudioDevice {
             *next
         };
         *lock(&self.wanted) = Some(generation);
+        let timeout = if generation == 1 {
+            self.open_timeout_first
+        } else {
+            self.open_timeout
+        };
         let (reply, answer) = mpsc::sync_channel(1);
+        let started = Instant::now();
         let result = tx
-            .send(Msg::Open { generation, reply })
+            .send(Msg::Open {
+                generation,
+                started,
+                timeout,
+                reply,
+            })
             .ok()
-            .and_then(|()| answer.recv_timeout(self.open_timeout).ok());
+            .and_then(|()| answer.recv_timeout(timeout).ok());
         match result {
-            Some(Ok(())) => self.status.set(SystemAudioAvailability::Live),
-            // Refused, failed or timed out: the recording goes on mic-only.
-            _ => {
-                let mut wanted = lock(&self.wanted);
-                if *wanted == Some(generation) {
-                    *wanted = None;
-                }
+            // The worker already set `status` and the CAP-10c diagnostics before it answered,
+            // on both branches: refused or failed is `Unavailable`, built and played is `Live`.
+            Some(Ok(())) | Some(Err(_)) => {}
+            // A timeout, not a refusal: the recording goes on mic-only for now. `wanted` stays
+            // set (only `close` clears it), so a build that finishes late is still adopted by
+            // the worker's own check in `build`, instead of a live stream nobody tracks.
+            None => {
                 self.status.set(SystemAudioAvailability::Unavailable);
+                self.status.record_open(elapsed_ms(started), true);
             }
         }
         Ok(())
@@ -253,17 +326,38 @@ impl Worker {
         let mut current: Option<(u64, H::Stream)> = None;
         for msg in rx {
             match msg {
-                Msg::Open { generation, reply } => {
+                Msg::Open {
+                    generation,
+                    started,
+                    timeout,
+                    reply,
+                } => {
                     self.drop_stream(&mut current);
                     let result = self.build(&mut host, generation);
+                    // CAP-10c: this is the one place that sets `status` for an open, whether
+                    // it answers in time or late (the `open` call may already have given up
+                    // and gone on mic-only; this corrects it either way, and nothing here
+                    // leaves a live stream that `status` does not know about).
+                    let timed_out = started.elapsed() > timeout;
                     let answer = match result {
                         Ok(stream) => {
                             current = Some((generation, stream));
+                            self.status.set(SystemAudioAvailability::Live);
+                            self.status.record_open(elapsed_ms(started), timed_out);
                             Ok(())
                         }
-                        Err(e) => Err(e),
+                        Err(e) => {
+                            // `open_cancelled`: a `close` (or a newer `open`) already ran and
+                            // owns the status now (`Off`, or that generation's own outcome);
+                            // do not undo it. Any other error is a genuine refusal.
+                            if e != codes::OPEN_CANCELLED {
+                                self.status.set(SystemAudioAvailability::Unavailable);
+                                self.status.record_open(elapsed_ms(started), timed_out);
+                            }
+                            Err(e)
+                        }
                     };
-                    // The opener may have timed out: then nobody reads the reply.
+                    // The opener may have timed out already: then nobody reads the reply.
                     let _ = reply.try_send(answer);
                 }
                 Msg::Close { reply } => {
@@ -296,8 +390,11 @@ impl Worker {
         self.drop_stream(&mut current);
     }
 
-    /// Build and play a stream for `generation`, unless a close or a timeout cancelled it
-    /// meanwhile; then the late stream drops here.
+    /// Build and play a stream for `generation`, unless a close or a newer open cancelled it
+    /// meanwhile; then the stream drops here, never live and untracked (CAP-10c). A build that
+    /// outlives the opener's own timeout is still adopted here, as long as nothing has
+    /// cancelled it since: [`Worker::run`]'s `Msg::Open` handler is the one that then sets
+    /// `status` to `Live`, whether this returns in time or late.
     fn build<H: MicHost>(&self, host: &mut H, generation: u64) -> Result<H::Stream, DeviceError> {
         let data = self.data_fn(generation);
         let tx = self.tx.clone();
@@ -314,6 +411,14 @@ impl Worker {
             lock(&self.sink).live = None;
             drop(stream);
             return Err(e);
+        }
+        // `play` can itself run long (CAP-10c: an `AudioDeviceStart` that takes longer than the
+        // opener's timeout). Check `wanted` again: a `close` or a newer `open` may have
+        // superseded this generation while `play` ran. If so, this build must not be adopted.
+        if *lock(&self.wanted) != Some(generation) {
+            lock(&self.sink).live = None;
+            drop(stream);
+            return Err(codes::OPEN_CANCELLED);
         }
         Ok(stream)
     }

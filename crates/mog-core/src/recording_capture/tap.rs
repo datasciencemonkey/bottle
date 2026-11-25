@@ -65,6 +65,9 @@ struct Shared {
     armed_at_ms: AtomicU64,
     /// Ms from the arm to the first queued mic block; [`NEVER`] until one comes.
     first_mic_ms: AtomicU64,
+    /// Ms from the arm to the first queued system audio block; [`NEVER`] until one comes
+    /// (CAP-10c diagnostic: tells a late system audio tap from one that never opened).
+    first_system_ms: AtomicU64,
 }
 
 /// No mic block yet.
@@ -86,6 +89,9 @@ pub struct CaptureCounts {
     pub dropped: u64,
     /// Ms from the arm to the first mic block; `None`: no mic block came at all.
     pub first_mic_ms: Option<u64>,
+    /// Ms from the arm to the first system audio block; `None`: no system audio block came at
+    /// all (CAP-10c diagnostic, alongside `firstMicMs`).
+    pub first_system_ms: Option<u64>,
 }
 
 /// The arm slot and the sinks. Clones share one slot.
@@ -118,6 +124,7 @@ impl RecordingTap {
                 gated_blocks: AtomicU64::new(0),
                 armed_at_ms: AtomicU64::new(0),
                 first_mic_ms: AtomicU64::new(NEVER),
+                first_system_ms: AtomicU64::new(NEVER),
             }),
         }
     }
@@ -157,6 +164,7 @@ impl RecordingTap {
             .armed_at_ms
             .store(now_ms(&*self.shared.clock), Ordering::SeqCst);
         self.shared.first_mic_ms.store(NEVER, Ordering::SeqCst);
+        self.shared.first_system_ms.store(NEVER, Ordering::SeqCst);
         // Nothing of the gate resets. The flags and the tail are live state: an overlay lease
         // that was granted between the session lease and this arm, a key that is down now, or a
         // tail that still runs must keep the gate closed (a stale `true` only silences the mic;
@@ -246,6 +254,7 @@ impl RecordingTap {
             system_blocks: s.system_blocks.load(Ordering::SeqCst),
             dropped: s.dropped.load(Ordering::SeqCst),
             first_mic_ms: Some(s.first_mic_ms.load(Ordering::SeqCst)).filter(|&t| t != NEVER),
+            first_system_ms: Some(s.first_system_ms.load(Ordering::SeqCst)).filter(|&t| t != NEVER),
         }
     }
 }
@@ -309,7 +318,11 @@ impl FrameSink for TapSink {
                         }
                     }
                     Track::System => {
-                        s.system_blocks.fetch_add(1, Ordering::Relaxed);
+                        if s.system_blocks.fetch_add(1, Ordering::Relaxed) == 0 {
+                            let after = now_ms(&*s.clock)
+                                .saturating_sub(s.armed_at_ms.load(Ordering::Relaxed));
+                            s.first_system_ms.store(after, Ordering::Relaxed);
+                        }
                     }
                 }
                 if gated {

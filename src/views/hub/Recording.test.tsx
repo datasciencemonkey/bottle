@@ -13,6 +13,7 @@ import {
   RECORDING_ERRORS,
   RECORDING_TEXT,
   RECORDING_VIEW_ID,
+  SYSTEM_AUDIO_HINT,
   type HubRecording,
 } from '../../shared/recording-view';
 import { inputEmits, render, tauri } from '../test-tauri';
@@ -339,5 +340,21 @@ describe('Record control (hub)', () => {
     );
     await click(el.querySelector('[role="alert"] button'));
     expect(onSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('[REC-V11] a calm system audio hint shows as status, not a red alert (#593 follow-up)', async () => {
+    const m = model(
+      {
+        control: { phase: 'recording', endsAtMs: 10 },
+        error: SYSTEM_AUDIO_HINT,
+      },
+      { enabled: true, consentAck: true },
+    );
+    const { el } = await render(<RecordControl model={m} />);
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    const hint = el.querySelector('[role="status"]');
+    expect(hint?.textContent).toContain(SYSTEM_AUDIO_HINT.text);
+    await click(hint?.querySelector('button'));
+    expect(emits().at(-1)).toEqual({ action: 'recording.system_audio' });
   });
 });

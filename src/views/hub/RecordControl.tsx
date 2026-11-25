@@ -54,8 +54,10 @@ export function RecordingAlert({
       (act.target === 'settings' && onSettings !== undefined) ||
       (act.target === 'retry' && onRetry !== undefined) ||
       (act.target === 'open' && onOpen !== undefined));
+  // A calm hint (CAP-10a review, #593 follow-up) reads as status, not an alarm.
+  const role = notice.role === 'status' ? 'status' : 'alert';
   return (
-    <div className="rec-alert" role="alert">
+    <div className={role === 'status' ? 'rec-alert rec-alert--status' : 'rec-alert'} role={role}>
       <p>{notice.text}</p>
       {can && (
         <button type="button" onClick={run}>

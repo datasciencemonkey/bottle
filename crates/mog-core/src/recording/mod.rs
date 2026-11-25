@@ -370,6 +370,33 @@ fn reply<T: serde::Serialize>(v: &T) -> CoreResult<Value> {
     serde_json::to_value(v).map_err(|_| refused("host_failed"))
 }
 
+/// Open the macOS pane that covers System Audio Recording (ADR 0103 fix-it, the
+/// `recording_open_system_audio_settings` command: the red alert's "Open System Settings"
+/// button). Apple groups System Audio Recording with Screen Recording under one "Screen &
+/// System Audio Recording" pane, confirmed by hand (`docs/spikes/SP-01.md`); its stable URL
+/// anchor is `Privacy_ScreenCapture`. Apple documents no separate `Privacy_AudioCapture`
+/// anchor, so `Privacy_ScreenCapture` is the one that actually opens the right pane. Other
+/// OSes have no such pane, so this fails there: the brain surfaces a plain failure rather than
+/// a button that silently does nothing.
+fn open_system_audio_settings() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+        const URL: &str =
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+        let url = NSString::from_str(URL);
+        match NSURL::URLWithString(&url) {
+            Some(url) => NSWorkspace::sharedWorkspace().openURL(&url),
+            None => false,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 impl GatewayComponents for RecordingComponent {
     fn call(&self, command: &'static str, args: Value) -> CoreResult<Value> {
         match command {
@@ -477,6 +504,15 @@ impl GatewayComponents for RecordingComponent {
             "recording_state" => {
                 let link = self.link().ok_or_else(|| refused("not_implemented"))?;
                 reply(&link.capture.state())
+            }
+            // The "Allow System Audio Recording" fix-it (ipc.rs): no profile, no capture link,
+            // no args. macOS only; refuses on every other OS.
+            "recording_open_system_audio_settings" => {
+                if open_system_audio_settings() {
+                    Ok(serde_json::json!({}))
+                } else {
+                    Err(refused("host_failed"))
+                }
             }
             // TODO(#65): PR C fills in the rest.
             _ => Err(refused("not_implemented")),

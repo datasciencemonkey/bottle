@@ -152,10 +152,14 @@ fn cap_06_every_other_recording_command_is_a_typed_stub() {
             "recording_open",
             json!({"profile": "p", "id": "rec-1", "target": "folder"}),
         ),
-        ("recording_open_system_audio_settings", json!({})),
     ] {
         assert_eq!(code(c.call(name, args)), "not_implemented", "{name}");
     }
+    // `recording_open_system_audio_settings` needs no profile and no `connect_capture` link
+    // (CAP-10c, #593 follow-up), so it is not one of the stubs above: it is a real host
+    // handler and, on macOS, really opens the System Settings pane. No test calls it here;
+    // see `cap_10c_recording_open_system_audio_settings_refuses_with_no_pane_off_macos` below
+    // for the part that is safe to run on every machine.
 }
 
 #[test]
@@ -209,6 +213,21 @@ fn sec_03_every_error_kind_maps_to_an_ipc_code() {
         "audio_unreadable"
     );
     assert_eq!(RecordingErrorKind::ALL.len(), 16);
+}
+
+// CAP-10c (#593 follow-up): `recording_open_system_audio_settings` needs no profile and no
+// `connect_capture` link, unlike `recording_start`. This only runs off macOS: on macOS the
+// command really opens the System Settings pane (CAP-10c, `recording/mod.rs`), and no test may
+// do that on the machine that runs it. Linux and Windows CI (AGENTS.md's merge gate) exercise
+// the refusal path below; a human reviewer checks the macOS branch by reading it.
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn rec_open_system_audio_settings_refuses_with_no_pane_off_macos() {
+    let (c, _) = component(RecordingSettings::default());
+    assert_eq!(
+        code(c.call("recording_open_system_audio_settings", json!({}))),
+        "host_failed"
+    );
 }
 
 const MARKER: &str = "the secret plan for the merger";

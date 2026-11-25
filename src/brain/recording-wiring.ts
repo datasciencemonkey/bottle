@@ -28,6 +28,7 @@ import {
   RECORDING_TEXT,
   RECORDING_VIEW_ID,
   recordingNotice,
+  SYSTEM_AUDIO_HINT,
   VOLUME_PATH,
   type HubRecording,
   type HubRecordingDetail,
@@ -54,6 +55,8 @@ import {
 } from '../shared/ipc';
 import type { ProfileName } from '../shared/interfaces';
 import { onViewInput, type BrainBus } from './bus';
+import { timeoutScheduler, type Scheduler } from './card-stack';
+import { createSystemClock, type MonotonicClock } from './clock';
 
 /** The recording settings as the brain reads and writes them. No secrets. */
 export interface RecSettings {
@@ -165,10 +168,22 @@ export interface RecordingWireDeps {
   mood?: RecordingMood;
   /** A short OS notice. It never carries transcript or notes text. */
   notify?: (text: string) => void;
+  /** Default: the system clock. Tests pass a `SimClock` to control the system audio hint timer. */
+  clock?: MonotonicClock;
+  /** Default: `timeoutScheduler(clock)`. */
+  schedule?: Scheduler;
 }
 
 /** The OS notice when the notes of a recording are ready. */
 export const NOTES_READY_TEXT = 'Your call notes are ready.';
+
+/**
+ * CAP-10a, ADR 0103 (#593 follow-up): how long system audio must stay silent before the calm
+ * hint shows. macOS gives the same digital silence whether the permission is denied or nothing
+ * is playing yet (the core's own 5 s check, `SYSTEM_SILENCE_MS`), so a short red alert on every
+ * quiet moment is a false alarm; this waits much longer before saying anything.
+ */
+export const SYSTEM_AUDIO_HINT_MS = 20_000;
 
 /** The refusals of `recordingProfile`: they have their own plain words. */
 const PROFILE_CODES: ReadonlySet<string> = new Set(['no_profile']);
@@ -314,6 +329,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   const send = deps.send ?? ((event: string, payload: unknown) => emitTo('hub', event, payload));
   const toHub = (event: string, payload: unknown) =>
     void send(event, payload).catch(() => undefined);
+  const clock = deps.clock ?? createSystemClock();
+  const schedule = deps.schedule ?? timeoutScheduler(clock);
 
   let settings: RecSettings | undefined;
   let myFiles: string | null | undefined;
@@ -409,10 +426,34 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   };
 
   let recOn = false;
+  /** Whether the last state read `silent_or_denied` while recording (the hint timer tracks it). */
+  let systemAudioSilent = false;
+  let systemAudioHintTimer: (() => void) | undefined;
+
+  /** Cancel a pending hint timer and clear a shown hint. Real errors are untouched. */
+  const clearSystemAudioHint = () => {
+    systemAudioHintTimer?.();
+    systemAudioHintTimer = undefined;
+    if (error === SYSTEM_AUDIO_HINT) error = undefined;
+  };
+
   const setState = (s: RecState) => {
     control = controlOf(s);
-    if (s.systemAudio === 'silent_or_denied') error = recordingNotice('system_audio_denied');
-    else if (error === recordingNotice('system_audio_denied')) error = undefined;
+    // CAP-10a: macOS gives the same digital silence whether System Audio Recording is denied
+    // or nothing else is playing, so a short silence is never a red alert (#593 follow-up). A
+    // long, unbroken silence gets a calm status hint instead, and sound clears it at once. The
+    // red `system_audio_denied` notice keeps its own meaning for a real refusal elsewhere.
+    const silentNow = s.systemAudio === 'silent_or_denied' && s.phase === 'recording';
+    if (silentNow && !systemAudioSilent) {
+      systemAudioHintTimer = schedule(clock.now() + SYSTEM_AUDIO_HINT_MS, () => {
+        systemAudioHintTimer = undefined;
+        error = SYSTEM_AUDIO_HINT;
+        publish();
+      });
+    } else if (!silentNow && systemAudioSilent) {
+      clearSystemAudioHint();
+    }
+    systemAudioSilent = silentNow;
     const on = s.phase === 'recording';
     if (on !== recOn) {
       recOn = on;
@@ -422,6 +463,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
       // and goes on to uploading, transcribing and notes, also with no job event yet.
       else void refreshList();
     }
+    if (!on) clearSystemAudioHint();
     publish();
   };
 
@@ -738,7 +780,8 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
         void stop();
         break;
       case 'recording.system_audio':
-        void api.openSystemAudioSettings().catch(() => undefined);
+        // A failure (no host handler, or no such OS pane) shows a plain text, never nothing.
+        void api.openSystemAudioSettings().catch((e: unknown) => showError(e));
         break;
       case 'recordings.ready':
         void refreshList();
@@ -778,6 +821,7 @@ export function wireRecording(bus: BrainBus, deps: RecordingWireDeps): () => voi
   const offJob = api.onJob(onJob);
   return () => {
     gone = true;
+    systemAudioHintTimer?.();
     offInput();
     offState();
     offJob();

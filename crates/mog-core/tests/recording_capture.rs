@@ -386,8 +386,13 @@ fn adr_0103_system_audio_opens_on_its_own_thread_and_mixes_to_mono() {
     let host = FakeHost::default();
     let got = Collect::default();
     let h = host.clone();
-    let (dev, status) =
-        SystemAudioDevice::spawn(move || h, Box::new(got.clone()), Duration::from_secs(5)).unwrap();
+    let (dev, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(got.clone()),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Off);
     dev.open(AudioSource::SystemAudio).unwrap();
     assert_eq!(status.get(), SystemAudioAvailability::Live);
@@ -419,6 +424,7 @@ fn adr_0103_a_failed_system_audio_open_is_tolerated_as_unavailable() {
         move || h,
         Box::new(Collect::default()),
         Duration::from_secs(5),
+        Duration::from_secs(5),
     )
     .unwrap();
     // A recording goes on mic-only: open does not fail the lease.
@@ -438,6 +444,7 @@ fn adr_0103_a_slow_system_audio_open_times_out_and_cleans_up() {
         move || h,
         Box::new(Collect::default()),
         Duration::from_millis(50),
+        Duration::from_millis(50),
     )
     .unwrap();
     dev.open(AudioSource::SystemAudio).unwrap();
@@ -455,12 +462,83 @@ fn adr_0103_a_slow_system_audio_open_times_out_and_cleans_up() {
 }
 
 #[test]
+fn rec_a_late_adopted_system_open_goes_live_and_records_its_diagnostics() {
+    // The build (and so the whole open) takes longer than the open timeout, like the review's
+    // ~8.6 s `AudioDeviceStart` outliving an 8 s timeout. It still succeeds, so the worker
+    // adopts it instead of leaving a live stream that `status` does not know about.
+    let host = FakeHost {
+        hang: Some(Duration::from_millis(150)),
+        ..FakeHost::default()
+    };
+    let h = host.clone();
+    let clock = Arc::new(SimClock::new());
+    let wall = SimWallClock::at(1_763_544_600_000);
+    let tap = RecordingTap::new(clock.clone());
+    let mic = FakeMic::default();
+    let (sys, status) = SystemAudioDevice::spawn(
+        move || h,
+        Box::new(tap.system_sink()),
+        Duration::from_millis(30),
+        Duration::from_millis(30),
+    )
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let core = Arc::new(CaptureCore::new(
+        Box::new(RecordingDevice::new(Box::new(mic.clone()), Box::new(sys))),
+        clock.clone(),
+        events.clone(),
+    ));
+    let handoff = Arc::new(Handoff::default());
+    let root = temp_dir("session-cap10c");
+    let session = RecordingSession::new(
+        core.clone(),
+        tap.clone(),
+        status.clone(),
+        clock.clone(),
+        Arc::new(wall.clone()),
+        Arc::new(|| true),
+        handoff.clone(),
+        SessionConfig {
+            temp_root: root.clone(),
+            ..SessionConfig::default()
+        },
+    );
+    *events.0.lock().unwrap() = Some(Arc::clone(&session));
+    session.start(opts("cap-10c", 60)).unwrap();
+    // The open already answered `Unavailable` (mic-only, for now); the late build+play has not
+    // resolved yet.
+    for _ in 0..100 {
+        if status.get() == SystemAudioAvailability::Live {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        status.get(),
+        SystemAudioAvailability::Live,
+        "the late build was adopted"
+    );
+    let done = session.stop(StopCause::User).unwrap();
+    assert!(
+        done.system_open_timed_out,
+        "the resolution took longer than its timeout"
+    );
+    assert!(
+        done.system_open_ms >= 150,
+        "system_open_ms should cover the real build time, got {}",
+        done.system_open_ms
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn adr_0103_a_fatal_system_stream_error_marks_it_unavailable() {
     let host = FakeHost::default();
     let h = host.clone();
     let (dev, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(Collect::default()),
+        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -510,6 +588,7 @@ fn cap_01a_recording_device_routes_each_source_to_its_backend() {
     let (sys, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(Collect::default()),
+        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -603,6 +682,7 @@ fn rig_full(sys_fail: bool, part_max_samples: Option<u64>, part_format: PartForm
     let (sys, status) = SystemAudioDevice::spawn(
         move || h,
         Box::new(tap.system_sink()),
+        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();
@@ -985,6 +1065,7 @@ fn rec_finishing_name_covers_the_window_snapshot_already_reads_idle() {
     let (sys, status) = SystemAudioDevice::spawn(
         FakeHost::default,
         Box::new(tap.system_sink()),
+        Duration::from_secs(5),
         Duration::from_secs(5),
     )
     .unwrap();

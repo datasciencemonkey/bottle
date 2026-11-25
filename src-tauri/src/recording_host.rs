@@ -41,22 +41,24 @@ pub const TICK_EVERY: Duration = Duration::from_millis(250);
 /// none elsewhere. Its frames go to `tap`. A device whose thread does not start is the
 /// unavailable device (the recording goes on mic-only).
 pub fn system_audio_device(tap: &RecordingTap) -> (Box<dyn AudioDevice>, SystemAudioStatus) {
-    use mog_core::audio_device::system::OPEN_TIMEOUT;
+    use mog_core::audio_device::system::{OPEN_TIMEOUT, OPEN_TIMEOUT_FIRST};
     #[cfg(target_os = "macos")]
     let spawned = SystemAudioDevice::spawn(
         mog_core::audio_device::system_macos::TapHost::new,
         Box::new(tap.system_sink()),
+        OPEN_TIMEOUT_FIRST,
         OPEN_TIMEOUT,
     );
     #[cfg(target_os = "windows")]
     let spawned = SystemAudioDevice::spawn(
         mog_core::audio_device::system_windows::LoopbackHost::new,
         Box::new(tap.system_sink()),
+        OPEN_TIMEOUT_FIRST,
         OPEN_TIMEOUT,
     );
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let spawned: std::io::Result<(SystemAudioDevice, SystemAudioStatus)> = {
-        let _ = (tap, OPEN_TIMEOUT);
+        let _ = (tap, OPEN_TIMEOUT, OPEN_TIMEOUT_FIRST);
         Ok(SystemAudioDevice::unavailable())
     };
     let (device, status) = spawned.unwrap_or_else(|_| SystemAudioDevice::unavailable());
@@ -138,8 +140,10 @@ impl HandoffSlot {
 pub const CAPTURE_CHECK_FILE: &str = "last-capture.json";
 
 /// Write the content-free check of `rec` to `<root>/last-capture.json` (user-only): the
-/// counts of what reached the writer, the part count, the length, the stop cause and the
-/// system audio state. No samples, levels, names, paths, profile or text.
+/// counts of what reached the writer, the part count, the length, the stop cause, the system
+/// audio state and its open diagnostics (CAP-10c: how long the system audio tap took to
+/// resolve, and whether that took longer than its timeout). No samples, levels, names, paths,
+/// profile or text.
 pub fn write_capture_check(root: &std::path::Path, rec: &FinishedRecording) -> std::io::Result<()> {
     let v = serde_json::json!({
         "capture": rec.capture,
@@ -147,6 +151,8 @@ pub fn write_capture_check(root: &std::path::Path, rec: &FinishedRecording) -> s
         "durationMs": rec.duration_ms,
         "cause": rec.cause.code(),
         "systemAudio": rec.system_audio.code(),
+        "systemOpenMs": rec.system_open_ms,
+        "systemOpenTimedOut": rec.system_open_timed_out,
     });
     let path = root.join(CAPTURE_CHECK_FILE);
     let mut o = std::fs::OpenOptions::new();

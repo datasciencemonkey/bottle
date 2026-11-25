@@ -49,6 +49,8 @@ fn rec(dir: &std::path::Path, id: &str, profile: Option<&str>, parts: usize) -> 
         duration_ms: 30_000,
         cause: StopCause::User,
         system_audio: SystemAudioState::Ok,
+        system_open_ms: 0,
+        system_open_timed_out: false,
         profile: profile.map(str::to_owned),
         instructions: Some("Only action items.".into()),
         capture: Default::default(),
@@ -682,10 +684,17 @@ fn rec_capture_check_file_holds_counts_only() {
     std::fs::create_dir_all(&d).unwrap();
     let mut done = rec(&d, "rec-1234", Some("fake-home"), 0);
     done.capture.mic_blocks = 7;
+    done.capture.first_system_ms = Some(42);
+    done.system_open_ms = 8_600;
+    done.system_open_timed_out = true;
     bottle_lib::recording_host::write_capture_check(&root, &done).unwrap();
     let text = std::fs::read_to_string(root.join("last-capture.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["capture"]["micBlocks"], 7);
+    // CAP-10c: enough to diagnose a late system audio open next time (#593 follow-up).
+    assert_eq!(v["capture"]["firstSystemMs"], 42);
+    assert_eq!(v["systemOpenMs"], 8_600);
+    assert_eq!(v["systemOpenTimedOut"], true);
     assert_eq!(v["parts"], 0);
     assert_eq!(v["cause"], "user");
     for secret in [

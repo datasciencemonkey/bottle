@@ -179,6 +179,7 @@ fn rig(part_max_samples: Option<u64>) -> Rig {
         move || h,
         Box::new(tap.system_sink()),
         Duration::from_secs(5),
+        Duration::from_secs(5),
     )
     .unwrap();
     let fwd = Arc::new(Fwd::default());

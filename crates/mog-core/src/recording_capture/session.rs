@@ -212,6 +212,11 @@ pub struct FinishedRecording {
     pub cause: StopCause,
     /// The system audio state at the stop.
     pub system_audio: SystemAudioState,
+    /// CAP-10c diagnostic: ms the last system audio `open` took to resolve (live, refused, or
+    /// a late worker adoption); 0 when no system audio open ever ran. No audio, no path.
+    pub system_open_ms: u64,
+    /// CAP-10c diagnostic: that resolution took longer than the timeout in force for it.
+    pub system_open_timed_out: bool,
     /// The home profile that `recording_start` named (`None` for a start without one).
     pub profile: Option<String>,
     /// The per-recording instructions of `recording_start` (`None`: use the preset).
@@ -672,6 +677,8 @@ impl RecordingSession {
             duration_ms,
             cause,
             system_audio,
+            system_open_ms: self.system.open_ms(),
+            system_open_timed_out: self.system.timed_out(),
             capture: self.tap.counts(),
         };
         self.notify(&Snapshot::Idle);

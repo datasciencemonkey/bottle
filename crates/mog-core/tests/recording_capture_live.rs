@@ -45,9 +45,13 @@ impl FrameSink for Collect {
 #[ignore = "opens the real system audio tap; run by hand on a Mac"]
 fn adr_0103_live_tap_records_say_into_a_non_silent_flac() {
     let got = Collect::default();
-    let (dev, status) =
-        SystemAudioDevice::spawn(TapHost::new, Box::new(got.clone()), Duration::from_secs(10))
-            .unwrap();
+    let (dev, status) = SystemAudioDevice::spawn(
+        TapHost::new,
+        Box::new(got.clone()),
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     let t0 = std::time::Instant::now();
     dev.open(AudioSource::SystemAudio).unwrap();
     eprintln!("open took {:?}", t0.elapsed());
