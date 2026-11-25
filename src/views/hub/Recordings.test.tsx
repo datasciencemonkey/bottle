@@ -190,6 +190,57 @@ describe('Recordings area (hub)', () => {
     expect(el.querySelector('[data-recording-detail]')?.textContent).not.toContain('Friday');
   });
 
+  it('[REC-V14] a new live take becomes selected even over an older pick (owner review 2026-11-25/26, "D")', async () => {
+    // Before the fix, a manual pick made earlier (or simply no pick at all) left the detail
+    // pane on "Pick a recording to read its notes" (no selection) or stuck on the old row
+    // (a prior pick), while a brand-new take recorded with no pane of its own.
+    const { el } = await render(<Recordings active now={() => NOW} />);
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, list);
+    await click(el.querySelector('[data-recording-row="r1"]'));
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [
+        {
+          id: 'rNew',
+          name: 'x',
+          startedAt: NOW,
+          durationS: 5,
+          status: 'recording',
+          canOpen: false,
+        },
+        ...list.rows,
+      ],
+    });
+    expect(el.querySelector('[data-recording-row="rNew"]')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    await tauri.emitTo('hub', HUB_RECORDING_DETAIL_EVENT, {
+      id: 'rNew',
+      status: 'recording',
+      turns: [],
+    });
+    expect(el.querySelector('[data-recording-detail] .rec-pending')?.textContent).toContain(
+      'still recording',
+    );
+    // While the same take keeps recording, a deliberate pick of another row is not undone.
+    await click(el.querySelector('[data-recording-row="r2"]'));
+    await tauri.emitTo('hub', HUB_RECORDINGS_EVENT, {
+      rows: [
+        {
+          id: 'rNew',
+          name: 'x',
+          startedAt: NOW,
+          durationS: 9,
+          status: 'recording',
+          canOpen: false,
+        },
+        ...list.rows,
+      ],
+    });
+    expect(el.querySelector('[data-recording-row="r2"]')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+  });
+
   describe('every status and action (upload in parts)', () => {
     const base = { name: 'x', startedAt: NOW - 1000, durationS: 600, canOpen: false };
     const rowsOf = (...r: object[]) =>

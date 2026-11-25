@@ -376,6 +376,14 @@ impl CloudAdapter {
             .contains(name)
     }
 
+    /// Every recording name with a run in flight now (the hand-off, or Retry).
+    fn in_flight_names(&self) -> HashSet<String> {
+        self.inflight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The list row of a recording whose audio is only on the device (the upload never wrote a
     /// job.json): failed, `upload_failed`, at the upload step, so Retry runs the whole pipeline.
     pub fn local_only_summary(name: &str, started_at_ms: u64) -> Option<RecordingSummary> {
@@ -1077,6 +1085,31 @@ impl RecordingCloud for CloudAdapter {
                 out.push(s);
             }
         }
+        // A take that still records: its parts sit in the capture temp dir under its final
+        // name (review of #592, BLOCKING B3), so the launch scan's `local.names()` may not
+        // have it yet (owner test 2026-11-25: ⌥R or Record showed no row at all). `active`
+        // alone is enough to show it as recording.
+        let started_of = |name: &str| -> u64 {
+            self.local
+                .sidecar(name)
+                .map(|s| s.started_at_ms.max(0) as u64)
+                .unwrap_or_else(|| (self.now_ms)().max(0) as u64)
+        };
+        for name in &active {
+            if out.iter().any(|r| &r.name == name) {
+                continue;
+            }
+            out.extend(Self::recording_row(name, started_of(name)));
+        }
+        // A take that stopped and was handed to a worker (`in_flight`), with no live entry yet
+        // and no job.json in the volume: still uploading, as far as this app can tell right
+        // now (same owner-test regression as above).
+        for name in self.in_flight_names() {
+            if out.iter().any(|r| r.name == name) {
+                continue;
+            }
+            out.extend(Self::uncertain_row(&name, started_of(&name)));
+        }
         // A failed upload with no part in the volume and no audio left here was deleted on this
         // device (`recording_delete` never touches the volume): nothing to retry, so no row.
         out.retain(|r| {
@@ -1387,6 +1420,126 @@ mod tests {
             Arc::new(|_: &RecordingSummary| {}),
             Arc::new(|| 1_795_100_700_000i64),
         )
+    }
+
+    /// Local audio under full test control, for the `list` regression of the owner test
+    /// 2026-11-25 (⌥R or Record showed no row): a fixed `active` set, independent of `names`
+    /// (a take still recording may not be in `names` yet, review of #592 BLOCKING B3), and an
+    /// optional sidecar.
+    #[derive(Default)]
+    struct FakeLocal {
+        names: Vec<(String, u64)>,
+        active: HashSet<String>,
+        sidecar: Option<Sidecar>,
+    }
+
+    impl LocalAudio for FakeLocal {
+        fn parts(&self, _name: &str) -> Vec<LocalPart> {
+            Vec::new()
+        }
+        fn names(&self) -> Vec<(String, u64)> {
+            self.names.clone()
+        }
+        fn active(&self) -> HashSet<String> {
+            self.active.clone()
+        }
+        fn sidecar(&self, name: &str) -> Option<Sidecar> {
+            self.sidecar.clone().filter(|s| s.name == name)
+        }
+    }
+
+    /// An adapter over `local` and a volume that answers `files.list_directory` with 404 (no
+    /// job.json for anything), at a fixed wall clock.
+    fn adapter_for_list(local: FakeLocal) -> CloudAdapter {
+        let http = Arc::new(ScriptedHttp::new());
+        http.json(
+            "files.list_directory",
+            404,
+            serde_json::json!({"error_code":"NOT_FOUND"}),
+        );
+        let service = Arc::new(RecordingCloudService::new(CloudDeps {
+            http,
+            workspace: Arc::new(Ws),
+            wall: Arc::new(SimWallClock::at(1_795_100_700_000)),
+            pause: Arc::new(NoPause),
+        }));
+        CloudAdapter::new(
+            service,
+            Arc::new(MemorySettingsStore::new(RecordingSettings::default())),
+            Arc::new(local),
+            Arc::new(|_: &RecordingSummary| {}),
+            Arc::new(|| 1_795_100_700_000i64),
+        )
+    }
+
+    fn fake_storage() -> RecordingStorage {
+        RecordingStorage {
+            kind: RecordingStorageKind::Volume,
+            root: VolumePath::try_from("/Volumes/main/team/audio".to_owned()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn list_shows_an_active_take_not_in_local_as_recording() {
+        // Owner test 2026-11-25: a take still recording has its parts in the capture temp dir
+        // under its final name, so the launch scan's `local.names()` may not have picked it up
+        // yet. `active` alone must still produce a row, with no sidecar to date it from `now`.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+        assert_eq!(rows[0].status, RecordingStatus::Recording);
+        assert_eq!(
+            rows[0].started_at_ms, 1_795_100_700_000,
+            "with no sidecar, the row is dated from now"
+        );
+    }
+
+    #[test]
+    fn list_shows_an_in_flight_take_with_no_live_entry_as_uploading() {
+        // The other half of the same regression: a take that stopped and was handed to a
+        // worker, with no live entry yet and no job.json in the volume, must show as
+        // uploading rather than vanish.
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            sidecar: Some(Sidecar::new(
+                name,
+                name,
+                1_795_097_100_000,
+                "fake-home",
+                None,
+            )),
+            ..Default::default()
+        });
+        let _guard = a.begin(name).expect("the first run starts");
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, name);
+        assert_eq!(rows[0].status, RecordingStatus::Uploading);
+        assert!(rows[0].error_kind.is_none(), "{rows:?}");
+        assert_eq!(
+            rows[0].started_at_ms, 1_795_097_100_000,
+            "a sidecar dates the row, over `now`"
+        );
+    }
+
+    #[test]
+    fn list_never_duplicates_a_name_that_is_both_active_and_in_flight() {
+        let name = "2026-11-19_0905";
+        let a = adapter_for_list(FakeLocal {
+            active: HashSet::from([name.to_owned()]),
+            ..Default::default()
+        });
+        let _guard = a.begin(name).expect("the first run starts");
+        let p = ProfileName::try_from("fake-home".to_owned()).unwrap();
+        let rows = RecordingCloud::list(&a, &p, &fake_storage()).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
     }
 
     #[test]
