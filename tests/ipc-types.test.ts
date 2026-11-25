@@ -483,6 +483,11 @@ const agentTyped: Record<string, unknown> = {
     code: 'budget_reached',
     used: 1,
   } satisfies AgentTurnEvent,
+  'AgentTurnEvent.signingIn': {
+    kind: 'signing_in',
+    turnId: TURN_A,
+    workspaceId: '1234567890123456',
+  } satisfies AgentTurnEvent,
   'AgentTurnEvent.slow': { kind: 'slow', turnId: TURN_A } satisfies AgentTurnEvent,
   'AgentTurnEvent.ended': {
     kind: 'ended',

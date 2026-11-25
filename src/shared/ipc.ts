@@ -648,6 +648,16 @@ export type AgentTurnEvent =
       code: 'workspace_not_available' | 'budget_reached' | 'invalid_args';
       used: number;
     }
+  | {
+      /**
+       * ADR 0122 amendment (owner decision 2026-11-24): a call to `workspaceId` signed out.
+       * Bottle starts that workspace's browser sign-in (U2M OAuth) and retries the call once.
+       */
+      kind: 'signing_in';
+      turnId: string;
+      /** The model alias (`CatalogEntry.alias`), not a Databricks workspace ID. */
+      workspaceId: string;
+    }
   | { kind: 'slow'; turnId: string }
   | {
       kind: 'ended';
@@ -701,6 +711,7 @@ export interface AgentPartView {
   workspace: AgentWsChip;
   sections: CardSection[];
   fromEarlier?: boolean;
+  /** The agent never saw this part: it was withheld (a quarantine hit). */
   notShownToAgent?: boolean;
   folded?: boolean;
 }

@@ -71,9 +71,9 @@ describe('partOf', () => {
     ]);
   });
 
-  it('marks a part from an earlier turn, and a part the agent did not see', () => {
-    const p = partOf(answeredCall('x'), { chip, fromEarlier: true, notShownToAgent: true });
-    expect(p).toMatchObject({ fromEarlier: true, notShownToAgent: true });
+  it('marks a part from an earlier turn', () => {
+    const p = partOf(answeredCall('x'), { chip, fromEarlier: true });
+    expect(p).toMatchObject({ fromEarlier: true });
   });
 
   it('shows a fixed text for a withheld answer, never the withheld text', () => {

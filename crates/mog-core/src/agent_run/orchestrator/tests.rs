@@ -1,7 +1,7 @@
 //! Tests of the orchestrator host. The model is a scripted fake `ChatClient`, the Genie side is a
 //! fake `McpTransport` behind the real guard, and the clocks are simulated. No network.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use super::approval::Approvals;
 use super::host::{self, *};
 use crate::agent_guard::AgentActionLog;
 use crate::agent_run::guard::{AgentGuard, GuardOptions, Sleeper};
+use crate::agent_run::reauth::ReauthService;
 use crate::agent_run::seam::{AgentEvent, CatalogEntry, GuardDeps, NetWatch, RunEvents};
 use crate::audit::AuditError;
 use crate::clock::{SimClock, SimWallClock};
@@ -162,7 +163,7 @@ fn no_source_final() -> CoreResult<Value> {
     reply_of(vec![final_item(json!({"answer": "done", "sources": []}))])
 }
 
-type Handler = Box<dyn Fn(&str, &str) -> McpReply + Send + Sync>;
+type Handler = Box<dyn Fn(&str, &str) -> CoreResult<McpReply> + Send + Sync>;
 
 struct FakeR8 {
     calls: Mutex<Vec<(String, String)>>,
@@ -183,14 +184,16 @@ impl FakeR8 {
     fn answering(f: fn(&str) -> &'static str) -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::default(),
-            handler: Box::new(move |profile, tool| match tool {
-                "genie_ask" => r8_reply(json!({
-                    "status": "in_progress", "conversation_id": format!("conv-{profile}"),
-                    "response_id": "r-1"})),
-                "genie_poll_response" => r8_reply(json!({
-                    "status": "completed", "final_answer": f(profile),
-                    "total_row_count": 3, "deep_link": "https://h/x"})),
-                _ => r8_reply(json!({"status": "cancellation_requested"})),
+            handler: Box::new(move |profile, tool| {
+                Ok(match tool {
+                    "genie_ask" => r8_reply(json!({
+                        "status": "in_progress", "conversation_id": format!("conv-{profile}"),
+                        "response_id": "r-1"})),
+                    "genie_poll_response" => r8_reply(json!({
+                        "status": "completed", "final_answer": f(profile),
+                        "total_row_count": 3, "deep_link": "https://h/x"})),
+                    _ => r8_reply(json!({"status": "cancellation_requested"})),
+                })
             }),
         })
     }
@@ -198,11 +201,13 @@ impl FakeR8 {
     fn never_done() -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::default(),
-            handler: Box::new(|profile, tool| match tool {
-                "genie_ask" | "genie_poll_response" => r8_reply(json!({
-                    "status": "in_progress", "conversation_id": format!("conv-{profile}"),
-                    "response_id": "r-1"})),
-                _ => r8_reply(json!({"status": "cancellation_requested"})),
+            handler: Box::new(|profile, tool| {
+                Ok(match tool {
+                    "genie_ask" | "genie_poll_response" => r8_reply(json!({
+                        "status": "in_progress", "conversation_id": format!("conv-{profile}"),
+                        "response_id": "r-1"})),
+                    _ => r8_reply(json!({"status": "cancellation_requested"})),
+                })
             }),
         })
     }
@@ -222,7 +227,7 @@ impl McpTransport for FakeR8 {
             .lock()
             .unwrap()
             .push((call.profile.to_owned(), call.tool.to_owned()));
-        Ok((self.handler)(call.profile, call.tool))
+        (self.handler)(call.profile, call.tool)
     }
     fn list_tools(&self, _: &str, _: &Tags) -> CoreResult<Vec<Value>> {
         Ok(Vec::new())
@@ -383,6 +388,42 @@ impl OrchEnv for Env {
     }
 }
 
+/// The home-first "sign in, then retry" rule's own flow, faked: each call is recorded, and
+/// answers `Ok` until a test sets it to fail.
+#[derive(Default)]
+struct FakeReauth {
+    calls: Mutex<Vec<String>>,
+    ok: AtomicBool,
+}
+
+impl FakeReauth {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::default(),
+            ok: AtomicBool::new(true),
+        })
+    }
+    fn count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+    fn fail(&self) {
+        self.ok.store(false, Ordering::SeqCst);
+    }
+}
+
+impl ReauthService for FakeReauth {
+    fn reauth(&self, profile: &str) -> CoreResult<()> {
+        self.calls.lock().unwrap().push(profile.to_owned());
+        if self.ok.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(CoreError::IpcRefused {
+                code: "login_cancelled",
+            })
+        }
+    }
+}
+
 fn catalog() -> Vec<CatalogEntry> {
     let e = |alias: &str, profile: &str, home: bool| CatalogEntry {
         alias: alias.into(),
@@ -400,6 +441,7 @@ fn snapshot(budget: u8) -> Snapshot {
         budget,
         home_profile: Some("p-sales".into()),
         model: "system.ai.test-model".into(),
+        home_signed_out: false,
     }
 }
 
@@ -413,6 +455,7 @@ struct Rig {
     ws: Arc<Ws>,
     env: Arc<Env>,
     net: Arc<FakeNet>,
+    reauth: Arc<FakeReauth>,
 }
 
 fn rig(budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
@@ -441,6 +484,7 @@ fn rig(budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
     let clock = SimClock::default();
     let ws = Arc::new(Ws(Mutex::new(snapshot(budget)), AtomicBool::new(false)));
     let env = Arc::new(Env(Mutex::new(OrchStatus::Ready), 0.into()));
+    let reauth = FakeReauth::new();
     let host = OrchestratorHost::new(
         OrchDeps {
             guard: guard.clone(),
@@ -452,6 +496,7 @@ fn rig(budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
             workspaces: ws.clone(),
             approvals: Arc::new(AllowAll),
             env: env.clone(),
+            reauth: reauth.clone(),
         },
         OrchConfig {
             tick: Duration::from_secs(3600),
@@ -467,6 +512,7 @@ fn rig(budget: u8, r8: Arc<FakeR8>, script: Script) -> Rig {
         ws,
         env,
         net,
+        reauth,
     }
 }
 
@@ -2178,9 +2224,6 @@ fn a_named_workspace_is_asked_directly_in_the_first_step() {
 
 #[test]
 fn the_second_ask_genie_step_may_ask_any_catalog_workspace() {
-    // D1 on: a D1-off session would taint after the home (agent workspace) answer and refuse the
-    // widened call for a different reason (`cross_workspace_off`); that rule is unrelated to
-    // this test.
     let r = rig(
         10,
         FakeR8::answering(by_profile),
@@ -2207,9 +2250,6 @@ fn the_second_ask_genie_step_may_ask_any_catalog_workspace() {
 
 #[test]
 fn home_first_refusals_do_not_trip_the_three_refusals_stop() {
-    // D1 on: a D1-off session would taint after the home (agent workspace) answer and refuse the
-    // widened call for a different reason (`cross_workspace_off`); that rule is unrelated to
-    // this test.
     let r = rig(
         10,
         FakeR8::answering(by_profile),
@@ -2236,6 +2276,181 @@ fn home_first_refusals_do_not_trip_the_three_refusals_stop() {
     assert!(r.events.refusals().is_empty());
     assert_eq!(r.r8.count("genie_ask"), 2);
     assert!(r.host.turn_result(&tid).is_some());
+}
+
+#[test]
+fn a_home_call_that_comes_back_with_no_answer_widens_the_turn() {
+    // The owner's rule is "when it says it doesnt have a response": a completed poll with no
+    // text (AgentCallState::NoAnswer) is exactly that, and must widen the turn like a real
+    // answer would.
+    let r = rig(
+        10,
+        FakeR8::answering(|p| if p == "p-sales" { "" } else { FIN }),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            1 => reply_of(vec![ask_item("fc1", "finance")]),
+            _ => {
+                let (w, c) = results_in(body).last().cloned().unwrap();
+                reply_of(vec![final_item(
+                    json!({"answer": "x [1]", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.r8.count("genie_ask"), 2);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.sources[0].workspace_id, "finance");
+}
+
+/// A `FakeR8` whose `genie_ask` fails with `login_required` for `p-sales` on its first call,
+/// then answers normally for every later call (the sign-in "fixed" it).
+fn r8_signed_out_once(attempts: Arc<AtomicUsize>) -> Arc<FakeR8> {
+    Arc::new(FakeR8 {
+        calls: Mutex::default(),
+        handler: Box::new(move |profile, tool| {
+            if profile == "p-sales"
+                && tool == "genie_ask"
+                && attempts.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                return Err(CoreError::Unavailable {
+                    component: "R8",
+                    reason: "login_required",
+                });
+            }
+            Ok(match tool {
+                "genie_ask" => r8_reply(json!({
+                    "status": "in_progress", "conversation_id": format!("conv-{profile}"),
+                    "response_id": "r-1"})),
+                "genie_poll_response" => r8_reply(json!({
+                    "status": "completed", "final_answer": by_profile(profile),
+                    "total_row_count": 3, "deep_link": "https://h/x"})),
+                _ => r8_reply(json!({"status": "cancellation_requested"})),
+            })
+        }),
+    })
+}
+
+#[test]
+fn a_signed_out_home_call_signs_in_and_retries_once() {
+    // Owner decision 2026-11-24 (round 3 pivot): a signed-out home does not widen the turn on
+    // its own. Bottle signs it in (once) and retries the call (once); the retry succeeds, and
+    // the model sees one answer for its one call, never the failed first attempt.
+    let r = rig(
+        10,
+        r8_signed_out_once(Arc::new(AtomicUsize::new(0))),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            _ => {
+                let (w, c) = results_in(body).last().cloned().unwrap();
+                reply_of(vec![final_item(
+                    json!({"answer": "x [1]", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.reauth.count(), 1, "exactly one sign-in");
+    // The failed first attempt, and the one retry.
+    assert_eq!(r.r8.count("genie_ask"), 2);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.sources[0].workspace_id, "sales");
+}
+
+#[test]
+fn a_signed_out_home_call_does_not_widen_the_step_it_happens_in() {
+    // In the same step, a parallel call to a workspace the question does not name is still
+    // decided by home-first as it stood at the start of that step: home's own sign-out-and-
+    // retry inside the step cannot retroactively open it.
+    let r = rig(
+        10,
+        r8_signed_out_once(Arc::new(AtomicUsize::new(0))),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales"), ask_item("fc1", "finance")]),
+            _ => {
+                let outs = outputs_in(body);
+                assert_eq!(outs.len(), 2);
+                assert!(outs[0].contains("<genie_answer"), "{outs:?}");
+                assert_eq!(outs[1], "ask_home_first");
+                no_source_final()
+            }
+        }),
+    );
+    let (_, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.reauth.count(), 1);
+    assert_eq!(r.r8.count("genie_ask"), 2);
+}
+
+#[test]
+fn a_failed_sign_in_for_home_leaves_the_call_signed_out_and_does_not_widen() {
+    // A sign-in that fails, is cancelled or times out leaves home signed out for good: home-
+    // first stays the rule for the rest of the turn.
+    let r8 = Arc::new(FakeR8 {
+        calls: Mutex::default(),
+        handler: Box::new(|profile, tool| {
+            if profile == "p-sales" && tool == "genie_ask" {
+                return Err(CoreError::Unavailable {
+                    component: "R8",
+                    reason: "login_required",
+                });
+            }
+            Ok(r8_reply(json!({"status": "cancellation_requested"})))
+        }),
+    });
+    let r = rig(
+        10,
+        r8,
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            1 => reply_of(vec![ask_item("fc1", "finance")]),
+            _ => {
+                assert_eq!(outputs_in(body).last().unwrap(), "ask_home_first");
+                no_source_final()
+            }
+        }),
+    );
+    r.reauth.fail();
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(
+        r.reauth.count(),
+        1,
+        "exactly one sign-in attempt, not a retry loop"
+    );
+    // Home's one failed ask; the retry never runs because the sign-in itself failed.
+    assert_eq!(r.r8.count("genie_ask"), 1);
+    assert!(r.host.turn_result(&tid).unwrap().sources.is_empty());
+}
+
+#[test]
+fn a_home_workspace_known_signed_out_before_the_turn_signs_in_first() {
+    // "Rather than waste a Genie call": with the cached sign-in state already showing home
+    // signed out, the first live attempt is skipped; the one real `genie_ask` is the retry,
+    // after the sign-in, and it succeeds normally.
+    let r = rig(
+        10,
+        FakeR8::answering(by_profile),
+        Box::new(|body, n| match n {
+            0 => reply_of(vec![ask_item("fc0", "sales")]),
+            _ => {
+                let (w, c) = results_in(body).last().cloned().unwrap();
+                reply_of(vec![final_item(
+                    json!({"answer": "x [1]", "sources": [source(&w, &c)]}),
+                )])
+            }
+        }),
+    );
+    r.ws.0.lock().unwrap().home_signed_out = true;
+    let (tid, o) = r.run("q");
+    assert_eq!(o, AgentTurnOutcome::Answered);
+    assert_eq!(r.reauth.count(), 1);
+    // No wasted first attempt: only the one real ask, after the sign-in.
+    assert_eq!(r.r8.count("genie_ask"), 1);
+    let res = r.host.turn_result(&tid).unwrap();
+    assert_eq!(res.sources[0].workspace_id, "sales");
 }
 
 #[test]
@@ -2268,6 +2483,19 @@ fn names_workspace_strips_trailing_sentence_punctuation() {
     assert!(host::names_workspace("ask finance!", "finance"));
     assert!(host::names_workspace("ask finance, please", "finance"));
     assert!(host::names_workspace("(finance) numbers", "finance"));
+}
+
+#[test]
+fn names_workspace_strips_a_trailing_possessive() {
+    assert!(host::names_workspace(
+        "what's finance's revenue?",
+        "finance"
+    ));
+    assert!(host::names_workspace(
+        "what's finance’s revenue?",
+        "finance"
+    ));
+    assert!(host::names_workspace("finance's.", "finance"));
 }
 
 #[test]

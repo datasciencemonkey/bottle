@@ -73,23 +73,60 @@ The owner's rule (verbatim):
    Two different things enforce this, and they enforce different parts of it:
    - **The prompt judges "no data."** Only the model can read a Genie answer and decide that
      home has no data, or cannot answer, so only the prompt states that part of the rule. Rust
-     does not read answer text and never second-guesses that judgment.
+     does not read answer text and never second-guesses that judgment. The prompt also tells the
+     model to ask each workspace the user's question, and never to copy another workspace's
+     answer text into a question of its own.
    - **Rust enforces "home asked and ended before widening."** This part needs no judgment, so
      Rust enforces it in code, because a model can ignore a prompt. On a turn's first step that
      calls `ask_genie`, the orchestrator host admits two kinds of call only: a call to the home
      workspace, and a call to a workspace that the question names (its alias, its name or its
-     profile, with a dedicated matcher: case-insensitive, trailing punctuation stripped, a space
-     and a hyphen treated as the same separator, and a plain everyday word such as "test" or
-     "main" needing a clear cue — "in NAME", "NAME workspace", "@NAME", or "NAME" in quotes). The
-     host refuses every other call of that step with the code `ask_home_first`. The refusal never
-     reaches the guard: it spends no Genie budget and never counts toward the three-refusals
-     stop. The turn widens — every switched-on workspace opens, from the next `ask_genie` step on
-     — only once a call to home itself is accepted by the guard and ends answered, failed or
-     timeout. A blocked call, an unparsable one, or a call to a workspace the question merely
-     names (the exception), never widens the turn on its own.
+     profile, with a dedicated matcher: case-insensitive, a trailing 's or ’s and trailing
+     sentence punctuation stripped, a space and a hyphen treated as the same separator, and a
+     plain everyday word such as "test" or "main" needing a clear cue — "in NAME", "NAME
+     workspace", "@NAME", or "NAME" in quotes). The host refuses every other call of that step
+     with the code `ask_home_first`. The refusal never reaches the guard: it spends no Genie
+     budget and never counts toward the three-refusals stop. The turn widens — every switched-on
+     workspace opens, from the next `ask_genie` step on — only once a call to home itself is
+     accepted by the guard and ends answered, failed, timeout or no-answer (a completed poll with
+     no text: home still "doesn't have a response"). A blocked call, an unparsable one, a call to
+     a workspace the question merely names (the exception), or a call that signed out (see the
+     next amendment), never widens the turn on its own.
 
    A catalog with no home workspace keeps the old behaviour. Every call goes through the normal
    guard checks, from the first step.
+
+## Amendment: Home sign-in, then retry (2026-11-24, owner decision)
+
+A `signed_out` home call is neither an answer nor "no data": home's token merely expired. The
+owner's rule (verbatim): "In the absence of a sign-in, or if the sign-in had expired, refresh the
+sign-in. The user is always going to be watching it, so it doesn't matter. You can just open up
+the browser to refresh the sign-in using the U2M OAuth."
+
+8. **A signed-out call to home never widens the turn on its own.** Instead the orchestrator host
+   starts home's browser sign-in and retries the call once:
+   - The sign-in is the existing `profile_reauth` flow (R5's `databricks auth login`, U2M OAuth):
+     the same one "Sign in…" in Settings → Workspace already runs. There is no new OAuth
+     implementation, and Rust still never keeps a token outside `TokenBroker`'s memory.
+   - One sign-in at a time per profile: a second trigger for a profile already signing in waits
+     for that attempt's result, rather than opening a second browser window
+     (`agent_run::reauth::DedupReauth`).
+   - Before a turn starts, if the cached sign-in state (Settings → Workspace's own status; no new
+     network probe) already shows home signed out, the first live attempt is skipped too: Bottle
+     signs in first, so it never spends a Genie call on a token it already knows is dead.
+   - The card shows a plain status while the sign-in runs ("Signing in to `<workspace>`… finish
+     in your browser"), through the existing one-line pop-up, not a new UI element.
+   - A sign-in that fails, is cancelled or times out (the existing flow's own bound) leaves the
+     call signed out for good: home-first stays the rule, and the turn does not widen.
+   - A withheld (quarantined) or stopped call still does not widen either, as before; neither is
+     a sign-in problem.
+
+   **Contract change** (owner sign-off covers it, as part of this amendment): a new
+   `AgentTurnEvent` variant, `signing_in { turnId, workspaceId }`, added to both
+   `crates/mog-core/src/types.rs` and `src/shared/ipc.ts`, with its own fixture
+   (`AgentTurnEvent.signingIn.json`). No existing field or variant changed.
+
+   **Known limit.** The sign-in blocks the turn's worker thread for its own bound (R5's existing
+   `databricks auth login` timeout); a Stop during that wait does not cut it short today.
 
 ## Amendment: D1 removed (2026-11-24, owner decision)
 
@@ -112,6 +149,12 @@ The owner's rule (verbatim): "Remove it, always combine."
    writes it back.
 
    D1's own admin lock (SEC-28b) is removed with it: there is no longer a setting for it to lock.
+
+   `AgentPartView.notShownToAgent` (and the card's "Not shown to the agent" tag) stays: a
+   withheld (quarantined) part still needs it, and that is a different rule from D1. Only its
+   D1-driven input — `PartOptions.notShownToAgent` in `agent-card.ts`, which the brain always
+   passed as `false` once D1 was gone — is removed, since nothing ever read anything else into
+   it.
 
 ## Consequences
 

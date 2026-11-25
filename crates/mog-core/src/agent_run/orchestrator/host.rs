@@ -21,6 +21,7 @@ use super::deadlines::{self, TurnDue};
 use super::prompt::{self, PromptInput, ANSWER_SCHEMA};
 use super::queue::{RateCap, WaitQueue, MAX_WAITING};
 use crate::agent_run::guard::{self, AgentGuard, ToolOut};
+use crate::agent_run::reauth::ReauthService;
 use crate::agent_run::seam::{
     AgentEvent, CallRecord, CatalogEntry, NetWatch, RunEvents, SessionGuard, SessionSpec, StopWhy,
     TurnSpec,
@@ -72,6 +73,12 @@ pub struct Snapshot {
     pub home_profile: Option<String>,
     /// The orchestrator model, read at the start of each turn.
     pub model: String,
+    /// The home profile's cached sign-in state already shows it signed out (Settings →
+    /// Workspace's own status; no new network probe). ADR 0122 amendment, owner decision
+    /// 2026-11-24: a turn that starts already knowing this signs home in first, before trying
+    /// any `ask_genie` call to it, so it never wastes a Genie call on a token that is already
+    /// known to be dead.
+    pub home_signed_out: bool,
 }
 
 /// The workspace store and the settings as the host sees them.
@@ -139,6 +146,9 @@ pub struct OrchDeps {
     pub workspaces: Arc<dyn WorkspaceView>,
     pub approvals: Arc<dyn Approvals>,
     pub env: Arc<dyn OrchEnv>,
+    /// The home-first "sign in, then retry" rule (ADR 0122 amendment): starts a workspace's
+    /// browser sign-in when its `ask_genie` call comes back signed out.
+    pub reauth: Arc<dyn ReauthService>,
 }
 
 /// How the host runs.
@@ -635,6 +645,8 @@ impl Engine {
             guard: Arc::clone(&self.d.guard),
             net: Arc::clone(&self.d.net),
             clock: Arc::clone(&self.d.clock),
+            events: Arc::clone(&self.d.events),
+            reauth: Arc::clone(&self.d.reauth),
             session_id: sid,
             turn_id: turn_id.clone(),
             budget,
@@ -649,6 +661,7 @@ impl Engine {
             home_alias,
             named_aliases,
             widened: false,
+            home_signed_out: AtomicBool::new(snap.home_signed_out),
         };
         let tx = self.tx.clone();
         let tid = turn_id.clone();
@@ -949,6 +962,9 @@ struct LoopCtx {
     guard: Arc<dyn OrchGuard>,
     net: Arc<dyn NetWatch>,
     clock: Arc<dyn MonotonicClock>,
+    events: Arc<dyn RunEvents>,
+    /// The home-first "sign in, then retry" rule (ADR 0122 amendment).
+    reauth: Arc<dyn ReauthService>,
     session_id: String,
     turn_id: String,
     /// The D2 budget of this turn.
@@ -975,6 +991,10 @@ struct LoopCtx {
     /// True once a step of this turn has run at least one `ask_genie` call. The home-first rule
     /// applies only while this is false.
     widened: bool,
+    /// Home's sign-in is known dead: the next call to home must sign in first, before it tries
+    /// to ask Genie at all (ADR 0122 amendment, owner decision 2026-11-24). Seeded from the
+    /// cached sign-in state at turn start; set and cleared again as calls to home end.
+    home_signed_out: AtomicBool,
 }
 
 /// The tool that ends a turn: its arguments are the final answer. It has no side effect.
@@ -1161,14 +1181,67 @@ fn is_home_call(ctx: &LoopCtx, call: &FnCall) -> bool {
     ctx.home_alias.is_some() && call_workspace(call).as_deref() == ctx.home_alias.as_deref()
 }
 
-/// Whether a call's raw guard output names a terminal state that counts toward widening the
-/// home-first rule: answered, failed or timeout. A withheld, stopped, signed-out, no-answer,
-/// queued or asking state does not: home has not genuinely answered or failed yet.
-fn ends_for_widening(text: &str) -> bool {
+/// The `status` of a call's raw guard output, if it is a JSON object with one.
+fn status_of(text: &str) -> Option<String> {
     serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|v| v["status"].as_str().map(str::to_owned))
-        .is_some_and(|s| matches!(s.as_str(), "answered" | "failed" | "timeout"))
+}
+
+/// Whether a call's raw guard output names a terminal state that counts toward widening the
+/// home-first rule: answered, failed, timeout or no-answer. Each of these is the owner's rule in
+/// its own way: an answer is an answer; a failure, a timeout or a completed poll with no text
+/// (no-answer) is home "doesn't have a response". A signed-out call never reaches here: it is
+/// resolved by `run_home_call` first (sign in, then retry), and the retry's own outcome is what
+/// widens, or does not. A withheld (quarantined) or stopped call does not widen either: the call
+/// did not genuinely end on its own terms, so home has not yet said it has no data or cannot
+/// answer.
+fn ends_for_widening(text: &str) -> bool {
+    status_of(text)
+        .is_some_and(|s| matches!(s.as_str(), "answered" | "failed" | "timeout" | "no_answer"))
+}
+
+/// Model-facing code: a workspace's `ask_genie` call did not end because Bottle could not sign
+/// it back in. The call is `signed_out`, like the guard's own code: the model must treat it the
+/// same way (home-first does not widen on it either).
+fn signed_out_output(call: &FnCall) -> String {
+    let ws = call_workspace(call).unwrap_or_default();
+    json!({ "callId": call.call_id, "workspace": ws, "status": "signed_out" }).to_string()
+}
+
+/// Runs one call to the home workspace, with the owner's "sign in, then retry" rule (ADR 0122
+/// amendment, owner decision 2026-11-24): a `signed_out` result never widens home-first on its
+/// own. Instead Bottle starts home's browser sign-in (deduped: `ReauthService` waits for one
+/// already running) and retries the call once; the retry's own outcome is the one that counts.
+///
+/// When home's sign-in is already known dead (`ctx.home_signed_out`, seeded from the cached
+/// workspace-list status at turn start, or set by an earlier signed-out call this turn), the
+/// live attempt is skipped the first time too: Bottle signs in first, so it never spends a
+/// Genie call on a token it already knows is dead.
+///
+/// A sign-in that fails, is cancelled or times out leaves the call `signed_out` for good: home-
+/// first stays the rule, so the turn does not widen.
+fn run_home_call(ctx: &LoopCtx, call: &FnCall) -> (String, bool) {
+    if !ctx.home_signed_out.load(Ordering::SeqCst) {
+        let (text, ok) = run_tool_call(ctx, call);
+        if !(ok && status_of(&text).as_deref() == Some("signed_out")) {
+            return (text, ok);
+        }
+    }
+    ctx.events.emit(AgentEvent::Turn(AgentTurnEvent::SigningIn {
+        turn_id: ctx.turn_id.clone(),
+        workspace_id: call_workspace(call).unwrap_or_default(),
+    }));
+    match ctx.reauth.reauth(&ctx.profile) {
+        Ok(()) => {
+            ctx.home_signed_out.store(false, Ordering::SeqCst);
+            run_tool_call(ctx, call)
+        }
+        Err(_) => {
+            ctx.home_signed_out.store(true, Ordering::SeqCst);
+            (signed_out_output(call), false)
+        }
+    }
 }
 
 /// Run the calls of one step. At most `min(budget left, 20)` `ask_genie` calls get a thread; the
@@ -1185,8 +1258,11 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
     // home workspace, only a call to home or to a workspace the question names may run. The rest
     // get `HOME_FIRST_REFUSAL` without ever reaching the guard. The turn widens (every catalog
     // workspace opens, from the next `ask_genie` step on) only once a call to home itself is
-    // accepted by the guard and ends answered, failed or timeout: a blocked call, an unparsable
-    // one, or a call to a workspace the question merely names, must not widen it.
+    // accepted by the guard and ends answered, failed, timeout or no-answer (see
+    // `ends_for_widening`): a blocked call, an unparsable one, or a call to a workspace the
+    // question merely names, must not widen it. A signed-out call to home never widens on its
+    // own either: `run_home_call` signs it in and retries once first (owner decision
+    // 2026-11-24), and it is that retry's own outcome which decides.
     let home_first = !ctx.widened && ctx.home_alias.is_some();
     let mut go = Vec::new();
     let mut blocked = Vec::new();
@@ -1201,10 +1277,18 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
         }
     }
     let done: &LoopCtx = ctx;
+    // Home's own call goes through the sign-in-and-retry rule; every other call runs plainly.
+    let call_fn = |c: &FnCall| -> (String, bool) {
+        if is_home_call(done, c) {
+            run_home_call(done, c)
+        } else {
+            run_tool_call(done, c)
+        }
+    };
     let (out, accepted, home_ended) = thread::scope(|sc| {
         let hs: Vec<(usize, _)> = go
             .iter()
-            .map(|&i| (i, sc.spawn(move || run_tool_call(done, &calls[i]))))
+            .map(|&i| (i, sc.spawn(move || call_fn(&calls[i]))))
             .collect();
         let mut out: Vec<Option<Value>> = vec![None; calls.len()];
         let mut accepted = 0;
@@ -1215,7 +1299,7 @@ fn run_step(ctx: &mut LoopCtx, calls: &[FnCall]) -> Vec<Value> {
             } else if !go.contains(&i) {
                 // No thread: a call past the cap, or a call that is not `ask_genie`, runs here,
                 // one at a time. The guard refuses it (and counts it) or runs it.
-                let (text, ok) = run_tool_call(done, c);
+                let (text, ok) = call_fn(c);
                 let is_ask = c.name == guard::TOOL_NAME;
                 accepted += usize::from(ok && is_ask);
                 if ok && is_ask && is_home_call(done, c) && ends_for_widening(&text) {
@@ -1511,13 +1595,17 @@ struct QWord<'a> {
 /// Split `text` on white space, and within each white-space word, on a hyphen: spaces and
 /// hyphens are interchangeable ("log mog" names `log-mog`). Each piece keeps the white-space
 /// word it came from as `raw`, so a cue (`@`, quotes) next to the whole word is still visible.
+/// A trailing possessive ('s or ’s) is stripped too, so "finance's" names `finance`.
 fn q_words(text: &str) -> Vec<QWord<'_>> {
     let mut out = Vec::new();
     for raw in text.split_whitespace() {
         for piece in raw.split('-') {
-            let norm: String = piece
-                .trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase();
+            let trimmed = piece.trim_matches(|c: char| !c.is_alphanumeric());
+            let stripped = trimmed
+                .strip_suffix("'s")
+                .or_else(|| trimmed.strip_suffix("’s"))
+                .unwrap_or(trimmed);
+            let norm = stripped.to_lowercase();
             if !norm.is_empty() {
                 out.push(QWord { norm, raw });
             }
@@ -1537,8 +1625,9 @@ fn has_at_or_quote(raw: &str) -> bool {
 /// profile. A dedicated matcher for the home-first rule (ADR 0122 amendment); `names_alias` (used
 /// elsewhere, for the sources footer) has no multi-word, hyphen or common-name handling.
 ///
-/// Matching is case-insensitive, ignores leading and trailing sentence punctuation on each word,
-/// and treats a space and a hyphen as the same separator. A name that is also an everyday word
+/// Matching is case-insensitive, ignores leading and trailing sentence punctuation on each word
+/// (including a trailing possessive, 's or ’s), and treats a space and a hyphen as the same
+/// separator. A name that is also an everyday word
 /// (`COMMON_WORKSPACE_NAMES`) matches only with a cue next to it: "in NAME", "NAME workspace",
 /// "@NAME", or "NAME" in quotes.
 pub(super) fn names_workspace(question: &str, name: &str) -> bool {

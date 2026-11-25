@@ -1241,6 +1241,13 @@ pub enum AgentTurnEvent {
         code: AgentRefusal,
         used: u32,
     },
+    /// ADR 0122 amendment (owner decision 2026-11-24): a call to `workspace_id` signed out.
+    /// Bottle starts that workspace's browser sign-in (U2M OAuth) and retries the call once.
+    SigningIn {
+        turn_id: String,
+        /// The model alias (`CatalogEntry.alias`), not a Databricks workspace ID.
+        workspace_id: String,
+    },
     Slow {
         turn_id: String,
     },

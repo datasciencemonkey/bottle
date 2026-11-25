@@ -412,7 +412,7 @@ export function TurnParts({
   answersFirst?: boolean;
   /**
    * The text of the model is the main answer: the parts of the workspaces fold under it, except
-   * a part that the agent did not see (a receipt, or withheld), which stays in view with its tag.
+   * a withheld part (the agent never saw it either), which stays in view with its tag.
    */
   combined?: boolean;
   /** The calls that fold under the lone answer (an earlier wording to the same workspace). */

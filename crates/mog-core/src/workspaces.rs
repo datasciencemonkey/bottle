@@ -764,11 +764,18 @@ impl WorkspaceStore {
                 is_agent_workspace: home.as_deref() == Some(name),
             });
         }
+        // ADR 0122 amendment (owner decision 2026-11-24): the cached sign-in state only, no new
+        // network probe. `Unknown` is not "known signed out": a turn with no cached answer yet
+        // still tries the live call first, as it always did.
+        let home_signed_out = home
+            .as_deref()
+            .is_some_and(|p| self.cached_state(p) == WorkspaceSignIn::Expired);
         Ok(crate::agent_run::orchestrator::Snapshot {
             catalog,
             budget: data.agent.genie_call_budget.get(),
             home_profile: home,
             model: data.agent.endpoint.as_str().to_owned(),
+            home_signed_out,
         })
     }
 

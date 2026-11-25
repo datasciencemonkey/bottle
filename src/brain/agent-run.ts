@@ -220,6 +220,10 @@ export function asTurnEvent(p: unknown): AgentTurnEvent | undefined {
       if (!REFUSED_CODES.includes(code as string) || !isCount(p['used'])) return undefined;
       return { kind: 'refused', turnId, code: code as never, used: p['used'] };
     }
+    case 'signing_in':
+      return typeof p['workspaceId'] === 'string'
+        ? { kind: 'signing_in', turnId, workspaceId: p['workspaceId'] }
+        : undefined;
     case 'ended': {
       if (!OUTCOMES.includes(p['outcome'] as string) || !isCount(p['calls'])) return undefined;
       const tokens = p['tokens'];
@@ -450,9 +454,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
     const part = partOf(d, {
       chip: deps.chipOf(d.profile),
       host,
-      // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
-      // 2026-11-24): cross-workspace data is always on, so a part is never hidden for it.
-      notShownToAgent: false,
     });
     if (part) r.parts.set(callId, part);
     syncParts(r);
@@ -735,9 +736,6 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
         const part = partOf(d, {
           chip: deps.chipOf(d.profile),
           fromEarlier: s.turnId !== r.view.turnId,
-          // D1 "Combine across workspaces" is removed (ADR 0122 amendment, owner decision
-          // 2026-11-24): cross-workspace data is always on, so a part is never hidden for it.
-          notShownToAgent: false,
         });
         if (part) r.parts.set(s.callId, part);
       } catch {
@@ -805,6 +803,14 @@ export function createAgentClient(deps: AgentClientDeps): AgentClient {
       case 'refused':
         r.view = { ...r.view, used: e.used };
         return update(r);
+      case 'signing_in': {
+        // ADR 0122 amendment (owner decision 2026-11-24): a workspace's call signed out, and
+        // Bottle starts its browser sign-in. The existing one-line pop-up carries the status;
+        // no new card UI.
+        const name = r.catalog.get(e.workspaceId)?.name ?? e.workspaceId;
+        deps.note?.(r.origin.mogId, `Signing in to ${name}… finish in your browser.`);
+        return;
+      }
       case 'slow':
         r.view = { ...r.view, state: 'slow' };
         return update(r);

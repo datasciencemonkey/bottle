@@ -22,6 +22,7 @@ use tauri::Manager;
 use mog_core::agent_run::orchestrator::{
     OrchConfig, OrchDeps, OrchEnv, OrchGuard, OrchStatus, OrchestratorHost,
 };
+use mog_core::agent_run::reauth::{DedupReauth, NoReauth, ReauthService};
 use mog_core::agent_run::seam::{AgentEvent, NetWatch, RunEvents};
 use mog_core::clock::{SystemClock, SystemWallClock};
 use mog_core::error::{CoreError, CoreResult};
@@ -254,6 +255,22 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
         .map(|t| Arc::clone(t.inner()))
         .unwrap_or_default();
     let sign_in = handle.try_state::<McpHost>().map(|m| m.sign_in_source());
+    // Home first (ADR 0122 amendment, owner decision 2026-11-24): "sign in, then retry" reuses
+    // the exact `profile_reauth` flow (R5's `databricks auth login`, U2M OAuth) that "Sign in…"
+    // in Settings → Workspace already runs; this never writes a new OAuth implementation.
+    // `DedupReauth` adds only the "one sign-in at a time per profile" rule on top. With no
+    // `ProfileLoginHost` managed yet, every sign-in refuses cleanly instead of panicking.
+    let reauth: Arc<dyn ReauthService> =
+        match handle.try_state::<crate::profiles_host::ProfileLoginHost>() {
+            Some(login) => {
+                let login = login.0.clone();
+                Arc::new(DedupReauth::new(move |profile: &str| {
+                    login.call("profile_reauth", serde_json::json!({ "profile": profile }))?;
+                    Ok(())
+                }))
+            }
+            None => Arc::new(NoReauth),
+        };
     let deps = OrchDeps {
         guard: Arc::clone(guard.inner()),
         chat,
@@ -274,6 +291,7 @@ pub fn install(handle: &tauri::AppHandle<tauri::Wry>) {
             last,
             no_client,
         }),
+        reauth,
     };
     // `OrchestratorHost::new` sets the refusal hook of the guard: the third refusal of a turn
     // interrupts it (ADR 0119).

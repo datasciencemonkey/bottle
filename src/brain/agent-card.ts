@@ -87,8 +87,6 @@ export interface PartOptions {
   /** `https://host` of the workspace, so the footer link is trusted for this host only. */
   host?: string | undefined;
   fromEarlier?: boolean;
-  /** D1 off and this part is not from the agent workspace. */
-  notShownToAgent?: boolean;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -138,7 +136,6 @@ export function partOf(call: AgentTurnCall, o: PartOptions): AgentPartView | und
     }).filter((s) => s.id !== 'dataFlow');
   }
   if (o.fromEarlier) part.fromEarlier = true;
-  if (o.notShownToAgent) part.notShownToAgent = true;
   return part;
 }
 
